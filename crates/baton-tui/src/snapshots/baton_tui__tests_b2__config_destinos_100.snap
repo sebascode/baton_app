@@ -1,0 +1,28 @@
+---
+source: crates/baton-tui/src/tests_b2.rs
+expression: "screen(&app, 100, 24)"
+---
+╭─ ⚙ Configuración · stack-produccion ──────────────────────────────────────── .baton/config.toml ─╮
+│ Destinos │ Logs │ Credenciales │ Planes                                                          │
+│ ━━━━━━━━                                                                                         │
+│ destinos de ejecución                                                                            │
+│  ▭ local     esta máquina                                                 [local]   ● ok         │
+│ ›▤ prod-app  deploy@10.0.4.12:22                                          [ssh]     ● ok         │
+│  ▤ prod-db   deploy@10.0.4.20 · vía bastion                               [ssh]     ● lento      │
+│  ◈ swarm-qa  docker context qa-swarm                                      [context] ○ sin probar │
+│                                                                                                  │
+│ ┌ editando: prod-app ──────────────────────────────────────────────────────────────────────────┐ │
+│ │ host         [ 10.0.4.12                                                                   ] │ │
+│ │ usuario      [ deploy                                                                      ] │ │
+│ │ credencial   [ servers.env#PROD_APP                                                      ▾ ] │ │
+│ │ directorio   [ /opt/stack                                                                  ] │ │
+│ │ bastion      [ (ninguno)                                                                 ▾ ] │ │
+│ │ sincronizar  (●) rsync carpetas del plan antes de ejecutar                                   │ │
+│ └──────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [tab] sección  [a] añadir destino  [t] probar conexión  [enter] editar  [ctrl s] guardar         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

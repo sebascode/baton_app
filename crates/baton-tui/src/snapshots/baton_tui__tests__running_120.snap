@@ -1,0 +1,34 @@
+---
+source: crates/baton-tui/src/tests.rs
+expression: text(&buf)
+---
+╭─ ▶ baton  plan: instalar · ./stack-produccion ──────────────────────────────────────── [backup ok] [rollback listo] ─╮
+│ Paso 4 de 7 · Levantar DB                                                                                   00:02:41 │
+│ ████████████████ ████████████████ ████████████████ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ░░░░░░░░░░░░░░░ ░░░░░░░░░░░░░░░ │
+├───────────────────────────────────────────────────────────────────────────────────────┬──────────────────────────────┤
+│ log en vivo · db/docker-compose.yml                                                   │ pipeline                     │
+│                                                                                       │ ✓ Pre-checks                 │
+│ [14:02:11] ▸ docker compose -f db/docker-compose.yml up -d                            │   docker, puertos · 4s       │
+│ [14:02:12]   Network stack_net  Created                                               │ ✓ Backup volúmenes           │
+│ [14:02:12]   Volume pg_data  Created                                                  │   opcional · 38s             │
+│ [14:02:14]   Container postgres  Started                                              │ ✓ Build imágenes             │
+│ [14:02:14]   Container redis  Started                                                 │   3 Dockerfiles · 1m52s      │
+│ [14:02:15] ✓ 2/2 contenedores arriba                                                  │›◐ Levantar DB                │
+│ [14:02:15] ▸ gate: healthcheck postgres (timeout 60s)                                 │   db/docker-compose.yml      │
+│ [14:02:20]   intento 1/6 · esperando pg_isready…                                      │ ◆ Gate: healthcheck          │
+│ [14:02:25]   intento 2/6 · esperando pg_isready…                                      │   esperando                  │
+│ [14:02:30]   intento 3/6 · ▌                                                          │ ○ Levantar servicios         │
+│                                                                                       │   services/*/compose         │
+│                                                                                       │ ○ Smoke tests                │
+│                                                                                       │   últ. ejecución: ok         │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+│                                                                                       │                              │
+├───────────────────────────────────────────────────────────────────────────────────────┴──────────────────────────────┤
+│ [↑↓] paso  [l] log completo  [p] pausar  [r] rollback  [s] saltar gate  [q] salir                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,28 @@
+---
+source: crates/baton-tui/src/tests.rs
+expression: text(&buf)
+---
+╭─ ▶ baton  plan: instalar · ./stack-produccion ───────────────────────────────╮
+│ Paso 4 de 7 · Levantar DB                                           00:02:41 │
+│ ██████████ ██████████ ██████████ ▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓ ░░░░░░░░░░ ░░░░░░░░░░ │
+├─────────────────────────────────────────────────────┬────────────────────────┤
+│ log en vivo · db/docker-compose.yml                 │ pipeline               │
+│                                                     │ ✓ Pre-checks        4s │
+│ [14:02:11] ▸ docker compose -f db/docker-compose.y… │ ✓ Backup volúmenes 38s │
+│ [14:02:12]   Network stack_net  Created             │ ✓ Build imágenes 1m52s │
+│ [14:02:12]   Volume pg_data  Created                │›◐ Levantar DB          │
+│ [14:02:14]   Container postgres  Started            │ ◆ Gate: healthcheck    │
+│ [14:02:14]   Container redis  Started               │ ○ Levantar servicios   │
+│ [14:02:15] ✓ 2/2 contenedores arriba                │ ○ Smoke tests          │
+│ [14:02:15] ▸ gate: healthcheck postgres (timeout 6… │                        │
+│ [14:02:20]   intento 1/6 · esperando pg_isready…    │                        │
+│ [14:02:25]   intento 2/6 · esperando pg_isready…    │                        │
+│ [14:02:30]   intento 3/6 · ▌                        │                        │
+│                                                     │                        │
+│                                                     │                        │
+│                                                     │                        │
+│                                                     │                        │
+├─────────────────────────────────────────────────────┴────────────────────────┤
+│ [↑↓] paso  [l] log completo  [p] pausar  [r] rollback  [s] saltar gate       │
+│ [q] salir                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯

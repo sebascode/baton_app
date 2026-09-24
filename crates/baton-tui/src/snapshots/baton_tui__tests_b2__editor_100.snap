@@ -1,0 +1,28 @@
+---
+source: crates/baton-tui/src/tests_b2.rs
+expression: "screen(&app, w, h)"
+---
+╭─ ✎ Editar paso · plan instalar ──────────────────────────────────────────────────── paso 6 de 7 ─╮
+│ 1 Pre-checks     │ nombre      [ Levantar servicios                                            ] │
+│ 2 Backup         │ tipo        [compose]  dockerfile  script  comando  check  backup  gate       │
+│ 3 Build          │ origen      [ services/*/docker-compose.yml                      ] 4 archivos │
+│ 4 Levantar DB    │ destino     [ prod-app                                                    ▾ ] │
+│ 5 Gate health    │ comando     [ docker compose up -d --wait                                   ] │
+│›6 Levantar serv… │ depende de  [ 4 Levantar DB, 5 Gate health                                  ] │
+│ 7 Smoke tests    │ timeout     [ 5m   ]   reintentos [ 2  ]                                      │
+│ + nuevo paso     ├───────────────────────────────────────────────────────────────────────────────┤
+│                  │ gate para avanzar                                                             │
+│                  │ ┌───────────────────────────────────────────────────────────────────────────┐ │
+│                  │ │ ◆ auto por servicio · todos pasan                            configurar › │ │
+│                  │ │   3 activos · 1 nuevo sin activar                                         │ │
+│                  │ └───────────────────────────────────────────────────────────────────────────┘ │
+│                  ├───────────────────────────────────────────────────────────────────────────────┤
+│                  │ recuperación · opcional                                                       │
+│                  │ rollback    [ docker compose down                                           ] │
+│                  │ backup      ( ) antes de este paso                                            │
+│                  │                                                                               │
+│                  │                                                                               │
+├──────────────────┴───────────────────────────────────────────────────────────────────────────────┤
+│ [tab] campo  [ctrl g] configurar gate  [ctrl t] probar paso  [ctrl d] duplicar  [ctrl s] guardar │
+│ [esc] volver                                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

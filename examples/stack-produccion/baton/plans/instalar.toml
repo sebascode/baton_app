@@ -1,0 +1,148 @@
+version = 1
+name = "instalar"
+description = "Instalación del stack de producción"
+
+[options]
+backup = true
+auto_rollback = true
+dry_run = false
+
+[backup]
+volumes = ["pg_data"]
+dir = ".baton/backups"
+
+# Credenciales que el plan necesita además de las de los destinos (esas se deducen solas).
+[[credentials]]
+id = "ghcr"
+kind = "docker"
+label = "Docker registry"
+ref = "docker.env#GHCR"
+
+[[credentials]]
+id = "nexus"
+kind = "docker"
+label = "Registry privado"
+ref = "docker.env#NEXUS"
+
+# Los pasos se ejecutan en el orden del archivo.
+
+[[steps]]
+id = "pre-checks"
+name = "Pre-checks"
+type = "check"
+description = "docker ≥24, puertos 5432, 8080"
+target = "local"
+command = "scripts/prechecks.sh"
+timeout = "30s"
+
+[[steps]]
+id = "backup"
+name = "Backup volúmenes"
+type = "backup"
+description = "pg_data → .baton/backups/"
+target = "local"
+
+[[steps]]
+id = "build"
+name = "Build imágenes"
+type = "dockerfile"
+source = ["api/Dockerfile", "worker/Dockerfile", "web/Dockerfile"]
+target = "local"
+command = "docker build -t stack/{name}:latest ."
+timeout = "10m"
+retries = 1
+
+[[steps]]
+id = "db"
+name = "Levantar DB"
+type = "compose"
+source = "db/docker-compose.yml"
+target = "prod-db"
+command = "docker compose up -d --wait"
+rollback = "docker compose down"
+timeout = "5m"
+
+[[steps]]
+id = "gate-db"
+name = "Gate: healthcheck postgres"
+type = "gate"
+depends_on = ["db"]
+target = "prod-db"
+
+[steps.gate]
+mode = "auto"
+condition = "all"
+timeout = "60s"
+attempts = 6
+
+[[steps.gate.checks]]
+kind = "command"
+name = "pg_isready"
+run = "docker compose -f db/docker-compose.yml exec -T postgres pg_isready"
+
+[[steps]]
+id = "services"
+name = "Levantar servicios"
+type = "compose"
+source = "services/*/docker-compose.yml"
+target = "prod-app"
+command = "docker compose up -d --wait"
+depends_on = ["db", "gate-db"]
+timeout = "5m"
+retries = 2
+rollback = "docker compose down"
+
+[steps.gate]
+mode = "auto"
+condition = "all"
+rescan = true
+timeout = "60s"
+attempts = 6
+parallel = true
+
+[[steps.gate.checks]]
+service = "api"
+kind = "healthcheck"
+critical = true
+
+[[steps.gate.checks]]
+service = "web"
+kind = "http"
+url = "http://{destino}:3000/health"
+
+[[steps.gate.checks]]
+service = "worker"
+kind = "running"
+min_up = "30s"
+
+# Detectado en el escaneo, todavía sin activar.
+[[steps.gate.checks]]
+service = "notifier"
+kind = "http"
+url = "http://{destino}:8081/health"
+enabled = false
+
+[[steps.gate.checks]]
+kind = "command"
+name = "smoke rápido"
+run = "curl -fsS http://{destino}/ready"
+
+[[steps]]
+id = "gate-confirm"
+name = "Gate: confirmar despliegue"
+type = "gate"
+depends_on = ["services"]
+
+[steps.gate]
+mode = "manual"
+message = "¿Continuar con el despliegue?"
+
+[[steps]]
+id = "smoke"
+name = "Smoke tests"
+type = "check"
+description = "desactivado por ti"
+enabled = false
+target = "prod-app"
+command = "scripts/smoke.sh"
+depends_on = ["gate-confirm"]

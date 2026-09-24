@@ -1,0 +1,17 @@
+[package]
+name = "baton-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+baton-core = { version = "0.1.0", path = "../baton-core" }
+ratatui = "0.30.2"
+unicode-width = "0.2.2"
+
+[dev-dependencies]
+insta = "1.48.0"

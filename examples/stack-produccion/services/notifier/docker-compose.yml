@@ -1,0 +1,5 @@
+services:
+  notifier:
+    image: stack/notifier:latest
+    ports:
+      - "8081:8081"

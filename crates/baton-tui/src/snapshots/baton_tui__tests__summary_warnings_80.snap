@@ -1,0 +1,28 @@
+---
+source: crates/baton-tui/src/tests.rs
+expression: text(&buf)
+---
+╭─ ! Plan instalar completado con advertencias ───────── 6/6 pasos · 00:06:12 ─╮
+│                                                                              │
+│  ✓ Pre-checks                                                            4s  │
+│  ✓ Backup volúmenes                                                     38s  │
+│  ✓ Build imágenes                                                     1m52s  │
+│  ✓ Levantar DB + gate                                                   44s  │
+│  ↻ Levantar servicios  1 reintento                                    2m31s  │
+│  » Smoke tests  omitido                                                   —  │
+│  ! worker: healthcheck no crítico falló (2 de 6 intentos)                    │
+│                                                                              │
+│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐                    │
+│  │ contenedores   │ │ imágenes       │ │ backup         │                    │
+│  │ 7 arriba       │ │ 3 nuevas       │ │ 412 MB         │                    │
+│  └────────────────┘ └────────────────┘ └────────────────┘                    │
+│                                                                              │
+│  log · .baton/logs/instalar-2026-09-24-1402.log                              │
+│  deshacer · baton rollback instalar                                          │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ [enter] salir                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,28 @@
+---
+source: crates/baton-tui/src/tests_b2.rs
+expression: "screen(&app, 100, 24)"
+---
+╭─ ⚙ Configuración · stack-produccion ──────────────────────────────────────── .baton/config.toml ─╮
+│ Destinos │ Logs │ Credenciales │ Planes                                                          │
+│                                  ━━━━━━                                                          │
+│ planes en baton/plans/                                                                           │
+│ › instalar            baton/plans/instalar.toml                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [tab] sección  [↑↓] elegir  [enter] abrir  [esc] volver                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
