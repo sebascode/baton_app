@@ -8,6 +8,7 @@ pub mod issue;
 pub mod locate;
 pub mod mask;
 pub mod plan;
+pub mod step_run;
 pub mod template;
 pub mod units;
 pub mod validate;

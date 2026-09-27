@@ -1,5 +1,8 @@
 //! Pantalla 1: vista previa del plan. Permite activar, ordenar y editar pasos antes de ejecutar.
 
+use baton_core::events::StepInfo;
+use baton_core::plan::{GateMode, Plan, Step, StepKind};
+use baton_core::step_run::{gate_info, step_info};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -8,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::theme;
-use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, spans_width};
+use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, spans_width, truncate};
 
 /// Etiqueta de tipo entre corchetes: `[check]`, `[gate auto]`...
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +29,8 @@ impl Tag {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewStep {
+    /// Identificador del paso en el plan (lo que se le pasa al runner).
+    pub id: String,
     pub name: String,
     /// Línea gris bajo el nombre.
     pub meta: String,
@@ -36,8 +41,8 @@ pub struct PreviewStep {
 /// Lo que se decidió en la vista previa al pulsar enter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
-    /// Posiciones (en el orden actual de la lista) de los pasos activos.
-    pub enabled: Vec<usize>,
+    /// Ids de los pasos activos, en el orden en que quedaron en la lista.
+    pub steps: Vec<String>,
     pub backup: bool,
     pub rollback: bool,
     pub dry_run: bool,
@@ -61,6 +66,25 @@ pub struct PreviewState {
     pub backup: bool,
     pub rollback: bool,
     pub dry_run: bool,
+    /// Avisos (por ejemplo, por qué no se pudo ejecutar); se borran con la siguiente tecla.
+    pub notice: Vec<String>,
+}
+
+/// Línea gris de un paso: su descripción o, si no la tiene, lo que hace.
+fn step_meta(step: &Step) -> String {
+    if let Some(d) = step.description.as_deref().filter(|d| !d.trim().is_empty()) {
+        return d.to_string();
+    }
+    let src: Vec<&str> = step.source.iter().collect();
+    match step.kind {
+        StepKind::Compose | StepKind::Dockerfile if !src.is_empty() => src.join(", "),
+        StepKind::Gate => step
+            .gate
+            .as_ref()
+            .map(|g| gate_info(g).summary)
+            .unwrap_or_default(),
+        _ => step.command.clone().unwrap_or_default(),
+    }
 }
 
 const SHORTCUTS: [(&str, &str); 6] = [
@@ -72,19 +96,57 @@ const SHORTCUTS: [(&str, &str); 6] = [
     ("enter", "ejecutar"),
 ];
 
+/// Todos los pasos de un plan como los muestra el pipeline (para verlo antes de ejecutar).
+/// `default_target` es el destino de los pasos que no declaran uno.
+pub fn plan_step_infos(plan: &Plan, default_target: &str) -> Vec<StepInfo> {
+    plan.steps
+        .iter()
+        .map(|s| step_info(s, s.target.as_deref().unwrap_or(default_target)))
+        .collect()
+}
+
 impl PreviewState {
+    /// La vista previa de un plan real: sus pasos (activos o no) y los toggles de `[options]`.
+    pub fn from_plan(plan: &Plan) -> PreviewState {
+        let steps = plan
+            .steps
+            .iter()
+            .map(|s| PreviewStep {
+                id: s.id.clone(),
+                name: s.name.clone(),
+                meta: step_meta(s),
+                tag: Tag::new(match (s.kind, s.gate.as_ref()) {
+                    (StepKind::Gate, Some(g)) if g.mode == GateMode::Manual => {
+                        "gate manual".to_string()
+                    }
+                    (StepKind::Gate, _) => "gate auto".to_string(),
+                    (kind, _) => kind.label().to_string(),
+                }),
+                enabled: s.enabled,
+            })
+            .collect();
+        PreviewState {
+            plan: plan.name.clone(),
+            steps,
+            cursor: 0,
+            backup: plan.options.backup,
+            rollback: plan.options.auto_rollback,
+            dry_run: plan.options.dry_run,
+            notice: Vec::new(),
+        }
+    }
+
     pub fn active_count(&self) -> usize {
         self.steps.iter().filter(|s| s.enabled).count()
     }
 
     pub fn request(&self) -> RunRequest {
         RunRequest {
-            enabled: self
+            steps: self
                 .steps
                 .iter()
-                .enumerate()
-                .filter(|(_, s)| s.enabled)
-                .map(|(i, _)| i)
+                .filter(|s| s.enabled)
+                .map(|s| s.id.clone())
                 .collect(),
             backup: self.backup,
             rollback: self.rollback,
@@ -111,6 +173,7 @@ impl PreviewState {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
+        self.notice.clear();
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Up if shift => self.move_step(-1),
@@ -173,13 +236,25 @@ impl PreviewState {
             return;
         }
 
+        // los avisos ocupan las últimas filas del área de la lista
+        let notice_h = (self.notice.len().min(4) as u16).min(sep_high.saturating_sub(inner.y + 3));
         let list = Rect::new(
             inner.x,
             inner.y + 1, // una línea de aire arriba, como en la maqueta
             inner.width,
-            sep_high.saturating_sub(inner.y + 1),
+            sep_high.saturating_sub(inner.y + 1 + notice_h),
         );
         self.render_list(buf, list);
+        for (n, line) in self.notice.iter().take(notice_h as usize).enumerate() {
+            Line::from(Span::styled(
+                truncate(line, content_w as usize),
+                Style::new().fg(theme::WARN),
+            ))
+            .render(
+                Rect::new(inner.x + 1, sep_high - notice_h + n as u16, content_w, 1),
+                buf,
+            );
+        }
 
         hsep(buf, area, sep_high, theme::border());
         self.render_toggles(buf, Rect::new(inner.x, toggles_y, inner.width, 1));

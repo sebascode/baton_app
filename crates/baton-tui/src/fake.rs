@@ -28,8 +28,9 @@ use crate::run::RunState;
 
 // ---------------------------------------------------------------- pantalla 1
 
-fn pstep(name: &str, meta: &str, tag: &str, enabled: bool) -> PreviewStep {
+fn pstep(id: &str, name: &str, meta: &str, tag: &str, enabled: bool) -> PreviewStep {
     PreviewStep {
+        id: id.into(),
         name: name.into(),
         meta: meta.into(),
         tag: Tag::new(tag),
@@ -43,42 +44,54 @@ pub fn preview() -> PreviewState {
         plan: "instalar".into(),
         steps: vec![
             pstep(
+                "pre-checks",
                 "Pre-checks",
                 "docker ≥24, puertos 5432, 8080",
                 "check",
                 true,
             ),
             pstep(
+                "backup",
                 "Backup volúmenes (opcional)",
                 "pg_data → .baton/backups/",
                 "backup",
                 true,
             ),
             pstep(
+                "build",
                 "Build imágenes",
                 "api/, worker/, web/Dockerfile",
                 "dockerfile",
                 true,
             ),
-            pstep("Levantar DB", "db/docker-compose.yml", "compose", true),
             pstep(
+                "db",
+                "Levantar DB",
+                "db/docker-compose.yml",
+                "compose",
+                true,
+            ),
+            pstep(
+                "gate-db",
                 "Gate: healthcheck postgres",
                 "pg_isready · 6 intentos · 60s",
                 "gate auto",
                 true,
             ),
             pstep(
+                "gate-confirm",
                 "Gate: confirmar despliegue",
                 "pregunta antes de continuar",
                 "gate manual",
                 true,
             ),
-            pstep("Smoke tests", "desactivado por ti", "check", false),
+            pstep("smoke", "Smoke tests", "desactivado por ti", "check", false),
         ],
         cursor: 2,
         backup: true,
         rollback: true,
         dry_run: false,
+        notice: Vec::new(),
     }
 }
 

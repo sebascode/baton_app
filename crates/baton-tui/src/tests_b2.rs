@@ -341,7 +341,16 @@ fn credentials_screen_sits_between_the_preview_and_the_run() {
     assert_eq!(
         req,
         RunRequest {
-            enabled: vec![0, 1, 2, 3, 4, 5],
+            steps: [
+                "pre-checks",
+                "backup",
+                "build",
+                "db",
+                "gate-db",
+                "gate-confirm"
+            ]
+            .map(String::from)
+            .to_vec(),
             backup: true,
             rollback: true,
             dry_run: true

@@ -89,6 +89,8 @@ struct Stash {
     credentials: Option<Box<CredentialsState>>,
     config: Option<Box<ConfigState>>,
     pipeline: Option<Box<RunState>>,
+    /// Origen del pipeline en vivo: (plan, raíz, todos los pasos con sus gates).
+    pipeline_source: Option<(String, String, Vec<StepInfo>)>,
     /// Ejecución pedida en la vista previa, a la espera de confirmar credenciales.
     pending: Option<RunRequest>,
 }
@@ -127,6 +129,13 @@ impl App {
 
     pub fn with_config(mut self, config: ConfigState) -> App {
         self.stash.config = Some(Box::new(config));
+        self
+    }
+
+    /// El pipeline se arma con los pasos del plan que estén activos en la vista previa y en el
+    /// orden en que estén, así que cambia si el usuario los activa o los reordena.
+    pub fn with_live_pipeline(mut self, plan: &str, root: &str, all_steps: Vec<StepInfo>) -> App {
+        self.stash.pipeline_source = Some((plan.into(), root.into(), all_steps));
         self
     }
 
@@ -259,7 +268,8 @@ impl App {
             Mode::Credentials(c) => c.notice = Some(message.into()),
             Mode::Config(c) => c.notice = Some(message.into()),
             Mode::Editor(e) => e.notice = Some(message.into()),
-            Mode::Preview(_) | Mode::Pipeline(_) | Mode::Run(_) => {}
+            Mode::Preview(p) => p.notice = message.lines().map(String::from).collect(),
+            Mode::Pipeline(_) | Mode::Run(_) => {}
         }
     }
 
@@ -281,7 +291,19 @@ impl App {
                 PreviewAction::Edit(i) => self.open_editor(i, false).or(Some(Effect::Edit(i))),
                 PreviewAction::AddGate(i) => self.open_editor(i, true).or(Some(Effect::AddGate(i))),
                 PreviewAction::Pipeline => {
-                    if let Some(p) = self.stash.pipeline.take() {
+                    let live = match (&self.stash.pipeline_source, &self.mode) {
+                        (Some((plan, root, all)), Mode::Preview(p)) => {
+                            let steps: Vec<StepInfo> = p
+                                .request()
+                                .steps
+                                .iter()
+                                .filter_map(|id| all.iter().find(|s| &s.id == id).cloned())
+                                .collect();
+                            Some(Box::new(RunState::for_preview(plan, root, steps)))
+                        }
+                        _ => None,
+                    };
+                    if let Some(p) = live.or_else(|| self.stash.pipeline.take()) {
                         self.switch(Mode::Pipeline(p));
                     }
                     None

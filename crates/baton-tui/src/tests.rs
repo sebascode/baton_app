@@ -577,7 +577,17 @@ fn preview_keys_toggle_reorder_and_run() {
         panic!("enter debía iniciar la ejecución")
     };
     // "Smoke tests" (desactivado) quedó en la posición 5 al mover "Build imágenes" al final
-    assert_eq!(req.enabled, [0, 1, 2, 3, 4, 6]);
+    assert_eq!(
+        req.steps,
+        [
+            "pre-checks",
+            "backup",
+            "db",
+            "gate-db",
+            "gate-confirm",
+            "build"
+        ]
+    );
     assert!(req.dry_run && !req.backup && req.rollback);
 }
 

@@ -1,0 +1,447 @@
+//! `baton run`, `baton <plan>` y `baton rollback` ejecutando el binario real, con un `docker`
+//! falso en el `PATH`. Sin terminal, así que corre en modo texto.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+const FAKE_DOCKER: &str = r#"#!/bin/sh
+echo "$PWD|$*" >> "$BATON_CALLS"
+if [ -f "$BATON_FAIL" ] && echo "$*" | grep -q "$(cat "$BATON_FAIL")"; then
+  echo "error simulado" >&2
+  exit 1
+fi
+echo "docker $*"
+"#;
+
+struct Fx {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+}
+
+impl Fx {
+    fn new(plan: &str) -> Fx {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let write = |rel: &str, content: &str| {
+            let p = root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, content).unwrap();
+        };
+        write("baton/plans/instalar.toml", plan);
+        write("db/docker-compose.yml", "");
+        write("_bin/docker", FAKE_DOCKER);
+        fs::set_permissions(root.join("_bin/docker"), fs::Permissions::from_mode(0o755)).unwrap();
+        Fx { _tmp: tmp, root }
+    }
+
+    fn baton(&self, args: &[&str]) -> Output {
+        let path = format!(
+            "{}:{}",
+            self.root.join("_bin").display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        Command::new(env!("CARGO_BIN_EXE_baton"))
+            .arg("-C")
+            .arg(&self.root)
+            .args(args)
+            .env("PATH", path)
+            .env("BATON_CALLS", self.root.join("_calls"))
+            .env("BATON_FAIL", self.root.join("_fail"))
+            .env_remove("CI")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    fn calls(&self) -> Vec<String> {
+        fs::read_to_string(self.root.join("_calls"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.split_once('|').unwrap().1.to_string())
+            .collect()
+    }
+
+    fn fail_on(&self, pattern: &str) {
+        fs::write(self.root.join("_fail"), pattern).unwrap();
+    }
+
+    fn has(&self, rel: &str) -> bool {
+        Path::new(&self.root).join(rel).exists()
+    }
+}
+
+fn out(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn err(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+const PLAN: &str = r#"
+name = "instalar"
+
+[[steps]]
+id = "db"
+name = "Levantar DB"
+type = "compose"
+source = "db/docker-compose.yml"
+rollback = "docker compose down"
+
+[[steps]]
+id = "smoke"
+name = "Smoke tests"
+type = "comando"
+command = "docker probar"
+depends_on = ["db"]
+"#;
+
+#[test]
+fn run_executes_the_plan_and_prints_progress_and_a_summary() {
+    let fx = Fx::new(PLAN);
+    let o = fx.baton(&["run", "instalar"]);
+    let stdout = out(&o);
+    assert_eq!(o.status.code(), Some(0), "{stdout}\n{}", err(&o));
+    assert_eq!(fx.calls(), ["compose up -d", "probar"]);
+    for frag in [
+        "baton · plan instalar · ",
+        "2 pasos",
+        "▸ [1/2] Levantar DB",
+        "$ docker compose up -d",
+        "docker compose up -d",
+        "✓ Levantar DB (",
+        "▸ [2/2] Smoke tests",
+        "✓ Plan instalar completado · 2/2 pasos",
+        "log · .baton/logs/instalar-",
+        "deshacer · baton rollback instalar",
+    ] {
+        assert!(stdout.contains(frag), "falta {frag:?}:\n{stdout}");
+    }
+    // .baton/ con estado, log y su entrada en .gitignore
+    assert!(fx.has(".baton/state.json") && fx.has(".baton/logs"));
+    assert!(
+        fs::read_to_string(fx.root.join(".gitignore"))
+            .unwrap()
+            .contains(".baton/")
+    );
+}
+
+#[test]
+fn a_plan_name_is_a_shortcut_for_run() {
+    let fx = Fx::new(PLAN);
+    let o = fx.baton(&["instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls().len(), 2);
+    // y acepta las mismas opciones
+    let fx = Fx::new(PLAN);
+    let o = fx.baton(&["instalar", "--dry-run"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(fx.calls().is_empty());
+    assert!(out(&o).contains("[dry-run]"), "{}", out(&o));
+}
+
+#[test]
+fn a_failing_step_exits_3_and_explains_what_happened() {
+    let fx = Fx::new(PLAN);
+    fx.fail_on("compose up");
+    let o = fx.baton(&["run", "instalar"]);
+    let stdout = out(&o);
+    assert_eq!(o.status.code(), Some(3), "{stdout}\n{}", err(&o));
+    for frag in [
+        "✗ Paso 1 falló · Levantar DB: El comando terminó con código 1",
+        "comando · docker compose up -d",
+        "| error simulado",
+        "✗ Plan instalar falló · 0/2 pasos",
+        "  ○ Smoke tests",
+        "no se ejecutó",
+    ] {
+        assert!(stdout.contains(frag), "falta {frag:?}:\n{stdout}");
+    }
+    assert_eq!(fx.calls(), ["compose up -d"]);
+}
+
+#[test]
+fn resume_continues_from_where_it_failed() {
+    let fx = Fx::new(PLAN);
+    fx.fail_on("probar");
+    assert_eq!(fx.baton(&["run", "instalar"]).status.code(), Some(3));
+    assert_eq!(fx.calls(), ["compose up -d", "probar"]);
+    fs::remove_file(fx.root.join("_fail")).unwrap();
+    fs::remove_file(fx.root.join("_calls")).unwrap();
+    let o = fx.baton(&["run", "instalar", "--resume"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fx.calls(),
+        ["probar"],
+        "el paso que ya había terminado no se repite"
+    );
+    assert!(out(&o).contains("» Levantar DB omitido"), "{}", out(&o));
+}
+
+#[test]
+fn rollback_undoes_the_last_run_and_needs_a_previous_one() {
+    let fx = Fx::new(PLAN);
+    let o = fx.baton(&["rollback", "instalar"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("no hay una ejecución previa de 'instalar' que deshacer"),
+        "{}",
+        err(&o)
+    );
+
+    assert_eq!(fx.baton(&["run", "instalar"]).status.code(), Some(0));
+    fs::remove_file(fx.root.join("_calls")).unwrap();
+    let o = fx.baton(&["rollback", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls(), ["compose down"]);
+    let stdout = out(&o);
+    assert!(
+        stdout.contains("rollback: docker compose down")
+            && stdout.contains("✓ Plan instalar completado"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("deshacer · baton rollback"),
+        "no ofrece deshacer lo que ya se deshizo"
+    );
+}
+
+#[test]
+fn manual_gates_need_assume_yes_without_a_terminal() {
+    let plan = format!(
+        "{PLAN}\n[[steps]]\nid = \"ok\"\nname = \"Confirmar\"\ntype = \"gate\"\n[steps.gate]\nmode = \"manual\"\n"
+    );
+    let fx = Fx::new(&plan);
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).contains("--assume-yes"), "{}", err(&o));
+    assert!(
+        fx.calls().is_empty(),
+        "no debe ejecutarse nada si el plan no puede terminar"
+    );
+    let o = fx.baton(&["run", "instalar", "--assume-yes"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("gate manual confirmado con --assume-yes"),
+        "{}",
+        out(&o)
+    );
+}
+
+#[test]
+fn every_preparation_problem_is_listed_before_running_anything() {
+    let plan = r#"
+name = "instalar"
+[[steps]]
+id = "a"
+name = "A"
+type = "compose"
+source = "no/existe.yml"
+[[steps]]
+id = "b"
+name = "B"
+type = "compose"
+source = "db/docker-compose.yml"
+[steps.gate]
+mode = "auto"
+[[steps.gate.checks]]
+kind = "command"
+name = "x"
+run = "true"
+"#;
+    let fx = Fx::new(plan);
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1));
+    let e = err(&o);
+    assert!(e.contains("no coincide con ningún archivo"), "{e}");
+    assert!(e.contains("gate automático") && e.contains("hito d"), "{e}");
+    assert!(fx.calls().is_empty());
+    assert!(
+        !fx.has(".baton"),
+        "una ejecución rechazada no debe dejar rastro"
+    );
+}
+
+#[test]
+fn invalid_plans_and_unknown_plans_have_distinct_exit_codes() {
+    let fx = Fx::new(
+        "name = \"instalar\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"nube\"\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("el destino 'nube' no existe"),
+        "{}",
+        err(&o)
+    );
+
+    let o = fx.baton(&["run", "desinstalar"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        err(&o).contains("planes disponibles: instalar"),
+        "{}",
+        err(&o)
+    );
+    // también con el atajo
+    let o = fx.baton(&["desinstalar"]);
+    assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
+fn backup_flags_override_the_plan() {
+    let plan = r#"
+name = "instalar"
+[options]
+backup = true
+[backup]
+volumes = ["pg_data"]
+[[steps]]
+id = "backup"
+name = "Backup"
+type = "backup"
+[[steps]]
+id = "a"
+name = "A"
+type = "comando"
+command = "docker hecho"
+"#;
+    let fx = Fx::new(plan);
+    assert_eq!(fx.baton(&["run", "instalar"]).status.code(), Some(0));
+    assert_eq!(fx.calls().len(), 2, "el plan pide backup: {:?}", fx.calls());
+    let fx = Fx::new(plan);
+    let o = fx.baton(&["run", "instalar", "--no-backup"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(fx.calls(), ["hecho"]);
+    assert!(out(&o).contains("» Backup omitido"), "{}", out(&o));
+    let o = fx.baton(&["run", "instalar", "--backup", "--no-backup"]);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "las opciones contradictorias son un error de uso"
+    );
+}
+
+#[test]
+fn the_ci_variable_forces_plain_text_and_the_result_is_the_same() {
+    let fx = Fx::new(PLAN);
+    let path = format!(
+        "{}:{}",
+        fx.root.join("_bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&fx.root)
+        .args(["run", "instalar"])
+        .env("PATH", path)
+        .env("BATON_CALLS", fx.root.join("_calls"))
+        .env("CI", "true")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert!(out(&o).contains("✓ Plan instalar completado"));
+}
+
+#[test]
+fn the_example_project_explains_why_it_cannot_run_yet() {
+    // el proyecto de ejemplo usa destinos ssh y gates automáticos, que llegan en hitos posteriores
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/stack-produccion");
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&root)
+        .args(["run", "instalar", "--no-tui"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let e = err(&o);
+    assert!(e.contains("hito f") && e.contains("hito d"), "{e}");
+    assert!(!root.join("../stack-produccion/.baton/state.json").exists());
+}
+
+#[test]
+fn validate_and_other_subcommands_still_win_over_the_plan_shortcut() {
+    let fx = Fx::new(PLAN);
+    let o = fx.baton(&["validate"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(out(&o).contains("baton/plans/instalar.toml"));
+}
+
+/// Copia `examples/prueba-local` a un directorio temporal para ejecutarlo sin ensuciar el repo.
+fn copy_example() -> (tempfile::TempDir, PathBuf) {
+    fn copy(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for e in fs::read_dir(from).unwrap().flatten() {
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if src.is_dir() {
+                copy(&src, &dst);
+            } else {
+                fs::copy(&src, &dst).unwrap();
+            }
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    copy(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/prueba-local"),
+        &root,
+    );
+    (tmp, root)
+}
+
+fn baton_in(root: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env_remove("CI")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn the_prueba_local_example_runs_without_docker_and_fails_on_demand() {
+    let (_tmp, root) = copy_example();
+    assert_eq!(baton_in(&root, &["validate"]).status.code(), Some(0));
+
+    let o = baton_in(&root, &["prueba", "--assume-yes"]);
+    let stdout = out(&o);
+    assert_eq!(o.status.code(), Some(0), "{stdout}\n{}", err(&o));
+    assert!(
+        stdout.contains("✓ Plan prueba completado · 5/5 pasos"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("desplegado") && stdout.contains("gate manual confirmado con --assume-yes"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("deshacer · baton rollback prueba"),
+        "{stdout}"
+    );
+
+    // con el archivo FALLAR el despliegue falla y `--resume` retoma desde ahí
+    fs::write(root.join("FALLAR"), "").unwrap();
+    let o = baton_in(&root, &["prueba", "--assume-yes"]);
+    assert_eq!(o.status.code(), Some(3), "{}", out(&o));
+    assert!(out(&o).contains("falla a propósito: existe el archivo FALLAR"));
+    fs::remove_file(root.join("FALLAR")).unwrap();
+    let o = baton_in(&root, &["prueba", "--resume", "--assume-yes"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let stdout = out(&o);
+    assert!(
+        stdout.contains("» Revisar requisitos omitido") && stdout.contains("✓ Desplegar ("),
+        "{stdout}"
+    );
+
+    // y se puede deshacer
+    let o = baton_in(&root, &["rollback", "prueba"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("deshaciendo el despliegue")
+            && out(&o).contains("deshaciendo la preparación")
+    );
+}

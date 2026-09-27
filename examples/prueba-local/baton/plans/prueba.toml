@@ -1,0 +1,47 @@
+version = 1
+name = "prueba"
+description = "Plan de prueba que no necesita docker"
+
+[options]
+backup = false
+auto_rollback = false
+
+[[steps]]
+id = "requisitos"
+name = "Revisar requisitos"
+type = "check"
+description = "comprobaciones rápidas"
+command = "echo 'revisando requisitos'; sleep 1; echo 'todo en orden'"
+
+[[steps]]
+id = "preparar"
+name = "Preparar archivos"
+type = "comando"
+command = "for i in 1 2 3; do echo \"preparando $i de 3\"; sleep 1; done"
+rollback = "echo 'deshaciendo la preparación'"
+
+[[steps]]
+id = "confirmar"
+name = "Confirmar despliegue"
+type = "gate"
+depends_on = ["preparar"]
+
+[steps.gate]
+mode = "manual"
+message = "¿Continuar con el despliegue?"
+
+[[steps]]
+id = "desplegar"
+name = "Desplegar"
+type = "comando"
+description = "falla a propósito si existe el archivo FALLAR"
+command = "test ! -f FALLAR || { echo 'falla a propósito: existe el archivo FALLAR' >&2; exit 1; }; echo 'desplegado'"
+rollback = "echo 'deshaciendo el despliegue'"
+depends_on = ["confirmar"]
+
+[[steps]]
+id = "verificar"
+name = "Verificar"
+type = "comando"
+command = "echo 'todo funciona'; sleep 1"
+depends_on = ["desplegar"]

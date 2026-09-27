@@ -28,9 +28,11 @@ mod tests_b2;
 #[cfg(test)]
 mod tests_pipeline;
 #[cfg(test)]
+mod tests_plan;
+#[cfg(test)]
 mod testutil;
 
 pub use app::{App, Effect, Screen};
 pub use config_view::ConfigState;
-pub use preview::{PreviewState, PreviewStep, RunRequest, Tag};
+pub use preview::{PreviewState, PreviewStep, RunRequest, Tag, plan_step_infos};
 pub use run::RunState;

@@ -9,3 +9,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+baton-core = { version = "0.1.0", path = "../baton-core" }
+baton-store = { version = "0.1.0", path = "../baton-store" }
+humantime = "2.4.0"
+tokio = { version = "1.53.1", features = ["rt", "process", "io-util", "time", "sync", "macros"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
