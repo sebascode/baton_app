@@ -231,6 +231,38 @@ fn manual_gates_need_assume_yes_without_a_terminal() {
 }
 
 #[test]
+fn auto_gates_run_their_checks_and_non_critical_failures_are_only_warnings() {
+    let plan = format!(
+        "{PLAN}\n[[steps]]\nid = \"ok\"\nname = \"Verificar\"\ntype = \"gate\"\ndepends_on = [\"db\"]\n\
+         [steps.gate]\nmode = \"auto\"\ncondition = \"critical\"\ntimeout = \"2s\"\nattempts = 1\n\
+         [[steps.gate.checks]]\nkind = \"command\"\nname = \"listo\"\nrun = \"true\"\ncritical = true\n\
+         [[steps.gate.checks]]\nkind = \"command\"\nname = \"opcional\"\nrun = \"false\"\n"
+    );
+    let fx = Fx::new(&plan);
+    let o = fx.baton(&["run", "instalar"]);
+    let stdout = out(&o);
+    assert_eq!(o.status.code(), Some(0), "{stdout}\n{}", err(&o));
+    assert!(
+        stdout.contains("opcional"),
+        "la advertencia nombra el check: {stdout}"
+    );
+    assert!(stdout.to_lowercase().contains("advertencia"), "{stdout}");
+}
+
+#[test]
+fn a_critical_check_that_fails_stops_the_run_with_exit_3() {
+    let plan = format!(
+        "{PLAN}\n[[steps]]\nid = \"ok\"\nname = \"Verificar\"\ntype = \"gate\"\ndepends_on = [\"db\"]\n\
+         [steps.gate]\nmode = \"auto\"\ncondition = \"critical\"\ntimeout = \"1s\"\nattempts = 1\n\
+         [[steps.gate.checks]]\nkind = \"command\"\nname = \"caido\"\nrun = \"false\"\ncritical = true\n"
+    );
+    let fx = Fx::new(&plan);
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(3), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("caido"), "{}", out(&o));
+}
+
+#[test]
 fn every_preparation_problem_is_listed_before_running_anything() {
     let plan = r#"
 name = "instalar"
@@ -256,7 +288,6 @@ run = "true"
     assert_eq!(o.status.code(), Some(1));
     let e = err(&o);
     assert!(e.contains("no coincide con ningún archivo"), "{e}");
-    assert!(e.contains("gate automático") && e.contains("hito d"), "{e}");
     assert!(fx.calls().is_empty());
     assert!(
         !fx.has(".baton"),
@@ -346,7 +377,7 @@ fn the_ci_variable_forces_plain_text_and_the_result_is_the_same() {
 
 #[test]
 fn the_example_project_explains_why_it_cannot_run_yet() {
-    // el proyecto de ejemplo usa destinos ssh y gates automáticos, que llegan en hitos posteriores
+    // el proyecto de ejemplo usa destinos ssh, que llegan en el hito f
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/stack-produccion");
     let o = Command::new(env!("CARGO_BIN_EXE_baton"))
         .arg("-C")
@@ -357,7 +388,7 @@ fn the_example_project_explains_why_it_cannot_run_yet() {
         .unwrap();
     assert_eq!(o.status.code(), Some(1));
     let e = err(&o);
-    assert!(e.contains("hito f") && e.contains("hito d"), "{e}");
+    assert!(e.contains("hito f"), "{e}");
     assert!(!root.join("../stack-produccion/.baton/state.json").exists());
 }
 

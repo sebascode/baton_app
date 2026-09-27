@@ -16,7 +16,7 @@ use baton_core::events::{
     Badge, BadgeTone, Failure, FailureKind, LogKind, LogLine, RunCommand, RunEvent, RunOutcome,
     RunSummary, StepStatus,
 };
-use baton_core::plan::{Plan, StepKind};
+use baton_core::plan::{GateMode, Plan, StepKind};
 use baton_core::step_run::{StepVars, step_info};
 use baton_store::Project;
 use baton_store::clock;
@@ -25,6 +25,7 @@ use baton_store::logs::{LogSink, resolve_log_path};
 use baton_store::state::{LastRun, RunStatus, State, StepRecord, StepState};
 use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounded_channel};
 
+use crate::gate::{GateResult, run_auto_gate};
 use crate::prepare::{Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run};
 use crate::transport::{Command, Exit, LocalTransport, Stream, Transport};
 
@@ -93,24 +94,26 @@ struct Persist {
     enabled: bool,
 }
 
-struct Ctx {
-    project: Project,
-    plan: Plan,
-    opts: RunOptions,
-    steps: Vec<PStep>,
+pub(crate) struct Ctx {
+    pub(crate) project: Project,
+    pub(crate) plan: Plan,
+    pub(crate) opts: RunOptions,
+    pub(crate) steps: Vec<PStep>,
     fecha: String,
     tx: Tx<RunEvent>,
     sink: Mutex<Option<LogSink>>,
     /// Últimas líneas de salida del comando en curso, para el mensaje de fallo.
     tail: Mutex<Vec<String>>,
     paused: AtomicBool,
-    transport: LocalTransport,
+    pub(crate) transport: LocalTransport,
     backups: Mutex<Vec<PathBuf>>,
     persist: Mutex<Persist>,
+    /// Advertencias de la ejecución (checks no críticos fallidos, gates saltados).
+    pub(crate) warnings: Mutex<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Interrupt {
+pub(crate) enum Interrupt {
     Abort,
     Rollback,
 }
@@ -121,18 +124,20 @@ enum StepEnd {
     },
     Skipped(String),
     Failed(Failure),
+    /// El comando del paso anduvo bien pero su gate automático no pasó.
+    GateFailed(Failure),
     Interrupted(Interrupt),
     /// El usuario respondió que no a un gate manual.
     Declined,
 }
 
 impl Ctx {
-    fn emit(&self, event: RunEvent) {
+    pub(crate) fn emit(&self, event: RunEvent) {
         // Si nadie escucha ya (la interfaz se cerró) no hay a quién avisar.
         let _ = self.tx.send(event);
     }
 
-    fn log(&self, step: usize, kind: LogKind, text: impl Into<String>) {
+    pub(crate) fn log(&self, step: usize, kind: LogKind, text: impl Into<String>) {
         let text = text.into();
         let at = clock::clock();
         if let Ok(mut sink) = self.sink.lock()
@@ -163,7 +168,7 @@ impl Ctx {
         lines[skip..].to_vec()
     }
 
-    fn set_paused(&self, on: bool) {
+    pub(crate) fn set_paused(&self, on: bool) {
         self.paused.store(on, Ordering::SeqCst);
     }
 
@@ -171,11 +176,11 @@ impl Ctx {
         self.paused.load(Ordering::SeqCst)
     }
 
-    fn vars(&self, ps: &PStep, file: Option<&Path>) -> StepVars {
+    pub(crate) fn vars(&self, ps: &PStep, file: Option<&Path>) -> StepVars {
         let v = StepVars {
             plan: self.plan.name.clone(),
             fecha: self.fecha.clone(),
-            destino: ps.target.clone(),
+            destino: ps.host.clone(),
             ..StepVars::default()
         };
         match file {
@@ -461,11 +466,12 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
 }
 
 /// Ejecuta un paso completo: backup previo, comando por archivo y gate manual.
-async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> StepEnd {
+/// `skip_action`: el comando ya corrió bien y solo se repite el gate (reintento tras un gate fallido).
+async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: bool) -> StepEnd {
     let ps = &ctx.steps[i];
     let mut retries_total = 0;
 
-    if ps.step.kind == StepKind::Backup || ps.step.backup_before {
+    if !skip_action && (ps.step.kind == StepKind::Backup || ps.step.backup_before) {
         if !ctx.opts.backup {
             ctx.log(i, LogKind::Output, "backup desactivado");
             if ps.step.kind == StepKind::Backup {
@@ -476,10 +482,12 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> StepEnd {
         }
     }
 
-    if matches!(
-        ps.step.kind,
-        StepKind::Compose | StepKind::Dockerfile | StepKind::Comando | StepKind::Check
-    ) && let Some(template) = ps.step.command_template()
+    if !skip_action
+        && matches!(
+            ps.step.kind,
+            StepKind::Compose | StepKind::Dockerfile | StepKind::Comando | StepKind::Check
+        )
+        && let Some(template) = ps.step.command_template()
     {
         let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
             vec![None]
@@ -497,15 +505,24 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> StepEnd {
         }
     }
 
-    if let Some(gate) = ps.step.gate.as_ref().filter(|_| ps.has_manual_gate()) {
-        let message = gate
-            .message
-            .clone()
-            .unwrap_or_else(|| "¿Continuar?".to_string());
-        match ask_gate(ctx, cmds, i, &message).await {
-            Answer::Yes => {}
-            Answer::No => return StepEnd::Declined,
-            Answer::Interrupted(int) => return StepEnd::Interrupted(int),
+    if let Some(gate) = ps.step.gate.as_ref() {
+        match gate.mode {
+            GateMode::Manual => {
+                let message = gate
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "¿Continuar?".to_string());
+                match ask_gate(ctx, cmds, i, &message).await {
+                    Answer::Yes => {}
+                    Answer::No => return StepEnd::Declined,
+                    Answer::Interrupted(int) => return StepEnd::Interrupted(int),
+                }
+            }
+            GateMode::Auto => match run_auto_gate(ctx, cmds, i).await {
+                GateResult::Passed => {}
+                GateResult::Failed(f) => return StepEnd::GateFailed(f),
+                GateResult::Interrupted(int) => return StepEnd::Interrupted(int),
+            },
         }
     }
     StepEnd::Done {
@@ -778,6 +795,7 @@ async fn run(
             run: run_rec,
             enabled: false,
         }),
+        warnings: Mutex::new(Vec::new()),
     };
     // El estado se guarda salvo en dry-run: probar un plan no debe pisar la última ejecución real.
     if let Ok(mut p) = ctx.persist.lock() {
@@ -816,7 +834,13 @@ async fn run(
         log_path: (!ctx.opts.dry_run).then(|| ctx.project.display_path(&log_path)),
         undo_command: (has_rollback && !rollback_mode)
             .then(|| format!("baton rollback {}", ctx.plan.name)),
-        warnings: Vec::new(),
+        warnings: ctx.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
+    };
+    // Terminó bien pero con checks no críticos fallidos o gates saltados: se dice en el resultado.
+    let outcome = if outcome == RunOutcome::Completed && !summary.warnings.is_empty() {
+        RunOutcome::CompletedWithWarnings
+    } else {
+        outcome
     };
     ctx.finish_state(match outcome {
         RunOutcome::Completed => RunStatus::Completed,
@@ -911,11 +935,13 @@ async fn run_plan(
         }
 
         let mut manual_retries = 0;
+        // tras un gate fallido, el reintento repite solo el gate: el comando del paso ya anduvo
+        let mut skip_action = false;
         loop {
             let t = Instant::now();
             ctx.emit(RunEvent::StepStarted { step: i });
             ctx.record(&id, StepState::Running, Duration::ZERO, 0);
-            match run_step(ctx, cmds, i).await {
+            match run_step(ctx, cmds, i, skip_action).await {
                 StepEnd::Done { retries } => {
                     let retries = retries + manual_retries;
                     let elapsed = t.elapsed();
@@ -954,7 +980,11 @@ async fn run_plan(
                     halt = Some(Halt::Abort);
                     break 'steps;
                 }
-                StepEnd::Failed(mut f) => {
+                end @ (StepEnd::Failed(_) | StepEnd::GateFailed(_)) => {
+                    let at_gate = matches!(end, StepEnd::GateFailed(_));
+                    let (StepEnd::Failed(mut f) | StepEnd::GateFailed(mut f)) = end else {
+                        unreachable!()
+                    };
                     let elapsed = t.elapsed();
                     // Hasta dónde llegaría un rollback: el primer paso hecho (o el que falló) con `rollback`.
                     f.rollback_to = executed
@@ -971,6 +1001,7 @@ async fn run_plan(
                     match decide_after_failure(ctx, cmds, i).await {
                         Decision::Retry => {
                             manual_retries += 1;
+                            skip_action = at_gate;
                             ctx.log(
                                 i,
                                 LogKind::Retry,

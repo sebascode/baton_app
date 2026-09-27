@@ -25,6 +25,7 @@ use crate::config_view::{ConfigAction, ConfigState};
 use crate::credentials::{CredAction, CredentialsState};
 use crate::editor::{EditorAction, EditorState};
 use baton_core::events::StepInfo;
+use baton_core::plan::{Plan, Step};
 
 use crate::gate_view::ScannedService;
 use crate::preview::{PreviewAction, PreviewState, RunRequest};
@@ -78,6 +79,9 @@ pub enum Effect {
     Rescan,
     /// Abrir un plan desde la pestaña Planes.
     OpenPlan(String),
+    /// Guardar los pasos editados en el plan (el editor ya comprobó que los campos se entienden).
+    /// Quien atiende responde con `apply_saved_plan` o `notify`.
+    SavePlan(Vec<Step>),
     Quit,
 }
 
@@ -105,6 +109,14 @@ impl App {
     pub fn new(preview: PreviewState) -> App {
         App {
             mode: Mode::Preview(preview),
+            stash: Stash::default(),
+        }
+    }
+
+    /// Arranca directamente en el editor de pasos (`baton edit`); `esc` sale del programa.
+    pub fn editor_only(editor: EditorState) -> App {
+        App {
+            mode: Mode::Editor(Box::new(editor)),
             stash: Stash::default(),
         }
     }
@@ -234,6 +246,60 @@ impl App {
         }
     }
 
+    /// Los pasos del editor tal como están ahora (para probar uno sin guardar), o por qué no se
+    /// entienden. `None` si no hay editor.
+    pub fn editor_steps(&self) -> Option<Result<Vec<Step>, Vec<String>>> {
+        match &self.mode {
+            Mode::Editor(e) => Some(e.to_steps()),
+            _ => self.stash.editor.as_ref().map(|e| e.to_steps()),
+        }
+    }
+
+    /// El origen del paso (o del gate abierto) que se está editando.
+    pub fn gate_source(&self) -> Option<String> {
+        match &self.mode {
+            Mode::Editor(e) => e.current_source(),
+            _ => None,
+        }
+    }
+
+    /// Tras guardar: el plan tal como quedó en disco reemplaza al del editor, la vista previa y el
+    /// pipeline. Se conserva el paso seleccionado, lo activado o desactivado y los toggles.
+    pub fn apply_saved_plan(
+        &mut self,
+        plan: &Plan,
+        default_target: &str,
+        targets: &[String],
+        counts: &[Option<usize>],
+        message: &str,
+    ) {
+        let mut fresh = EditorState::from_plan(plan, targets, default_target, counts);
+        let editor_slot: Option<&mut Box<EditorState>> = match &mut self.mode {
+            Mode::Editor(e) => Some(e),
+            _ => self.stash.editor.as_mut(),
+        };
+        if let Some(slot) = editor_slot {
+            fresh.selected = slot.selected.min(fresh.steps.len().saturating_sub(1));
+            fresh.gate_open = slot.gate_open
+                && fresh
+                    .steps
+                    .get(fresh.selected)
+                    .is_some_and(|s| s.gate.is_some());
+            fresh.notice = Some(message.to_string());
+            **slot = fresh;
+        }
+        let preview = match &mut self.mode {
+            Mode::Preview(p) => Some(p),
+            _ => self.stash.preview.as_mut(),
+        };
+        if let Some(p) = preview {
+            p.refresh_from_plan(plan);
+        }
+        if let Some((_, _, steps)) = self.stash.pipeline_source.as_mut() {
+            *steps = crate::preview::plan_step_infos(plan, default_target);
+        }
+    }
+
     // Respuestas del driver a los efectos de prueba y escaneo.
 
     pub fn credential_test_result(&mut self, idx: usize, ok: bool, message: &str) {
@@ -333,10 +399,17 @@ impl App {
                 EditorAction::Back => self.back_to_preview(),
                 EditorAction::TestStep(i) => Some(Effect::TestStep(i)),
                 EditorAction::Rescan => Some(Effect::Rescan),
-                EditorAction::Save => {
+                EditorAction::Save if !e.can_save => {
                     e.notice = Some(NOT_SAVED.into());
                     None
                 }
+                EditorAction::Save => match e.to_steps() {
+                    Ok(steps) => Some(Effect::SavePlan(steps)),
+                    Err(errors) => {
+                        e.notice = Some(errors.join("; "));
+                        None
+                    }
+                },
             },
             Mode::Run(r) => match r.handle_key(key)? {
                 RunAction::Command(c) => Some(Effect::Command(c)),

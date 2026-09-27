@@ -106,6 +106,27 @@ pub fn plan_step_infos(plan: &Plan, default_target: &str) -> Vec<StepInfo> {
 }
 
 impl PreviewState {
+    /// Rehace la lista con el plan actualizado (por ejemplo, tras guardar en el editor), sin
+    /// perder los toggles ni lo que el usuario activó o desactivó en los pasos que siguen existiendo.
+    pub fn refresh_from_plan(&mut self, plan: &Plan) {
+        let was: std::collections::HashMap<String, bool> = self
+            .steps
+            .iter()
+            .map(|s| (s.id.clone(), s.enabled))
+            .collect();
+        let cursor_id = self.steps.get(self.cursor).map(|s| s.id.clone());
+        let mut fresh = PreviewState::from_plan(plan);
+        for s in &mut fresh.steps {
+            if let Some(enabled) = was.get(&s.id) {
+                s.enabled = *enabled;
+            }
+        }
+        self.cursor = cursor_id
+            .and_then(|id| fresh.steps.iter().position(|s| s.id == id))
+            .unwrap_or(0);
+        self.steps = fresh.steps;
+    }
+
     /// La vista previa de un plan real: sus pasos (activos o no) y los toggles de `[options]`.
     pub fn from_plan(plan: &Plan) -> PreviewState {
         let steps = plan

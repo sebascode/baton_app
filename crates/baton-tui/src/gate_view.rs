@@ -1,6 +1,7 @@
 //! Pantalla 8: gate multi-check de un paso (modo, condición, tabla de checks por servicio).
 
-use baton_core::plan::CheckKind;
+use baton_core::plan::{Check, CheckKind, Condition, Gate, GateMode};
+use baton_core::units::{Dur, format_duration};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -48,9 +49,80 @@ pub struct GateRow {
     pub kind: CheckKind,
     pub critical: bool,
     pub target: RowTarget,
+    /// El check del plan del que viene (para conservar lo que la pantalla no edita).
+    pub origin: Option<Check>,
+}
+
+impl From<&baton_core::compose::Service> for ScannedService {
+    /// Un servicio del compose con el check que se le infiere.
+    fn from(svc: &baton_core::compose::Service) -> ScannedService {
+        let c = svc.inferred_check();
+        let target = match c.kind {
+            CheckKind::Healthcheck => "definido en compose".to_string(),
+            CheckKind::Http => c.url.clone().unwrap_or_default(),
+            _ => "sin puertos · contenedor arriba 30s".to_string(),
+        };
+        ScannedService {
+            name: svc.name.clone(),
+            kind: c.kind,
+            target,
+        }
+    }
 }
 
 impl GateRow {
+    fn from_check(c: &Check) -> GateRow {
+        let target = match c.kind {
+            CheckKind::Http => RowTarget::Edit(TextField::new(c.url.as_deref().unwrap_or(""))),
+            CheckKind::Command => RowTarget::Edit(TextField::new(c.run.as_deref().unwrap_or(""))),
+            CheckKind::Healthcheck => RowTarget::Fixed("definido en compose".into()),
+            CheckKind::Running => RowTarget::Fixed(match c.min_up {
+                Some(d) => format!("contenedor arriba {}", format_duration(d.as_duration())),
+                None => "contenedor arriba 30s".into(),
+            }),
+        };
+        let extra = c.service.is_none();
+        GateRow {
+            enabled: c.enabled,
+            is_new: false,
+            removed: false,
+            extra,
+            service: c
+                .service
+                .clone()
+                .or_else(|| c.name.clone())
+                .unwrap_or_else(|| "extra".into()),
+            kind: c.kind,
+            critical: c.critical,
+            target,
+            origin: Some(c.clone()),
+        }
+    }
+
+    fn to_check(&self) -> Check {
+        let o = self.origin.as_ref();
+        let text = match &self.target {
+            RowTarget::Edit(tf) => Some(tf.value()),
+            RowTarget::Fixed(_) => None,
+        };
+        Check {
+            service: (!self.extra).then(|| self.service.clone()),
+            name: if self.extra {
+                Some(self.service.clone())
+            } else {
+                o.and_then(|c| c.name.clone())
+            },
+            kind: self.kind,
+            url: text.clone().filter(|_| self.kind == CheckKind::Http),
+            run: text.filter(|_| self.kind == CheckKind::Command),
+            min_up: o.and_then(|c| c.min_up),
+            critical: self.critical,
+            enabled: self.enabled,
+            timeout: o.and_then(|c| c.timeout),
+            attempts: o.and_then(|c| c.attempts),
+        }
+    }
+
     fn from_scan(s: &ScannedService) -> GateRow {
         let target = match s.kind {
             CheckKind::Http | CheckKind::Command => RowTarget::Edit(TextField::new(&s.target)),
@@ -65,6 +137,7 @@ impl GateRow {
             kind: s.kind,
             critical: false,
             target,
+            origin: None,
         }
     }
 
@@ -166,6 +239,70 @@ impl GateState {
             removable: true,
             confirm_remove: false,
         }
+    }
+
+    /// El estado de la pantalla para un gate del plan.
+    pub fn from_gate(step_name: &str, gate: &Gate, scan_source: &str) -> GateState {
+        let mut g = GateState::new(step_name, gate.mode == GateMode::Auto, scan_source);
+        let cond = match gate.condition {
+            Condition::All => "todos pasan",
+            Condition::AtLeast => "al menos N",
+            Condition::Critical => "críticos pasan",
+        };
+        g.condition.select(cond);
+        g.at_least = gate.at_least;
+        g.timeout.set_text(
+            &gate
+                .timeout
+                .map_or_else(String::new, |d| format_duration(d.as_duration())),
+        );
+        g.attempts
+            .set_text(&gate.attempts.map_or_else(String::new, |n| n.to_string()));
+        g.parallel.set_on(gate.parallel);
+        g.rescan.set_on(gate.rescan);
+        g.rows = gate.checks.iter().map(GateRow::from_check).collect();
+        g
+    }
+
+    /// El gate que corresponde a lo editado. `origin` aporta lo que la pantalla no edita (el
+    /// mensaje del gate manual, y por check el nombre, `min_up`, timeout e intentos propios).
+    /// Los servicios "nuevos" que nadie activó **no se guardan**: siguen siendo nuevos.
+    pub fn to_gate(&self, origin: Option<&Gate>) -> Result<Gate, String> {
+        let timeout = parse_optional::<Dur>(&self.timeout.value(), "timeout")?;
+        let attempts = match self.attempts.value().trim() {
+            "" => None,
+            t => Some(
+                t.parse::<u32>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| "los intentos deben ser un número, al menos 1".to_string())?,
+            ),
+        };
+        let condition = match self.condition.index() {
+            COND_AT_LEAST => Condition::AtLeast,
+            COND_CRITICAL => Condition::Critical,
+            _ => Condition::All,
+        };
+        Ok(Gate {
+            mode: if self.is_auto() {
+                GateMode::Auto
+            } else {
+                GateMode::Manual
+            },
+            condition,
+            at_least: (condition == Condition::AtLeast).then(|| self.at_least.unwrap_or(1)),
+            rescan: self.rescan.is_on(),
+            timeout,
+            attempts,
+            parallel: self.parallel.is_on(),
+            message: origin.and_then(|g| g.message.clone()),
+            checks: self
+                .rows
+                .iter()
+                .filter(|r| !r.is_new)
+                .map(GateRow::to_check)
+                .collect(),
+        })
     }
 
     pub fn is_auto(&self) -> bool {
@@ -387,10 +524,18 @@ impl GateState {
                 is_new: false,
                 removed: false,
                 extra: true,
-                service: "extra".into(),
+                service: {
+                    let n = self.rows.iter().filter(|r| r.extra).count();
+                    if n == 0 {
+                        "extra".to_string()
+                    } else {
+                        format!("extra {}", n + 1)
+                    }
+                },
                 kind: CheckKind::Command,
                 critical: false,
                 target: RowTarget::Edit(TextField::new("")),
+                origin: None,
             });
             self.cursor = self.rows.len() - 1;
             self.editing = true;
@@ -687,6 +832,18 @@ impl GateState {
             Line::from(spans).render(Rect::new(row_area.x - 1, y, row_area.width + 1, 1), buf);
         }
     }
+}
+
+/// Texto vacío = sin valor; si no, se interpreta con `FromStr`.
+fn parse_optional<T: std::str::FromStr<Err = String>>(
+    text: &str,
+    what: &str,
+) -> Result<Option<T>, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    t.parse::<T>().map(Some).map_err(|e| format!("{what}: {e}"))
 }
 
 fn kind_name(k: CheckKind) -> &'static str {

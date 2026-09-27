@@ -34,6 +34,23 @@ impl<'de> Deserialize<'de> for Dur {
     }
 }
 
+/// Duración legible para escribir en un TOML: `45s`, `5m`, `2h`, `500ms` (se lee de vuelta con
+/// [`Dur`]). `90s` se queda en segundos: no se redondea nada.
+pub fn format_duration(d: Duration) -> String {
+    let ms = d.as_millis();
+    if !ms.is_multiple_of(1000) {
+        return format!("{ms}ms");
+    }
+    let s = d.as_secs();
+    if s >= 3600 && s.is_multiple_of(3600) {
+        format!("{}h", s / 3600)
+    } else if s >= 60 && s.is_multiple_of(60) {
+        format!("{}m", s / 60)
+    } else {
+        format!("{s}s")
+    }
+}
+
 /// Tamaño en bytes escrito con sufijo (`500MB`, `1.5GB`, `64KiB`).
 ///
 /// `KB`, `MB`, `GB`, `TB` son decimales (1000); `KiB`, `MiB`, `GiB`, `TiB` son binarios (1024).
@@ -109,6 +126,26 @@ mod tests {
         );
         assert!("5 minutos".parse::<Dur>().is_err());
         assert!("".parse::<Dur>().is_err());
+    }
+
+    #[test]
+    fn formats_durations_readably_and_they_read_back() {
+        let d = |s| format_duration(Duration::from_secs(s));
+        assert_eq!(d(45), "45s");
+        assert_eq!(d(60), "1m");
+        assert_eq!(d(300), "5m");
+        assert_eq!(d(90), "90s");
+        assert_eq!(d(3600), "1h");
+        assert_eq!(d(3660), "61m");
+        assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
+        for secs in [1, 45, 60, 90, 300, 3600, 3660, 86400] {
+            let text = d(secs);
+            assert_eq!(
+                text.parse::<Dur>().unwrap().0,
+                Duration::from_secs(secs),
+                "{text}"
+            );
+        }
     }
 
     #[test]

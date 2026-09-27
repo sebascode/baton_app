@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use baton_core::compose::{Service, parse_services};
 use baton_core::config::{Config, Target};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_store::Project;
@@ -60,14 +61,62 @@ impl RunOptions {
     }
 }
 
+/// Un servicio de un compose del origen de un paso.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedService {
+    /// Archivo compose (relativo a la raíz del proyecto).
+    pub file: PathBuf,
+    pub service: Service,
+}
+
+/// Resultado de leer los compose de un origen.
+#[derive(Debug, Clone, Default)]
+pub struct Scan {
+    pub services: Vec<ScannedService>,
+    /// Archivos que no se pudieron leer o entender, con el motivo.
+    pub errors: Vec<String>,
+}
+
+/// Lee los compose indicados (rutas relativas a la raíz) y junta sus servicios, en el orden de
+/// los archivos y, dentro de cada uno, el de declaración.
+pub fn scan_compose(project: &Project, files: &[PathBuf]) -> Scan {
+    let mut scan = Scan::default();
+    for f in files {
+        let shown = f.display();
+        let text = match std::fs::read_to_string(project.root.join(f)) {
+            Ok(t) => t,
+            Err(e) => {
+                scan.errors.push(format!("no se pudo leer {shown}: {e}"));
+                continue;
+            }
+        };
+        match parse_services(&text) {
+            Ok(svcs) => scan
+                .services
+                .extend(svcs.into_iter().map(|service| ScannedService {
+                    file: f.clone(),
+                    service,
+                })),
+            Err(e) => scan
+                .errors
+                .push(format!("no se pudo entender {shown}: {e}")),
+        }
+    }
+    scan
+}
+
 /// Un paso listo para ejecutar.
 #[derive(Debug, Clone)]
 pub struct PStep {
     pub step: Step,
     /// Destino resuelto (`local`).
     pub target: String,
+    /// Dirección del destino: lo que vale `{destino}` en comandos y URLs de checks.
+    pub host: String,
     /// Archivos del origen, ordenados. Vacío en los pasos sin origen.
     pub files: Vec<PathBuf>,
+    /// Servicios de esos archivos (solo se leen si el paso tiene un gate automático).
+    pub scan: Vec<ScannedService>,
 }
 
 impl PStep {
@@ -154,10 +203,7 @@ pub fn prepare_run(
 
         if let Some(g) = &s.gate {
             match g.mode {
-                GateMode::Auto => errors.push(format!(
-                    "{} tiene un gate automático; los gates automáticos llegan en el hito d",
-                    label(s)
-                )),
+                GateMode::Auto => {}
                 GateMode::Manual if !opts.interactive && !opts.assume_yes && !opts.dry_run => {
                     errors.push(format!(
                         "{} tiene un gate manual y no hay terminal para responder: \
@@ -183,6 +229,16 @@ pub fn prepare_run(
             Vec::new()
         };
 
+        // El gate automático de un paso con compose necesita saber qué servicios hay.
+        let scan = if s.gate.as_ref().is_some_and(|g| g.mode == GateMode::Auto) && !files.is_empty()
+        {
+            let scan = scan_compose(project, &files);
+            errors.extend(scan.errors.iter().map(|e| format!("{}: {e}", label(s))));
+            scan.services
+        } else {
+            Vec::new()
+        };
+
         if matches!(
             s.kind,
             StepKind::Comando | StepKind::Check | StepKind::Compose | StepKind::Dockerfile
@@ -203,10 +259,13 @@ pub fn prepare_run(
             ));
         }
 
+        let host = host_of(config, &target);
         out.push(PStep {
             step: s.clone(),
             target,
+            host,
             files,
+            scan,
         });
     }
 
@@ -214,6 +273,14 @@ pub fn prepare_run(
         Ok(out)
     } else {
         Err(PrepareError(errors))
+    }
+}
+
+/// La dirección con la que se llega a un destino: la de un ssh, `localhost` en los demás.
+fn host_of(config: &Config, target: &str) -> String {
+    match config.targets.get(target) {
+        Some(Target::Ssh(s)) => s.host.clone(),
+        _ => "localhost".to_string(),
     }
 }
 
@@ -237,11 +304,13 @@ pub fn prepare_rollback(
         .map(|s| PStep {
             step: s.clone(),
             target: s.target.clone().unwrap_or_else(|| "local".into()),
+            host: "localhost".into(),
             files: if s.kind.is_scanned() {
                 expand_sources(&project.root, s.source.iter())
             } else {
                 Vec::new()
             },
+            scan: Vec::new(),
         })
         .collect();
     out.reverse();
@@ -364,7 +433,12 @@ mod tests {
 
     #[test]
     fn every_problem_is_reported_at_once() {
-        let (_t, proj) = project(&[]);
+        let (_t, proj) = project(&["ok/docker-compose.yml"]);
+        fs::write(
+            proj.root.join("ok/docker-compose.yml"),
+            "services:\n  a: [sin cerrar",
+        )
+        .unwrap();
         let p = plan(
             r#"
             [[steps]]
@@ -379,16 +453,12 @@ mod tests {
             type = "compose"
             source = "nada/*.yml"
             [[steps]]
-            id = "gate-auto"
-            name = "Gate"
+            id = "ilegible"
+            name = "Ilegible"
             type = "compose"
-            source = "nada/*.yml"
+            source = "ok/docker-compose.yml"
             [steps.gate]
             mode = "auto"
-            [[steps.gate.checks]]
-            kind = "command"
-            name = "x"
-            run = "true"
             "#,
         );
         let c = cfg(
@@ -400,15 +470,76 @@ mod tests {
             all.contains("'prod' es de tipo context") && all.contains("hito f"),
             "{all}"
         );
+        assert!(all.contains("no coincide con ningún archivo"), "{all}");
         assert!(
-            all.contains("'nada/*.yml') no coincide") || all.contains("(nada/*.yml) no coincide"),
+            all.contains("no se pudo entender ok/docker-compose.yml"),
             "{all}"
         );
-        assert!(
-            all.contains("gate automático") && all.contains("hito d"),
-            "{all}"
+        assert_eq!(e.0.len(), 3, "{all}");
+    }
+
+    #[test]
+    fn auto_gates_are_accepted_and_their_compose_files_are_scanned() {
+        let (_t, proj) = project(&[]);
+        fs::create_dir_all(proj.root.join("svc/api")).unwrap();
+        fs::write(
+            proj.root.join("svc/api/docker-compose.yml"),
+            "services:\n  api:\n    ports: ['8080:80']\n  worker: {}\n",
+        )
+        .unwrap();
+        let p = plan(
+            r#"
+            [[steps]]
+            id = "svc"
+            name = "Servicios"
+            type = "compose"
+            source = "svc/*/docker-compose.yml"
+            [steps.gate]
+            mode = "auto"
+            "#,
         );
-        assert!(e.0.len() >= 4, "{all}");
+        let steps = prepare_run(&proj, &Config::default(), &p, &opts(&p)).unwrap();
+        let names: Vec<_> = steps[0]
+            .scan
+            .iter()
+            .map(|s| s.service.name.as_str())
+            .collect();
+        assert_eq!(names, ["api", "worker"]);
+        assert_eq!(
+            steps[0].scan[0].file,
+            PathBuf::from("svc/api/docker-compose.yml")
+        );
+        assert_eq!(steps[0].host, "localhost");
+        // sin gate automático no se lee el compose (aunque no fuera válido)
+        fs::write(proj.root.join("svc/api/docker-compose.yml"), "services: [").unwrap();
+        let p2 = plan(
+            "[[steps]]\nid = \"svc\"\nname = \"S\"\ntype = \"compose\"\nsource = \"svc/*/docker-compose.yml\"\n",
+        );
+        let steps = prepare_run(&proj, &Config::default(), &p2, &opts(&p2)).unwrap();
+        assert!(steps[0].scan.is_empty());
+    }
+
+    #[test]
+    fn the_host_of_a_target_is_what_placeholders_use() {
+        let (_t, proj) = project(&[]);
+        let p =
+            plan("[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n");
+        let steps = prepare_run(&proj, &Config::default(), &p, &opts(&p)).unwrap();
+        assert_eq!(steps[0].host, "localhost");
+        assert_eq!(
+            super::host_of(
+                &cfg("[targets.web]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"u\""),
+                "web"
+            ),
+            "10.0.4.12"
+        );
+        assert_eq!(
+            super::host_of(
+                &cfg("[targets.qa]\ntype = \"context\"\ncontext = \"x\""),
+                "qa"
+            ),
+            "localhost"
+        );
     }
 
     #[test]

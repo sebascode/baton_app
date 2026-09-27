@@ -532,6 +532,7 @@ fn row(service: &str, kind: CheckKind, target: RowTarget) -> GateRow {
         kind,
         critical: false,
         target,
+        origin: None,
     }
 }
 

@@ -527,11 +527,11 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
     }
 
     for (c, check) in gate.checks.iter().enumerate() {
-        validate_check(check, i, c, out);
+        validate_check(check, i, c, scanned, out);
     }
 }
 
-fn validate_check(check: &Check, i: usize, c: usize, out: &mut Vec<Issue>) {
+fn validate_check(check: &Check, i: usize, c: usize, scanned: bool, out: &mut Vec<Issue>) {
     let p = |field: &str| path!["steps", i, "gate", "checks", c, field];
     let blank = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
 
@@ -541,6 +541,13 @@ fn validate_check(check: &Check, i: usize, c: usize, out: &mut Vec<Issue>) {
                 out.push(Issue::error(
                     p("service"),
                     "este tipo de check necesita service (nombre del servicio del compose)",
+                ));
+            }
+            // el servicio se busca en los compose del origen del paso
+            if !scanned {
+                out.push(Issue::error(
+                    p("kind"),
+                    "un check healthcheck o running necesita un paso compose (con origen) que lo contenga",
                 ));
             }
         }

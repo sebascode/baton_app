@@ -86,7 +86,7 @@ pub enum CredentialKind {
     Otro,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     /// Identificador estable (slug) usado en `depends_on` y en `state.json`.
@@ -193,7 +193,7 @@ impl<'de> Deserialize<'de> for Sources {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Gate {
     pub mode: GateMode,
@@ -235,7 +235,7 @@ pub enum Condition {
     Critical,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Check {
     /// Servicio del compose al que pertenece (checks inferidos o editados).

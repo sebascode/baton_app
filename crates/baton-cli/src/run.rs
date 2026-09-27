@@ -112,6 +112,27 @@ pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
     })
 }
 
+/// `baton edit <plan>`: el editor de pasos y gates sobre el plan real.
+pub fn edit(project: &Project, plan_name: &str) -> ExitCode {
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        eprintln!("error: baton edit necesita una terminal interactiva");
+        return ExitCode::from(EXIT_USAGE);
+    }
+    let (config, plan) = match load(project, plan_name) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let mut driver = RunDriver::new(project.clone(), config, plan, Flags::default());
+    let app = driver.editor_app();
+    match baton_tui::demo::run_app(app, &mut driver) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 pub fn rollback(project: &Project, plan_name: &str) -> ExitCode {
     let (config, plan) = match load(project, plan_name) {
         Ok(v) => v,

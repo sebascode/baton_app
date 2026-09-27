@@ -44,6 +44,11 @@ enum Command {
     },
     /// Ejecuta un plan (también: `baton <plan>`)
     Run(RunArgs),
+    /// Abre el editor de pasos y gates de un plan y guarda los cambios en su archivo
+    Edit {
+        /// Nombre del plan (archivo en baton/plans/)
+        plan: String,
+    },
     /// Deshace lo que hizo la última ejecución de un plan (corre los `rollback` de sus pasos)
     Rollback {
         /// Nombre del plan
@@ -180,6 +185,7 @@ fn main() -> ExitCode {
             run::run(&project, &plan, flags)
         }
         Command::Rollback { plan } => run::rollback(&project, &plan),
+        Command::Edit { plan } => run::edit(&project, &plan),
         Command::External(args) => {
             let parsed =
                 ExternalRun::try_parse_from(std::iter::once(OsString::from("baton")).chain(args))

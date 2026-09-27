@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 baton-core = { version = "0.1.0", path = "../baton-core" }
 baton-store = { version = "0.1.0", path = "../baton-store" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 humantime = "2.4.0"
 tokio = { version = "1.53.1", features = ["rt", "process", "io-util", "time", "sync", "macros"] }
 

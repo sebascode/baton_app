@@ -3,6 +3,8 @@
 //!
 //! Los cambios viven en memoria; persistirlos en el plan llega con el hito d.
 
+use baton_core::plan::{Plan, Sources, Step, StepKind};
+use baton_core::units::{Dur, format_duration};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -32,9 +34,13 @@ const KINDS: [(&str, bool); 7] = [
 const F_NAME: usize = 0;
 const F_KIND: usize = 1;
 const F_SOURCE: usize = 2;
+const F_TARGET: usize = 3;
+const F_COMMAND: usize = 4;
+const F_TIMEOUT: usize = 6;
 const F_RETRIES: usize = 7;
 const F_GATE: usize = 8;
 const F_ROLLBACK: usize = 9;
+const F_BACKUP: usize = 10;
 
 /// Datos con los que se crea un paso en el editor.
 #[derive(Debug, Clone, Default)]
@@ -52,6 +58,10 @@ pub struct StepSpec {
     pub gate: Option<GateState>,
     pub rollback: String,
     pub backup_before: bool,
+    /// Id del paso en el plan (vacío en un paso nuevo: se genera al guardar).
+    pub step_id: String,
+    /// El paso del plan del que viene, para conservar lo que el editor no muestra.
+    pub origin: Option<Step>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,11 +74,18 @@ pub struct StepDraft {
     pub dep_cursor: usize,
     pub gate: Option<GateState>,
     pub source_count: Option<usize>,
+    /// Id del paso en el plan; vacío si es nuevo (se genera al guardar).
+    pub step_id: String,
+    pub origin: Option<Step>,
 }
 
 impl StepDraft {
     fn new(id: u32, spec: StepSpec, targets: &[String]) -> StepDraft {
-        let target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+        let mut target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+        // el destino del paso siempre debe poder elegirse, aunque no esté en la lista conocida
+        if !spec.target.is_empty() && !target_refs.contains(&spec.target.as_str()) {
+            target_refs.push(&spec.target);
+        }
         let source = Field::text("origen", &spec.source);
         StepDraft {
             id,
@@ -89,6 +106,8 @@ impl StepDraft {
             dep_cursor: 0,
             gate: spec.gate,
             source_count: spec.source_count,
+            step_id: spec.step_id,
+            origin: spec.origin,
         }
     }
 
@@ -133,6 +152,10 @@ pub struct EditorState {
     pub(crate) confirm_gate_removal: bool,
     /// Resultado de la última prueba del paso.
     pub test: Option<(bool, String)>,
+    /// Los cambios se pueden guardar en un plan real (con datos de demostración, no).
+    pub can_save: bool,
+    /// Destino de los pasos que no declaran uno.
+    pub default_target: String,
 }
 
 impl EditorState {
@@ -155,7 +178,212 @@ impl EditorState {
             notice: None,
             confirm_gate_removal: false,
             test: None,
+            can_save: false,
+            default_target: "local".into(),
         }
+    }
+
+    /// El editor de un plan real. `counts[i]` es cuántos archivos coinciden con el origen del
+    /// paso `i`, si se sabe.
+    pub fn from_plan(
+        plan: &Plan,
+        targets: &[String],
+        default_target: &str,
+        counts: &[Option<usize>],
+    ) -> EditorState {
+        let internal = |id: &str| {
+            plan.steps
+                .iter()
+                .position(|s| s.id == id)
+                .map(|p| p as u32 + 1)
+        };
+        let specs: Vec<StepSpec> = plan
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let source = s.source.iter().collect::<Vec<_>>().join(", ");
+                StepSpec {
+                    name: s.name.clone(),
+                    kind: s.kind.label().into(),
+                    gate: s
+                        .gate
+                        .as_ref()
+                        .map(|g| GateState::from_gate(&s.name, g, &source)),
+                    source,
+                    source_count: counts.get(i).copied().flatten(),
+                    target: s
+                        .target
+                        .clone()
+                        .unwrap_or_else(|| default_target.to_string()),
+                    command: s.command.clone().unwrap_or_default(),
+                    depends: s.depends_on.iter().filter_map(|d| internal(d)).collect(),
+                    timeout: s
+                        .timeout
+                        .map_or_else(String::new, |d| format_duration(d.as_duration())),
+                    retries: s.retries.to_string(),
+                    rollback: s.rollback.clone().unwrap_or_default(),
+                    backup_before: s.backup_before,
+                    step_id: s.id.clone(),
+                    origin: Some(s.clone()),
+                }
+            })
+            .collect();
+        let names: Vec<&str> = targets.iter().map(String::as_str).collect();
+        let mut e = EditorState::new(&plan.name, &names, specs);
+        e.can_save = true;
+        e.default_target = default_target.to_string();
+        e
+    }
+
+    /// Los pasos como quedaron en el editor, listos para guardar. Los campos que el editor no
+    /// muestra (descripción, `enabled`, mensaje del gate...) se conservan del plan original.
+    pub fn to_steps(&self) -> Result<Vec<Step>, Vec<String>> {
+        let ids = self.final_ids();
+        let mut errors = Vec::new();
+        let mut out = Vec::new();
+        for (pos, d) in self.steps.iter().enumerate() {
+            match self.draft_to_step(d, &ids) {
+                Ok(step) => out.push(step),
+                Err(msgs) => errors.extend(
+                    msgs.into_iter()
+                        .map(|m| format!("paso {} ({}): {m}", pos + 1, d.name())),
+                ),
+            }
+        }
+        if errors.is_empty() {
+            Ok(out)
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// El texto de origen del paso seleccionado (lo que se escanea para inferir checks).
+    pub fn current_source(&self) -> Option<String> {
+        self.steps
+            .get(self.selected)
+            .map(|d| d.form.fields[F_SOURCE].value())
+    }
+
+    /// Ids finales de los pasos: los existentes se respetan y los nuevos salen del nombre, sin
+    /// repetirse.
+    fn final_ids(&self) -> Vec<String> {
+        let mut used: std::collections::HashSet<String> = self
+            .steps
+            .iter()
+            .filter(|d| !d.step_id.is_empty())
+            .map(|d| d.step_id.clone())
+            .collect();
+        self.steps
+            .iter()
+            .map(|d| {
+                if !d.step_id.is_empty() {
+                    return d.step_id.clone();
+                }
+                let base = slug(&d.name());
+                let mut id = base.clone();
+                let mut n = 2;
+                while used.contains(&id) {
+                    id = format!("{base}-{n}");
+                    n += 1;
+                }
+                used.insert(id.clone());
+                id
+            })
+            .collect()
+    }
+
+    fn draft_to_step(&self, d: &StepDraft, ids: &[String]) -> Result<Step, Vec<String>> {
+        let mut errors = Vec::new();
+        let f = |i: usize| d.form.fields[i].value();
+        let opt = |text: String| {
+            let t = text.trim().to_string();
+            (!t.is_empty()).then_some(t)
+        };
+        let origin = d.origin.as_ref();
+        let pos = self
+            .steps
+            .iter()
+            .position(|x| std::ptr::eq(x, d))
+            .unwrap_or(0);
+
+        let name = f(F_NAME).trim().to_string();
+        if name.is_empty() {
+            errors.push("el nombre no puede estar vacío".to_string());
+        }
+        let sources: Vec<String> = f(F_SOURCE)
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // el destino por defecto no se escribe si el paso no lo declaraba
+        let chosen = f(F_TARGET);
+        let declared = origin.and_then(|o| o.target.clone());
+        let target = if chosen
+            == declared
+                .clone()
+                .unwrap_or_else(|| self.default_target.clone())
+        {
+            declared
+        } else {
+            opt(chosen)
+        };
+
+        let timeout = match f(F_TIMEOUT).trim() {
+            "" => None,
+            t => match t.parse::<Dur>() {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    errors.push(format!("timeout: {e}"));
+                    None
+                }
+            },
+        };
+        let retries = match f(F_RETRIES).trim() {
+            "" => 0,
+            t => t.parse::<u32>().unwrap_or_else(|_| {
+                errors.push("reintentos debe ser un número".to_string());
+                0
+            }),
+        };
+        let gate = match d.gate.as_ref() {
+            Some(g) => match g.to_gate(origin.and_then(|o| o.gate.as_ref())) {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    errors.push(format!("gate: {e}"));
+                    None
+                }
+            },
+            None => None,
+        };
+        let depends_on: Vec<String> = d
+            .depends
+            .iter()
+            .filter_map(|dep| self.steps.iter().position(|x| x.id == *dep))
+            .filter(|p| *p < pos)
+            .map(|p| ids[p].clone())
+            .collect();
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(Step {
+            id: ids[pos].clone(),
+            name,
+            kind: kind_of(&f(F_KIND)),
+            description: origin.and_then(|o| o.description.clone()),
+            enabled: origin.is_none_or(|o| o.enabled),
+            source: Sources(sources),
+            target,
+            command: opt(f(F_COMMAND)),
+            depends_on,
+            timeout,
+            retries,
+            gate,
+            rollback: opt(f(F_ROLLBACK)),
+            backup_before: d.form.fields[F_BACKUP].is_on(),
+        })
     }
 
     /// Abre el editor en el paso `idx`.
@@ -227,6 +455,8 @@ impl EditorState {
         };
         let mut copy = orig;
         copy.id = self.next_id;
+        // la copia es un paso nuevo: su id sale de su nombre al guardar
+        copy.step_id = String::new();
         self.next_id += 1;
         let name = format!("{} (copia)", copy.name());
         copy.form.fields[F_NAME].set_text(&name);
@@ -779,5 +1009,47 @@ impl EditorState {
                 .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
             }
         }
+    }
+}
+
+fn kind_of(label: &str) -> StepKind {
+    match label {
+        "compose" => StepKind::Compose,
+        "dockerfile" => StepKind::Dockerfile,
+        "script" => StepKind::Script,
+        "check" => StepKind::Check,
+        "backup" => StepKind::Backup,
+        "gate" => StepKind::Gate,
+        _ => StepKind::Comando,
+    }
+}
+
+/// Un id válido (minúsculas, números, `-` y `_`) a partir de un nombre en español.
+fn slug(name: &str) -> String {
+    let fold = |c: char| match c {
+        'á' | 'à' | 'ä' | 'â' | 'Á' => 'a',
+        'é' | 'è' | 'ë' | 'ê' | 'É' => 'e',
+        'í' | 'ì' | 'ï' | 'î' | 'Í' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' | 'Ó' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' | 'Ú' => 'u',
+        'ñ' | 'Ñ' => 'n',
+        c => c,
+    };
+    let mut out = String::new();
+    let mut dash = false;
+    for c in name.chars().map(fold) {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() {
+        "paso".to_string()
+    } else {
+        out
     }
 }

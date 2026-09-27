@@ -103,6 +103,7 @@ impl Driver for DemoDriver {
             }
             Effect::TestStep(_) => app.step_test_result(true, "dry-run ok · 1.4s (demo)"),
             Effect::Rescan => app.gate_scan_result(&fake::scan(), "ahora"),
+            Effect::SavePlan(_) => app.notify("demo: los datos son de mentira, no se guarda nada"),
             Effect::Edit(_) | Effect::AddGate(_) | Effect::OpenPlan(_) => {}
         }
         Flow::Continue
