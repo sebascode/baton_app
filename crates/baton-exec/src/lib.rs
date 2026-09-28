@@ -3,6 +3,7 @@
 
 mod gate;
 pub mod prepare;
+mod remote;
 pub mod runner;
 pub mod transport;
 

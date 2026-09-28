@@ -239,13 +239,28 @@ pub fn prepare_run(
             .unwrap_or_else(|| config.default_target().to_string());
         match config.targets.get(&target) {
             None if target == "local" => {}
-            Some(Target::Local(_)) => {}
+            Some(Target::Local(_) | Target::Context(_)) => {}
             None => errors.push(format!("{}: el destino '{target}' no existe", label(s))),
-            Some(other) => errors.push(format!(
-                "{}: el destino '{target}' es de tipo {}; los destinos remotos llegan en el hito f",
-                label(s),
-                other.kind_label()
-            )),
+            Some(Target::Ssh(ssh)) => {
+                if ssh.sync && ssh.remote_dir.is_none() {
+                    errors.push(format!(
+                        "destino '{target}': sincroniza (`sync = true`) pero no tiene `remote_dir`: \
+                         no hay a dónde copiar las carpetas del plan"
+                    ));
+                }
+                if let Some(bastion) = &ssh.bastion {
+                    match config.targets.get(bastion) {
+                        Some(Target::Ssh(_)) => {}
+                        Some(other) => errors.push(format!(
+                            "destino '{target}': el bastion '{bastion}' es de tipo {}, no ssh",
+                            other.kind_label()
+                        )),
+                        None => errors.push(format!(
+                            "destino '{target}': el bastion '{bastion}' no existe"
+                        )),
+                    }
+                }
+            }
         }
 
         if let Some(g) = &s.gate {
@@ -509,12 +524,12 @@ mod tests {
             "#,
         );
         let c = cfg(
-            "[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n[targets.otro]\ntype = \"local\"",
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"deploy\"\n[targets.otro]\ntype = \"local\"",
         );
         let e = prepare_run(&proj, &c, &p, &opts(&p)).unwrap_err();
         let all = e.to_string();
         assert!(
-            all.contains("'prod' es de tipo context") && all.contains("hito f"),
+            all.contains("'prod'") && all.contains("no tiene `remote_dir`"),
             "{all}"
         );
         assert!(all.contains("no coincide con ningún archivo"), "{all}");
@@ -602,6 +617,65 @@ mod tests {
             "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"otro\"\n",
         );
         let c = cfg("[targets.otro]\ntype = \"local\"");
+        assert!(prepare_run(&proj, &c, &p, &opts(&p)).is_ok());
+    }
+
+    #[test]
+    fn ssh_and_context_targets_are_accepted() {
+        let (_t, proj) = project(&[]);
+        let p = plan(
+            "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n\
+             [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"qa\"\n",
+        );
+        let c = cfg(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"deploy\"\nremote_dir = \"/opt/stack\"\n\
+             [targets.qa]\ntype = \"context\"\ncontext = \"qa-swarm\"\n",
+        );
+        assert!(prepare_run(&proj, &c, &p, &opts(&p)).is_ok());
+    }
+
+    #[test]
+    fn sync_without_a_remote_dir_is_rejected() {
+        let (_t, proj) = project(&[]);
+        let p = plan(
+            "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+        );
+        let c = cfg("[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\nsync = false\n");
+        assert!(
+            prepare_run(&proj, &c, &p, &opts(&p)).is_ok(),
+            "sync = false no necesita remote_dir"
+        );
+        let c = cfg("[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\n"); // sync = true por defecto
+        let e = prepare_run(&proj, &c, &p, &opts(&p)).unwrap_err();
+        assert!(
+            e.0[0].contains("'prod'") && e.0[0].contains("no tiene `remote_dir`"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_bastion_must_exist_and_be_ssh() {
+        let (_t, proj) = project(&[]);
+        let p = plan(
+            "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+        );
+        let c = cfg(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\nremote_dir = \"/x\"\nbastion = \"nada\"\n",
+        );
+        let e = prepare_run(&proj, &c, &p, &opts(&p)).unwrap_err();
+        assert!(e.0[0].contains("el bastion 'nada' no existe"), "{e}");
+
+        let c = cfg(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\nremote_dir = \"/x\"\nbastion = \"web\"\n\
+             [targets.web]\ntype = \"context\"\ncontext = \"c\"\n",
+        );
+        let e = prepare_run(&proj, &c, &p, &opts(&p)).unwrap_err();
+        assert!(e.0[0].contains("es de tipo context, no ssh"), "{e}");
+
+        let c = cfg(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\nremote_dir = \"/x\"\nbastion = \"jump\"\n\
+             [targets.jump]\ntype = \"ssh\"\nhost = \"j\"\nuser = \"u\"\nsync = false\n",
+        );
         assert!(prepare_run(&proj, &c, &p, &opts(&p)).is_ok());
     }
 

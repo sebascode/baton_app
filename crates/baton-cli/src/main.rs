@@ -1,5 +1,6 @@
 //! Binario `baton`.
 
+mod config_run;
 mod run;
 mod text_run;
 mod tui_run;
@@ -270,7 +271,8 @@ fn config(project: &Project) -> ExitCode {
         |n| n.to_string_lossy().into_owned(),
     );
     let state = ConfigState::from_config(&config, &name, project.list_plans());
-    match baton_tui::demo::run_config(state) {
+    let mut driver = config_run::ConfigDriver::new(project.clone(), name);
+    match baton_tui::demo::run_app(baton_tui::App::config_only(state), &mut driver) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

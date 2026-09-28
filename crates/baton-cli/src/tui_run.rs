@@ -478,7 +478,7 @@ impl Driver for RunDriver {
                 app.notify("no se pudo abrir el editor de pasos");
             }
             Effect::TestCredential(i) => self.test_credential(app, i),
-            Effect::TestTarget(_) | Effect::OpenPlan(_) => {}
+            Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}
         }
         Flow::Continue
     }

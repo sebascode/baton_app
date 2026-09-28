@@ -3,7 +3,12 @@
 //! El estado se construye desde el `Config` de `baton-core`. Las ediciones viven en memoria: la
 //! escritura a disco de `.baton/config.toml` llega con el hito f.
 
-use baton_core::config::{Config, LOCAL_TARGET, LogFormat, Retention, Target};
+use baton_core::config::{
+    Config, ContextTarget, LOCAL_TARGET, LocalTarget, LogFormat, LogsConfig, Retention, SshTarget,
+    Target,
+};
+use baton_core::units::ByteSize;
+use indexmap::IndexMap;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -163,6 +168,9 @@ pub struct ConfigState {
     pub cred_refs: Vec<CredRefInfo>,
     pub plans: Vec<String>,
     pub list_cursor: usize,
+    /// La configuración tal como se cargó: `version` y `defaults` (nada editable aquí) salen de
+    /// acá al guardar, sin tocarlos.
+    base: Config,
     pub notice: Option<String>,
 }
 
@@ -175,6 +183,108 @@ fn retention_text(r: &Retention) -> String {
         parts.push(format!("máx {s}"));
     }
     parts.join(" · ")
+}
+
+/// El inverso de [`retention_text`]: `"30 días"`, `"máx 500MB"` o ambos separados por `·`.
+fn parse_retention(text: &str) -> Result<Retention, String> {
+    let mut r = Retention::default();
+    for part in text.split('·').map(str::trim).filter(|s| !s.is_empty()) {
+        let bad = || format!("retención: no se entendió '{part}' (usa 'N días' y/o 'máx TAMAÑO')");
+        if let Some(n) = part
+            .strip_suffix("días")
+            .or_else(|| part.strip_suffix("día"))
+        {
+            r.days = Some(n.trim().parse().map_err(|_| bad())?);
+        } else if let Some(rest) = part
+            .strip_prefix("máx")
+            .or_else(|| part.strip_prefix("max"))
+        {
+            r.max_size = Some(rest.trim().parse::<ByteSize>().map_err(|_| bad())?);
+        } else {
+            return Err(bad());
+        }
+    }
+    Ok(r)
+}
+
+/// El nombre real del destino: para uno nuevo (`is_new`) viene del campo "nombre" del formulario,
+/// no de `TargetItem.name` (que se queda en el provisorio con el que se creó).
+pub fn name_of(t: &TargetItem) -> String {
+    if t.is_new {
+        t.form
+            .field("nombre")
+            .map(Field::value)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| t.name.clone())
+    } else {
+        t.name.clone()
+    }
+}
+
+pub fn target_of(t: &TargetItem, name: &str) -> Result<Target, String> {
+    let get = |label: &str| t.form.field(label).map(Field::value).unwrap_or_default();
+    let opt = |v: String| (!v.trim().is_empty() && v != NONE_OPTION).then_some(v);
+    match t.kind {
+        TargetKind::Local => Ok(Target::Local(LocalTarget {})),
+        TargetKind::Context => {
+            let context = get("contexto");
+            if context.trim().is_empty() {
+                return Err(format!("destino '{name}': falta el contexto"));
+            }
+            Ok(Target::Context(ContextTarget { context }))
+        }
+        TargetKind::Ssh => {
+            let host = get("host");
+            let user = get("usuario");
+            if host.trim().is_empty() {
+                return Err(format!("destino '{name}': falta el host"));
+            }
+            if user.trim().is_empty() {
+                return Err(format!("destino '{name}': falta el usuario"));
+            }
+            let credential = match opt(get("credencial")) {
+                Some(s) => Some(s.parse().map_err(|e| format!("destino '{name}': {e}"))?),
+                None => None,
+            };
+            Ok(Target::Ssh(SshTarget {
+                host,
+                port: t.port,
+                user,
+                credential,
+                remote_dir: opt(get("directorio")),
+                bastion: opt(get("bastion")),
+                sync: t.form.field("sincronizar").is_some_and(Field::is_on),
+            }))
+        }
+    }
+}
+
+/// `local` colapsa a "sin declarar" si coincide con la plantilla por defecto que ya mostraba el
+/// campo (así no queda escrita de más solo por no haberla tocado).
+fn logs_of(form: &Form, base: &LogsConfig) -> Result<LogsConfig, String> {
+    let get = |label: &str| form.field(label).map(Field::value).unwrap_or_default();
+    let local = get("local");
+    let local = (!local.trim().is_empty() && local != baton_core::config::DEFAULT_LOG_TEMPLATE)
+        .then_some(local);
+    let remote = get("en destino");
+    let remote = (!remote.trim().is_empty()).then_some(remote);
+    let format = if get("formato") == "json" {
+        LogFormat::Json
+    } else {
+        LogFormat::Text
+    };
+    let retention = parse_retention(&get("retención"))?;
+    let enabled = form.field("exportar").is_some_and(Field::is_on);
+    Ok(LogsConfig {
+        local,
+        remote,
+        format,
+        retention,
+        export: baton_core::config::Export {
+            enabled,
+            ..base.export.clone()
+        },
+    })
 }
 
 impl ConfigState {
@@ -297,7 +407,43 @@ impl ConfigState {
             plans,
             list_cursor: 0,
             notice: None,
+            base: config.clone(),
         }
+    }
+
+    /// La configuración tal como quedó en pantalla. `version` y `defaults` salen de `base` sin
+    /// tocar (no se editan aquí). El destino `local` implícito nunca se escribe.
+    pub fn to_config(&self) -> Result<Config, Vec<String>> {
+        let mut errors = Vec::new();
+        let mut targets = IndexMap::new();
+        for t in &self.targets {
+            if t.implicit {
+                continue;
+            }
+            let name = name_of(t);
+            match target_of(t, &name) {
+                Ok(target) => {
+                    targets.insert(name, target);
+                }
+                Err(e) => errors.push(e),
+            }
+        }
+        let logs = match logs_of(&self.logs, &self.base.logs) {
+            Ok(l) => l,
+            Err(e) => {
+                errors.push(e);
+                LogsConfig::default()
+            }
+        };
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(Config {
+            version: self.base.version,
+            defaults: self.base.defaults.clone(),
+            targets,
+            logs,
+        })
     }
 
     pub fn set_status(&mut self, idx: usize, status: TargetStatus) {
@@ -751,5 +897,162 @@ fn ssh_item(name: &str, cred_options: &[String], ssh_names: &[String]) -> Target
         port: 22,
         implicit: false,
         is_new: false,
+    }
+}
+
+#[cfg(test)]
+mod tests_to_config {
+    use super::*;
+
+    const EXAMPLE: &str = r#"
+version = 1
+[defaults]
+target = "prod-app"
+
+[targets.prod-app]
+type = "ssh"
+host = "10.0.4.12"
+port = 2222
+user = "deploy"
+credential = "servers.env#PROD_APP"
+remote_dir = "/opt/stack"
+sync = true
+
+[targets.bastion]
+type = "ssh"
+host = "203.0.113.5"
+user = "jump"
+
+[targets.qa]
+type = "context"
+context = "qa-swarm"
+
+[logs]
+local = "~/logs/{plan}/{fecha}.log"
+remote = "/var/log/baton/"
+format = "json"
+[logs.retention]
+days = 30
+max_size = "500MB"
+[logs.export]
+enabled = true
+kind = "otlp"
+endpoint = "http://collector:4318"
+"#;
+
+    fn state() -> ConfigState {
+        let config = Config::parse(EXAMPLE).unwrap();
+        ConfigState::from_config(&config, "prueba", vec![])
+    }
+
+    #[test]
+    fn the_example_config_round_trips_unchanged() {
+        let config = Config::parse(EXAMPLE).unwrap();
+        let got = state().to_config().unwrap();
+        assert_eq!(got, config);
+    }
+
+    #[test]
+    fn the_implicit_local_target_never_comes_back() {
+        let config = Config::parse("[targets.qa]\ntype = \"context\"\ncontext = \"x\"\n").unwrap();
+        let s = ConfigState::from_config(&config, "p", vec![]);
+        assert!(s.targets.iter().any(|t| t.implicit && t.name == "local"));
+        let got = s.to_config().unwrap();
+        assert!(!got.targets.contains_key("local"));
+    }
+
+    #[test]
+    fn editing_a_field_changes_only_that_target() {
+        let mut s = state();
+        let idx = s.targets.iter().position(|t| t.name == "prod-app").unwrap();
+        s.targets[idx]
+            .form
+            .field_mut("host")
+            .unwrap()
+            .set_text("10.0.4.99");
+        let got = s.to_config().unwrap();
+        let Target::Ssh(ssh) = &got.targets["prod-app"] else {
+            panic!()
+        };
+        assert_eq!(ssh.host, "10.0.4.99");
+        assert_eq!(ssh.user, "deploy"); // el resto queda igual
+        assert_eq!(got.targets.len(), 3);
+    }
+
+    #[test]
+    fn a_missing_host_or_user_is_reported_by_name() {
+        let mut s = state();
+        let idx = s.targets.iter().position(|t| t.name == "bastion").unwrap();
+        s.targets[idx].form.field_mut("host").unwrap().set_text("");
+        let errors = s.to_config().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("bastion") && e.contains("host")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_ssh_target_with_no_credential_or_bastion_has_none_of_either() {
+        let mut s = state();
+        s.add_target();
+        let idx = s.targets.len() - 1;
+        s.targets[idx]
+            .form
+            .field_mut("nombre")
+            .unwrap()
+            .set_text("nuevo");
+        s.targets[idx].form.field_mut("host").unwrap().set_text("h");
+        s.targets[idx]
+            .form
+            .field_mut("usuario")
+            .unwrap()
+            .set_text("u");
+        let got = s.to_config().unwrap();
+        let Target::Ssh(ssh) = &got.targets["nuevo"] else {
+            panic!()
+        };
+        assert_eq!(ssh.credential, None);
+        assert_eq!(ssh.bastion, None);
+        assert!(ssh.sync); // el toggle nuevo arranca activado
+    }
+
+    #[test]
+    fn retention_round_trips_both_ways() {
+        assert_eq!(
+            retention_text(&parse_retention("30 días · máx 500MB").unwrap()),
+            "30 días · máx 500 MB"
+        );
+        assert_eq!(parse_retention("").unwrap(), Retention::default());
+        assert!(parse_retention("treinta días").is_err());
+        assert!(parse_retention("30 dias").is_err()); // sin tilde: no coincide
+    }
+
+    #[test]
+    fn export_without_kind_or_endpoint_keeps_whatever_was_already_there() {
+        // apagar y prender de nuevo no debería inventar ni perder kind/endpoint
+        let mut s = state();
+        s.logs.field_mut("exportar").unwrap().set_on(false);
+        s.logs.field_mut("exportar").unwrap().set_on(true);
+        let got = s.to_config().unwrap();
+        assert!(got.logs.export.enabled);
+        assert_eq!(
+            got.logs.export.kind,
+            Some(baton_core::config::ExportKind::Otlp)
+        );
+        assert_eq!(
+            got.logs.export.endpoint.as_deref(),
+            Some("http://collector:4318")
+        );
+    }
+
+    #[test]
+    fn an_untouched_default_local_template_is_not_written_explicitly() {
+        let config = Config::parse("[targets.qa]\ntype = \"context\"\ncontext = \"x\"\n").unwrap();
+        let s = ConfigState::from_config(&config, "p", vec![]);
+        // el campo "local" del formulario ya muestra la plantilla por defecto sin declarar nada
+        let got = s.to_config().unwrap();
+        assert_eq!(got.logs.local, None);
     }
 }

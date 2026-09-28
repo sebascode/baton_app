@@ -386,7 +386,8 @@ fn the_ci_variable_forces_plain_text_and_the_result_is_the_same() {
 
 #[test]
 fn the_example_project_explains_why_it_cannot_run_yet() {
-    // el proyecto de ejemplo usa destinos ssh, que llegan en el hito f
+    // el proyecto de ejemplo usa destinos ssh de verdad y credenciales de docker que no trae: se
+    // frena antes de intentar conectarse a ningún lado.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/stack-produccion");
     let o = Command::new(env!("CARGO_BIN_EXE_baton"))
         .arg("-C")
@@ -397,7 +398,10 @@ fn the_example_project_explains_why_it_cannot_run_yet() {
         .unwrap();
     assert_eq!(o.status.code(), Some(1));
     let e = err(&o);
-    assert!(e.contains("hito f"), "{e}");
+    assert!(
+        e.contains("docker.env#GHCR") && e.contains("docker.env#NEXUS"),
+        "{e}"
+    );
     assert!(!root.join("../stack-produccion/.baton/state.json").exists());
 }
 

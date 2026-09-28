@@ -2,6 +2,7 @@
 //! planes con diagnósticos ubicados por línea, y expandir los orígenes (globs) de los pasos.
 
 pub mod clock;
+pub mod config_edit;
 pub mod credentials;
 pub mod discover;
 pub mod init;

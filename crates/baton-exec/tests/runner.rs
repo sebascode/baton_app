@@ -120,9 +120,13 @@ impl Fx {
     }
 
     fn input(&self, plan: &Plan, options: RunOptions) -> RunInput {
+        self.input_with(plan, options, Config::default())
+    }
+
+    fn input_with(&self, plan: &Plan, options: RunOptions, config: Config) -> RunInput {
         RunInput {
             project: self.project.clone(),
-            config: Config::default(),
+            config,
             plan: plan.clone(),
             options,
         }
@@ -1394,4 +1398,274 @@ fn compose_rollback_runs_once_per_file_in_reverse_order() {
 fn the_tempdir_lives_as_long_as_the_fixture() {
     let fx = Fx::new(&[]);
     assert!(fx.tmp.path().exists());
+}
+
+// ---------------------------------------------------------------------- ssh y docker context
+
+/// Corre el comando remoto (el último argumento) con un `sh -c` local, como si el destino fuera
+/// esta misma máquina, y anota sus argumentos.
+const FAKE_SSH: &str = r#"#!/bin/sh
+echo "$*" >> "$BATON_SSH_CALLS"
+for last; do :; done
+sh -c "$last"
+"#;
+
+/// Simula la sincronización: crea el destino y copia el contenido del origen, para que el `ssh`
+/// de mentira encuentre ahí los mismos archivos que en el proyecto real.
+const FAKE_RSYNC: &str = r#"#!/bin/sh
+echo "$*" >> "$BATON_RSYNC_CALLS"
+eval src=\${$(($#-1))}
+eval dest=\${$#}
+path="${dest#*:}"
+mkdir -p "$path"
+if [ -d "$src" ]; then
+  cp -r "$src". "$path" 2>/dev/null
+else
+  cp "$src" "$path" 2>/dev/null
+fi
+"#;
+
+fn install(root: &Path, name: &str, script: &str) {
+    let p = root.join("_bin").join(name);
+    fs::write(&p, script).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn ssh_config(remote_dir: &Path, sync: bool) -> Config {
+    Config::parse(&format!(
+        "[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"deploy\"\nremote_dir = \"{}\"\nsync = {sync}\n",
+        remote_dir.display()
+    ))
+    .unwrap()
+}
+
+#[test]
+fn an_ssh_step_runs_through_ssh_after_syncing_once() {
+    let fx = Fx::new(&["db/docker-compose.yml"]);
+    install(&fx.root(), "ssh", FAKE_SSH);
+    install(&fx.root(), "rsync", FAKE_RSYNC);
+    // aparte del proyecto: si quedara adentro, copiarlo sería copiarlo dentro de sí mismo.
+    let remote_root = tempfile::tempdir().unwrap();
+    let remote = remote_root.path().join("remote");
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"pwd; echo hola\"\ntarget = \"prod\"\n\
+         [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.env.push((
+        "BATON_SSH_CALLS".into(),
+        fx.root().join("_ssh_calls").display().to_string(),
+    ));
+    o.env.push((
+        "BATON_RSYNC_CALLS".into(),
+        fx.root().join("_rsync_calls").display().to_string(),
+    ));
+    let input = fx.input_with(&p, o, ssh_config(&remote, true));
+    let events = drive(spawn(input).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed, "{events:?}");
+    let out = all_logs(&events);
+    assert!(out.contains(&remote.display().to_string()), "{out}");
+    assert!(out.contains("hola"), "{out}");
+
+    let rsync_calls = fs::read_to_string(fx.root().join("_rsync_calls")).unwrap();
+    assert_eq!(
+        rsync_calls.lines().count(),
+        1,
+        "se sincroniza una sola vez: {rsync_calls}"
+    );
+    assert!(rsync_calls.contains("--delete") && rsync_calls.contains("--exclude=.baton"));
+    assert!(rsync_calls.contains("deploy@10.0.4.12"));
+
+    let ssh_calls = fs::read_to_string(fx.root().join("_ssh_calls")).unwrap();
+    assert_eq!(
+        ssh_calls.lines().count(),
+        2,
+        "un comando por paso: {ssh_calls}"
+    );
+    assert!(ssh_calls.contains("deploy@10.0.4.12"));
+}
+
+#[test]
+fn without_sync_nothing_is_rsynced_but_the_step_still_runs_remotely() {
+    let fx = Fx::new(&[]);
+    install(&fx.root(), "ssh", FAKE_SSH);
+    install(&fx.root(), "rsync", FAKE_RSYNC);
+    let remote_root = tempfile::tempdir().unwrap();
+    let remote = remote_root.path().join("remote");
+    fs::create_dir_all(&remote).unwrap();
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.env.push((
+        "BATON_SSH_CALLS".into(),
+        fx.root().join("_ssh_calls").display().to_string(),
+    ));
+    o.env.push((
+        "BATON_RSYNC_CALLS".into(),
+        fx.root().join("_rsync_calls").display().to_string(),
+    ));
+    let input = fx.input_with(&p, o, ssh_config(&remote, false));
+    let events = drive(spawn(input).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed, "{events:?}");
+    assert!(!fx.root().join("_rsync_calls").exists());
+    assert!(fx.root().join("_ssh_calls").exists());
+}
+
+#[test]
+fn a_docker_context_step_sets_docker_context_and_runs_locally() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"docker info\"\ntarget = \"qa\"\n",
+    );
+    let config =
+        Config::parse("[targets.qa]\ntype = \"context\"\ncontext = \"qa-swarm\"\n").unwrap();
+    let o = fx.options(&p);
+    let events = drive(spawn(fx.input_with(&p, o, config)).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed, "{events:?}");
+    // el docker de mentira no lee DOCKER_CONTEXT, pero corre local (queda en `_calls`)
+    assert_eq!(fx.call_args(), ["info"]);
+}
+
+// -------------------------------------------------------------------- logs
+
+#[test]
+fn json_format_writes_one_object_per_line() {
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n");
+    let mut config = Config::default();
+    config.logs.format = baton_core::config::LogFormat::Json;
+    let events = drive(
+        spawn(fx.input_with(&p, fx.options(&p), config)).unwrap(),
+        |_, _| {},
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let log_path = fx.root().join(".baton/logs/instalar-2026-09-24-1402.log");
+    // la fecha exacta varía; se busca el único log que haya.
+    let dir = fx.root().join(".baton/logs");
+    let log_path = fs::read_dir(&dir)
+        .unwrap()
+        .find_map(|e| e.ok().map(|e| e.path()))
+        .unwrap_or(log_path);
+    let text = fs::read_to_string(&log_path).unwrap();
+    let mut lines = 0;
+    for line in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(v["at"].is_string() && v["step"].is_string() && v["kind"].is_string());
+        lines += 1;
+    }
+    assert!(lines > 0, "{text}");
+}
+
+#[test]
+fn retention_removes_old_logs_of_the_same_folder_after_a_run() {
+    let fx = Fx::new(&[]);
+    let dir = fx.root().join(".baton/logs");
+    fs::create_dir_all(&dir).unwrap();
+    let stale = dir.join("vieja.log");
+    fs::write(&stale, "x").unwrap();
+    let old_time = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(old_time)
+        .unwrap();
+
+    let p = plan("[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n");
+    let mut config = Config::default();
+    config.logs.retention.days = Some(7);
+    let events = drive(
+        spawn(fx.input_with(&p, fx.options(&p), config)).unwrap(),
+        |_, _| {},
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert!(!stale.exists(), "el log viejo debía borrarse");
+}
+
+#[test]
+fn a_dry_run_never_touches_retention() {
+    let fx = Fx::new(&[]);
+    let dir = fx.root().join(".baton/logs");
+    fs::create_dir_all(&dir).unwrap();
+    let stale = dir.join("vieja.log");
+    fs::write(&stale, "x").unwrap();
+    let old_time = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(old_time)
+        .unwrap();
+
+    let p = plan("[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n");
+    let mut config = Config::default();
+    config.logs.retention.days = Some(7);
+    let mut o = fx.options(&p);
+    o.dry_run = true;
+    let events = drive(spawn(fx.input_with(&p, o, config)).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert!(stale.exists());
+}
+
+#[test]
+fn the_log_is_copied_to_every_ssh_target_the_run_used() {
+    let fx = Fx::new(&[]);
+    install(&fx.root(), "ssh", FAKE_SSH);
+    install(&fx.root(), "rsync", FAKE_RSYNC);
+    let remote_root = tempfile::tempdir().unwrap();
+    let remote = remote_root.path().join("remote");
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+    );
+    let remote_logs = remote_root.path().join("var-log-baton");
+    let mut config = ssh_config(&remote, true);
+    config.logs.remote = Some(remote_logs.display().to_string());
+    let mut o = fx.options(&p);
+    o.env.push((
+        "BATON_RSYNC_CALLS".into(),
+        fx.root().join("_rsync_calls").display().to_string(),
+    ));
+    let events = drive(spawn(fx.input_with(&p, o, config)).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed, "{events:?}");
+    let calls = fs::read_to_string(fx.root().join("_rsync_calls")).unwrap();
+    // dos llamadas a rsync: la sincronización del proyecto y la copia del log.
+    assert_eq!(calls.lines().count(), 2, "{calls}");
+    assert!(
+        calls
+            .lines()
+            .any(|l| l.contains(&remote_logs.display().to_string())),
+        "{calls}"
+    );
+    assert!(
+        all_logs(&events).contains("log copiado a prod"),
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn without_logs_remote_nothing_is_copied() {
+    let fx = Fx::new(&[]);
+    install(&fx.root(), "ssh", FAKE_SSH);
+    install(&fx.root(), "rsync", FAKE_RSYNC);
+    let remote_root = tempfile::tempdir().unwrap();
+    let remote = remote_root.path().join("remote");
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n",
+    );
+    let config = ssh_config(&remote, true); // logs.remote sin poner
+    let mut o = fx.options(&p);
+    o.env.push((
+        "BATON_RSYNC_CALLS".into(),
+        fx.root().join("_rsync_calls").display().to_string(),
+    ));
+    let events = drive(spawn(fx.input_with(&p, o, config)).unwrap(), |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let calls = fs::read_to_string(fx.root().join("_rsync_calls")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "solo la sincronización del proyecto: {calls}"
+    );
 }

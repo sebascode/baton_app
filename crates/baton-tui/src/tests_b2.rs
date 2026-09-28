@@ -591,17 +591,26 @@ fn testing_a_target_asks_the_driver_and_shows_status() {
 }
 
 #[test]
-fn saving_says_plainly_that_nothing_is_written_to_disk() {
+fn ctrl_s_asks_the_driver_to_save_the_converted_configuration() {
     let mut app = App::config_only(config_state());
+    let expected = Config::parse(EXAMPLE_CONFIG).unwrap();
+    match app.handle_key(ctrl('s')) {
+        Some(Effect::SaveConfig(got)) => assert_eq!(got, expected),
+        other => panic!("se esperaba SaveConfig, hay {other:?}"),
+    }
+}
+
+#[test]
+fn ctrl_s_with_a_missing_field_shows_why_instead_of_saving() {
+    let mut app = App::config_only(config_state());
+    config(&mut app).targets[1]
+        .form
+        .field_mut("host")
+        .unwrap()
+        .set_text("");
     assert_eq!(app.handle_key(ctrl('s')), None);
     let t = screen(&app, 100, 24);
-    assert!(
-        t.contains("cambios solo en memoria: guardar en disco aún no está disponible"),
-        "{t}"
-    );
-    // el aviso desaparece con la siguiente tecla
-    press(&mut app, KeyCode::Down);
-    assert!(!screen(&app, 100, 24).contains("solo en memoria"));
+    assert!(t.contains("prod-app") && t.contains("falta el host"), "{t}");
 }
 
 #[test]

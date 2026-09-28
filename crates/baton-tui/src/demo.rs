@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 
 use crate::app::{App, Effect, Screen};
-use crate::config_view::{ConfigState, TargetStatus};
+use crate::config_view::TargetStatus;
 use crate::fake;
 
 const BLINK: Duration = Duration::from_millis(500);
@@ -103,7 +103,9 @@ impl Driver for DemoDriver {
             }
             Effect::TestStep(_) => app.step_test_result(true, "dry-run ok · 1.4s (demo)"),
             Effect::Rescan => app.gate_scan_result(&fake::scan(), "ahora"),
-            Effect::SavePlan(_) => app.notify("demo: los datos son de mentira, no se guarda nada"),
+            Effect::SavePlan(_) | Effect::SaveConfig(_) => {
+                app.notify("demo: los datos son de mentira, no se guarda nada");
+            }
             Effect::Edit(_) | Effect::AddGate(_) | Effect::OpenPlan(_) => {}
         }
         Flow::Continue
@@ -135,22 +137,3 @@ pub fn run(fast: bool, screen: Screen) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------- config
-
-struct ConfigDriver;
-
-impl Driver for ConfigDriver {
-    fn on_effect(&mut self, app: &mut App, effect: Effect) -> Flow {
-        match effect {
-            Effect::Quit => return Flow::Quit,
-            Effect::TestTarget(_) => app.notify("probar conexión llega en el hito f"),
-            Effect::OpenPlan(_) => app.notify("abrir un plan desde aquí llega en el hito c"),
-            _ => {}
-        }
-        Flow::Continue
-    }
-}
-
-/// `baton config`: la pantalla de configuración con los datos reales del proyecto.
-pub fn run_config(state: ConfigState) -> io::Result<()> {
-    run_app(App::config_only(state), &mut ConfigDriver)
-}

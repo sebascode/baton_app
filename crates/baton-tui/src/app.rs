@@ -13,6 +13,7 @@
 
 use std::time::Duration;
 
+use baton_core::Config;
 use baton_core::events::{RunCommand, RunEvent};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -82,6 +83,9 @@ pub enum Effect {
     /// Guardar los pasos editados en el plan (el editor ya comprobó que los campos se entienden).
     /// Quien atiende responde con `apply_saved_plan` o `notify`.
     SavePlan(Vec<Step>),
+    /// Guardar la configuración editada (`ConfigState` ya comprobó que los campos se entienden).
+    /// Quien atiende responde con `apply_saved_config` o `notify`.
+    SaveConfig(Config),
     Quit,
 }
 
@@ -300,6 +304,26 @@ impl App {
         }
     }
 
+    /// La configuración guardada, tal como quedó: vuelve a construir la pantalla desde el
+    /// `Config` real, conservando en qué pestaña y destino estaba parado.
+    pub fn apply_saved_config(
+        &mut self,
+        config: &Config,
+        project: &str,
+        plans: Vec<String>,
+        message: &str,
+    ) {
+        let Mode::Config(c) = &mut self.mode else {
+            return;
+        };
+        let mut fresh = crate::config_view::ConfigState::from_config(config, project, plans);
+        fresh.tab = c.tab;
+        fresh.cursor = c.cursor.min(fresh.targets.len().saturating_sub(1));
+        fresh.list_cursor = c.list_cursor;
+        fresh.notice = Some(message.to_string());
+        **c = fresh;
+    }
+
     // Respuestas del driver a los efectos de prueba y escaneo.
 
     pub fn credential_test_result(&mut self, idx: usize, ok: bool, message: &str) {
@@ -389,10 +413,13 @@ impl App {
             Mode::Config(c) => match c.handle_key(key)? {
                 ConfigAction::Back => self.back_to_preview(),
                 ConfigAction::Test(i) => Some(Effect::TestTarget(i)),
-                ConfigAction::Save => {
-                    c.notice = Some(NOT_SAVED.into());
-                    None
-                }
+                ConfigAction::Save => match c.to_config() {
+                    Ok(config) => Some(Effect::SaveConfig(config)),
+                    Err(errors) => {
+                        c.notice = Some(errors.join("; "));
+                        None
+                    }
+                },
                 ConfigAction::OpenPlan(name) => Some(Effect::OpenPlan(name)),
             },
             Mode::Editor(e) => match e.handle_key(key)? {

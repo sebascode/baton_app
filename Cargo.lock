@@ -146,6 +146,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "humantime",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
@@ -168,6 +169,7 @@ name = "baton-tui"
 version = "0.1.0"
 dependencies = [
  "baton-core",
+ "indexmap",
  "insta",
  "ratatui",
  "unicode-width",

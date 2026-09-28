@@ -3,7 +3,7 @@
 //! Corre en su propio hilo con un runtime de tokio; la interfaz (TUI o texto) recibe los eventos
 //! y le manda `RunCommand` por canales sin bloqueo.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -29,7 +29,8 @@ use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounde
 
 use crate::gate::{GateResult, run_auto_gate};
 use crate::prepare::{Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run};
-use crate::transport::{Command, Exit, LocalTransport, Stream, Transport};
+use crate::remote::{SshConn, build_transports};
+use crate::transport::{Command, Exit, Stream, Transport, sh_quote};
 
 /// Lo que necesita una ejecución.
 pub struct RunInput {
@@ -108,7 +109,12 @@ pub(crate) struct Ctx {
     /// Últimas líneas de salida del comando en curso, para el mensaje de fallo.
     tail: Mutex<Vec<String>>,
     paused: AtomicBool,
-    pub(crate) transport: LocalTransport,
+    /// Un transporte por destino usado (`"local"` incluido); se arma una vez, antes de correr.
+    transports: HashMap<String, Box<dyn Transport>>,
+    /// Datos de conexión de los destinos ssh, para el `rsync` que los sincroniza antes de usarlos.
+    ssh_conns: HashMap<String, SshConn>,
+    /// Destinos ssh que ya se sincronizaron en esta ejecución (una vez alcanza).
+    synced: Mutex<HashSet<String>>,
     backups: Mutex<Vec<PathBuf>>,
     persist: Mutex<Persist>,
     /// Advertencias de la ejecución (checks no críticos fallidos, gates saltados).
@@ -147,7 +153,7 @@ impl Ctx {
             && let Some(s) = sink.as_mut()
         {
             let id = self.steps.get(step).map_or("", |p| p.step.id.as_str());
-            let _ = s.line(&at, id, &text);
+            let _ = s.line(&at, id, kind, &text);
         }
         self.emit(RunEvent::Log {
             step,
@@ -284,6 +290,150 @@ impl Ctx {
         }
         Self::save(&mut p, &self.plan.name, &self.project);
     }
+
+    /// El transporte del destino de un paso, armado al preparar la ejecución. Si por algo no
+    /// está (no debería pasar: `prepare_run` ya validó los destinos), se corre en `local`.
+    pub(crate) fn transport_for(&self, target: &str) -> &dyn Transport {
+        match self
+            .transports
+            .get(target)
+            .or_else(|| self.transports.get("local"))
+        {
+            Some(t) => t.as_ref(),
+            None => &LOCAL_FALLBACK,
+        }
+    }
+
+    /// Sincroniza (una vez por destino, la primera vez que se usa) las carpetas del proyecto con
+    /// un destino ssh que lo pida (`sync = true`), antes de correr nada ahí. `.baton/` nunca viaja.
+    async fn ensure_synced(&self, step: usize) -> Result<(), StepEnd> {
+        let target = &self.steps[step].target;
+        let Some(conn) = self.ssh_conns.get(target) else {
+            return Ok(());
+        };
+        if !conn.sync {
+            return Ok(());
+        }
+        {
+            let Ok(mut synced) = self.synced.lock() else {
+                return Ok(());
+            };
+            if !synced.insert(target.clone()) {
+                return Ok(());
+            }
+        }
+        if self.opts.dry_run {
+            self.log(step, LogKind::Output, "dry-run: no se sincroniza");
+            return Ok(());
+        }
+        let dest = format!("{}@{}:{}/", conn.user, conn.host, conn.remote_dir.display());
+        self.log(step, LogKind::Output, format!("sincronizando con {dest}"));
+        let ssh_opts = ssh_opts_for(conn);
+        let status = tokio::process::Command::new("rsync")
+            .envs(self.opts.env.iter().cloned())
+            .arg("-az")
+            .arg("--delete")
+            .arg("--exclude=.baton")
+            .arg("-e")
+            .arg(&ssh_opts)
+            .arg(format!("{}/", self.project.root.display()))
+            .arg(&dest)
+            .status()
+            .await;
+        match status {
+            Ok(s) if s.success() => {
+                self.log(step, LogKind::Success, "sincronizado");
+                Ok(())
+            }
+            Ok(s) => Err(failure(
+                self,
+                format!("rsync con {dest} terminó con {s}"),
+                "rsync".into(),
+            )),
+            Err(e) => Err(failure(
+                self,
+                format!("no se pudo ejecutar rsync: {e}"),
+                "rsync".into(),
+            )),
+        }
+    }
+
+    /// Al terminar (nunca en dry-run): aplica la retención de `[logs]` a la carpeta del log y,
+    /// si `[logs].remote` está puesto, copia el log a cada destino ssh que usó la corrida.
+    async fn finalize_log(&self, log_path: &Path) {
+        if self.opts.dry_run {
+            return;
+        }
+        if let Some(dir) = log_path.parent() {
+            let ext = log_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("log");
+            if let Err(e) =
+                baton_store::logs::apply_retention(dir, ext, &self.config.logs.retention)
+            {
+                self.log(
+                    0,
+                    LogKind::Error,
+                    format!("no se pudo aplicar la retención de logs: {e}"),
+                );
+            }
+        }
+        let Some(remote) = self.config.logs.remote.as_deref() else {
+            return;
+        };
+        if self.ssh_conns.is_empty() || !log_path.exists() {
+            return;
+        }
+        for (name, conn) in &self.ssh_conns {
+            let dest = format!("{}@{}:{remote}/", conn.user, conn.host);
+            let status = tokio::process::Command::new("rsync")
+                .envs(self.opts.env.iter().cloned())
+                .arg("-az")
+                .arg("-e")
+                .arg(ssh_opts_for(conn))
+                .arg(log_path)
+                .arg(&dest)
+                .status()
+                .await;
+            match status {
+                Ok(s) if s.success() => {
+                    self.log(
+                        0,
+                        LogKind::Success,
+                        format!("log copiado a {name} ({dest})"),
+                    );
+                }
+                Ok(s) => self.log(
+                    0,
+                    LogKind::Error,
+                    format!("no se pudo copiar el log a {name}: rsync terminó con {s}"),
+                ),
+                Err(e) => self.log(
+                    0,
+                    LogKind::Error,
+                    format!("no se pudo copiar el log a {name}: {e}"),
+                ),
+            }
+        }
+    }
+}
+
+/// `transport_for` nunca debería llegar a usar esto (siempre hay al menos "local"), pero
+/// `Transport` necesita un `&dyn` y no una construcción cada vez.
+static LOCAL_FALLBACK: crate::transport::LocalTransport = crate::transport::LocalTransport;
+
+/// El `-e` de `rsync`: mismo `ssh` (puerto, llave, bastion) que usa `SshTransport` para ese
+/// destino, para que la sincronización y la copia del log entren por la misma conexión.
+fn ssh_opts_for(conn: &SshConn) -> String {
+    let mut opts = format!("ssh -o BatchMode=yes -p {}", conn.port);
+    if let Some(id) = &conn.identity {
+        opts.push_str(&format!(" -i {}", sh_quote(&id.to_string_lossy())));
+    }
+    if let Some(j) = &conn.jump {
+        opts.push_str(&format!(" -J {}", sh_quote(j)));
+    }
+    opts
 }
 
 fn describe(exit: Exit, timeout: Option<Duration>) -> String {
@@ -300,11 +450,6 @@ fn describe(exit: Exit, timeout: Option<Duration>) -> String {
     }
 }
 
-/// Comillas simples para pegar una ruta o un nombre dentro de un comando de shell.
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 // ------------------------------------------------------------ ejecución
 
 /// Corre `cmd` atendiendo los comandos de la interfaz mientras tanto: abortar mata el proceso.
@@ -315,7 +460,9 @@ async fn exec(
     cmd: &Command,
 ) -> Result<Result<Exit, String>, Interrupt> {
     let mut on_line = |s: Stream, t: String| ctx.output(step, s, t);
-    let fut = ctx.transport.run(cmd, &mut on_line);
+    let fut = ctx
+        .transport_for(&ctx.steps[step].target)
+        .run(cmd, &mut on_line);
     tokio::pin!(fut);
     loop {
         tokio::select! {
@@ -515,6 +662,9 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
 /// Ejecuta un paso completo: backup previo, comando por archivo y gate manual.
 /// `skip_action`: el comando ya corrió bien y solo se repite el gate (reintento tras un gate fallido).
 async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: bool) -> StepEnd {
+    if !skip_action && let Err(end) = ctx.ensure_synced(i).await {
+        return end;
+    }
     let ps = &ctx.steps[i];
     let mut retries_total = 0;
 
@@ -586,6 +736,9 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
     let Some(template) = ps.step.rollback.as_deref() else {
         return true;
     };
+    if ctx.ensure_synced(i).await.is_err() {
+        return false;
+    }
     let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
         vec![None]
     } else {
@@ -602,7 +755,7 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
             continue;
         }
         let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
-        match ctx.transport.run(&cmd, &mut on_line).await {
+        match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
             Ok(exit) if exit.success() => ctx.log(i, LogKind::Success, "rollback ok"),
             Ok(exit) => {
                 ok = false;
@@ -776,7 +929,7 @@ async fn run(
         if let Err(e) = ensure_baton_dir(&project) {
             warnings.push(format!("no se pudo preparar .baton/: {e}"));
         }
-        match LogSink::create(&log_path) {
+        match LogSink::create(&log_path, config.logs.format) {
             Ok(s) => sink = Some(s),
             Err(e) => warnings.push(format!(
                 "no se pudo abrir el log {}: {e}",
@@ -825,6 +978,8 @@ async fn run(
         run_rec = prev.clone();
     }
 
+    let (transports, ssh_conns) =
+        build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
     let ctx = Ctx {
         project,
         plan,
@@ -836,7 +991,9 @@ async fn run(
         sink: Mutex::new(sink),
         tail: Mutex::new(Vec::new()),
         paused: AtomicBool::new(false),
-        transport: LocalTransport,
+        transports,
+        ssh_conns,
+        synced: Mutex::new(HashSet::new()),
         backups: Mutex::new(Vec::new()),
         persist: Mutex::new(Persist {
             state,
@@ -884,6 +1041,7 @@ async fn run(
             .then(|| format!("baton rollback {}", ctx.plan.name)),
         warnings: ctx.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
     };
+    ctx.finalize_log(&log_path).await;
     // Terminó bien pero con checks no críticos fallidos o gates saltados: se dice en el resultado.
     let outcome = if outcome == RunOutcome::Completed && !summary.warnings.is_empty() {
         RunOutcome::CompletedWithWarnings

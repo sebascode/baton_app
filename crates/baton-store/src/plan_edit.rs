@@ -165,7 +165,8 @@ fn renumber(table: &mut Table, next: &mut usize) {
 // ------------------------------------------------------------------ campos
 
 /// Reemplaza el valor de `key` conservando lo que lo rodea (por ejemplo, un comentario en la línea).
-fn set_value(t: &mut dyn toml_edit::TableLike, key: &str, mut new: Value) {
+/// También la usa `config_edit.rs` (mismo enfoque para `.baton/config.toml`).
+pub(crate) fn set_value(t: &mut dyn toml_edit::TableLike, key: &str, mut new: Value) {
     if let Some(old) = t.get(key).and_then(Item::as_value) {
         *new.decor_mut() = old.decor().clone();
     }
@@ -173,7 +174,7 @@ fn set_value(t: &mut dyn toml_edit::TableLike, key: &str, mut new: Value) {
 }
 
 /// Aplica un campo opcional: sin cambios no toca nada; `None` quita la clave.
-fn put<T: PartialEq>(
+pub(crate) fn put<T: PartialEq>(
     t: &mut dyn toml_edit::TableLike,
     key: &str,
     old: Option<&Option<T>>,
@@ -193,7 +194,7 @@ fn put<T: PartialEq>(
 
 // Se pasan como `fn(&T)` con `T = String` / `Vec<String>`, por eso no valen las formas con slice.
 #[allow(clippy::ptr_arg)]
-fn string_value(s: &String) -> Value {
+pub(crate) fn string_value(s: &String) -> Value {
     Value::from(s.as_str())
 }
 
@@ -206,7 +207,7 @@ fn strings_value(v: &Vec<String>) -> Value {
     }
 }
 
-fn non_empty(v: &str) -> Option<String> {
+pub(crate) fn non_empty(v: &str) -> Option<String> {
     (!v.trim().is_empty()).then(|| v.to_string())
 }
 

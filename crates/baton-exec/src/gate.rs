@@ -16,7 +16,7 @@ use tokio::sync::mpsc::UnboundedReceiver as Rx;
 
 use crate::prepare::{ScannedService, scan_compose};
 use crate::runner::{Ctx, Interrupt};
-use crate::transport::{Command, Exit, Stream, Transport};
+use crate::transport::{Command, Exit, Stream};
 
 const DEFAULT_ATTEMPTS: u32 = 6;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -400,6 +400,7 @@ impl Captured {
 
 async fn capture(
     ctx: &Ctx,
+    target: &str,
     line: String,
     cwd: &Path,
     timeout: Duration,
@@ -416,7 +417,7 @@ async fn capture(
         Stream::Stderr => err.push(t),
     };
     let exit = ctx
-        .transport
+        .transport_for(target)
         .run(&cmd, &mut on_line)
         .await
         .map_err(|e| ProbeError::new(format!("no se pudo ejecutar: {e}"), line))?;
@@ -440,11 +441,12 @@ async fn probe(
     lookup: &[ScannedService],
 ) -> Result<String, ProbeError> {
     let ps = &ctx.steps[step];
+    let target = ps.target.as_str();
     let vars = ctx.vars(ps, None);
     match check.kind {
         CheckKind::Command => {
             let line = vars.render(check.run.as_deref().unwrap_or_default());
-            let c = capture(ctx, line.clone(), &ctx.project.root, t.timeout).await?;
+            let c = capture(ctx, target, line.clone(), &ctx.project.root, t.timeout).await?;
             if c.exit.success() {
                 Ok("ok".to_string())
             } else {
@@ -455,7 +457,7 @@ async fn probe(
             let url = vars.render(check.url.as_deref().unwrap_or_default());
             let secs = t.interval.as_secs().max(1);
             let line = format!("curl -fsS -o /dev/null -m {secs} {}", sh_quote(&url));
-            let c = capture(ctx, line.clone(), &ctx.project.root, t.timeout).await?;
+            let c = capture(ctx, target, line.clone(), &ctx.project.root, t.timeout).await?;
             match c.exit {
                 e if e.success() => Ok("responde".to_string()),
                 Exit::Code(127) => Err(ProbeError::new("no se encontró curl en el PATH", line)),
@@ -463,12 +465,12 @@ async fn probe(
             }
         }
         CheckKind::Healthcheck => {
-            let id = container_id(ctx, check, t, lookup).await?;
+            let id = container_id(ctx, target, check, t, lookup).await?;
             let line = format!(
                 "docker inspect --format '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}{{{{else}}}}sin-healthcheck{{{{end}}}}' {}",
                 sh_quote(&id)
             );
-            let c = capture(ctx, line.clone(), &ctx.project.root, t.timeout).await?;
+            let c = capture(ctx, target, line.clone(), &ctx.project.root, t.timeout).await?;
             if !c.exit.success() {
                 return Err(ProbeError::new(c.why(), line));
             }
@@ -482,12 +484,12 @@ async fn probe(
             }
         }
         CheckKind::Running => {
-            let id = container_id(ctx, check, t, lookup).await?;
+            let id = container_id(ctx, target, check, t, lookup).await?;
             let line = format!(
                 "docker inspect --format '{{{{.State.Running}}}} {{{{.State.StartedAt}}}}' {}",
                 sh_quote(&id)
             );
-            let c = capture(ctx, line.clone(), &ctx.project.root, t.timeout).await?;
+            let c = capture(ctx, target, line.clone(), &ctx.project.root, t.timeout).await?;
             if !c.exit.success() {
                 return Err(ProbeError::new(c.why(), line));
             }
@@ -538,6 +540,7 @@ fn uptime(started_at: &str) -> Option<Duration> {
 /// del compose (así resuelve el mismo proyecto que usó `up`).
 async fn container_id(
     ctx: &Ctx,
+    target: &str,
     check: &Check,
     t: Timing,
     lookup: &[ScannedService],
@@ -563,7 +566,7 @@ async fn container_id(
         sh_quote(&base),
         sh_quote(service)
     );
-    let c = capture(ctx, line.clone(), &dir, t.timeout).await?;
+    let c = capture(ctx, target, line.clone(), &dir, t.timeout).await?;
     if !c.exit.success() {
         return Err(ProbeError::new(c.why(), line));
     }
