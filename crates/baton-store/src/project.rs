@@ -31,6 +31,11 @@ impl Project {
         self.root.join(BATON_DIR)
     }
 
+    /// `.baton/credentials/`: por ambiente, cuando el plan usa uno (`credentials_dir().join(ambiente)`).
+    pub fn credentials_dir(&self) -> PathBuf {
+        self.baton_dir().join("credentials")
+    }
+
     pub fn config_path(&self) -> PathBuf {
         self.baton_dir().join("config.toml")
     }

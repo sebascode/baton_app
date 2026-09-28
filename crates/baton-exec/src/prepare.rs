@@ -41,6 +41,9 @@ pub struct RunOptions {
     pub retry_delay: Duration,
     /// Variables de entorno extra para todos los comandos.
     pub env: Vec<(String, String)>,
+    /// Ambiente del que se resuelven las credenciales (`.baton/credentials/<ambiente>/`); sin
+    /// valor, la carpeta plana de siempre.
+    pub ambiente: Option<String>,
 }
 
 impl RunOptions {
@@ -57,6 +60,7 @@ impl RunOptions {
             resume: false,
             retry_delay: Duration::from_secs(2),
             env: Vec::new(),
+            ambiente: None,
         }
     }
 }
@@ -168,6 +172,49 @@ pub fn prepare_run(
     };
     if chosen.is_empty() && errors.is_empty() {
         errors.push("no hay pasos activos que ejecutar".to_string());
+    }
+
+    // Sin quién responda no se pregunta nada: las credenciales que falten deben venir ya
+    // resueltas (archivo o variable de entorno), o se falla diciendo cuál y dónde se esperaba.
+    if !opts.interactive && !opts.dry_run {
+        for req in baton_core::required_credentials(plan, config) {
+            for field in baton_core::fields_for(req.kind) {
+                if field.optional {
+                    continue;
+                }
+                let resolved = baton_store::credentials::resolve_field(
+                    project,
+                    opts.ambiente.as_deref(),
+                    &req.reference,
+                    field.key,
+                );
+                let missing = match resolved {
+                    Ok(v) => v.is_none_or(|v| v.is_empty()),
+                    Err(e) => {
+                        errors.push(format!(
+                            "credencial '{}' ({}): {e}",
+                            req.label, req.reference
+                        ));
+                        continue;
+                    }
+                };
+                if missing {
+                    let path = baton_store::credentials::env_path(
+                        project,
+                        opts.ambiente.as_deref(),
+                        &req.reference.file,
+                    );
+                    errors.push(format!(
+                        "credencial '{}' ({}): falta {} (se esperaba {} o la variable {})",
+                        req.label,
+                        req.reference,
+                        field.label,
+                        project.display_path(&path),
+                        req.reference.variable(field.key)
+                    ));
+                }
+            }
+        }
     }
 
     // Una dependencia que quedó después de quien depende de ella nunca se cumpliría.
@@ -573,6 +620,107 @@ mod tests {
         assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
         o.assume_yes = false;
         o.dry_run = true; // en dry-run no se pregunta nada
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+    }
+
+    #[test]
+    fn without_a_terminal_a_missing_credential_is_reported_with_field_and_file() {
+        let (_t, proj) = project(&[]);
+        let p = plan(
+            "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nlabel = \"Docker registry\"\nref = \"docker.env#GHCR\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        );
+        let mut o = opts(&p);
+        o.interactive = false;
+        let e = prepare_run(&proj, &Config::default(), &p, &o).unwrap_err();
+        assert!(
+            e.0.iter().any(|m| m.contains("Docker registry")
+                && m.contains("docker.env#GHCR")
+                && m.contains("registro")
+                && m.contains(".baton/credentials/docker.env")
+                && m.contains("GHCR_REGISTRY")),
+            "{e}"
+        );
+        // pide los tres campos, uno por línea
+        assert!(e.0.len() >= 3, "{e}");
+    }
+
+    #[test]
+    fn a_credential_resolved_from_the_file_or_an_env_var_is_not_reported() {
+        let (_t, proj) = project(&[]);
+        baton_store::credentials::save_fields(
+            &proj,
+            None,
+            &"docker.env#GHCR".parse().unwrap(),
+            &[
+                ("registry", "ghcr.io".to_string()),
+                ("user", "sofia".to_string()),
+                ("token", "ghp_x".to_string()),
+            ],
+        )
+        .unwrap();
+        let p = plan(
+            "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        );
+        let mut o = opts(&p);
+        o.interactive = false;
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+    }
+
+    #[test]
+    fn an_optional_field_is_never_required() {
+        let (_t, proj) = project(&[]);
+        baton_store::credentials::save_fields(
+            &proj,
+            None,
+            &"servers.env#PROD".parse().unwrap(),
+            &[("key", "/home/x/.ssh/id_ed25519".to_string())],
+        )
+        .unwrap();
+        let p = plan(
+            "[[credentials]]\nid = \"prod\"\nkind = \"ssh\"\nref = \"servers.env#PROD\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        );
+        let mut o = opts(&p);
+        o.interactive = false; // sin PASSPHRASE: no debe fallar, es opcional
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+    }
+
+    #[test]
+    fn interactive_and_dry_run_do_not_check_credentials() {
+        let (_t, proj) = project(&[]);
+        let p = plan(
+            "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        );
+        let mut o = opts(&p);
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok()); // interactivo
+        o.interactive = false;
+        o.dry_run = true;
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok()); // dry-run
+    }
+
+    #[test]
+    fn an_ambiente_looks_in_its_own_subfolder() {
+        let (_t, proj) = project(&[]);
+        baton_store::credentials::save_fields(
+            &proj,
+            Some("prod"),
+            &"docker.env#GHCR".parse().unwrap(),
+            &[
+                ("registry", "ghcr.io".to_string()),
+                ("user", "u".to_string()),
+                ("token", "t".to_string()),
+            ],
+        )
+        .unwrap();
+        let p = plan(
+            "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        );
+        let mut o = opts(&p);
+        o.interactive = false;
+        assert!(
+            prepare_run(&proj, &Config::default(), &p, &o).is_err(),
+            "sin ambiente no debe ver lo de 'prod'"
+        );
+        o.ambiente = Some("prod".to_string());
         assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
     }
 

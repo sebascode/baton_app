@@ -37,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Muestra la versión instalada (también: `baton -V` / `baton --version`)
+    Version,
     /// Valida la configuración y los planes (todos, o solo el indicado)
     Validate {
         /// Nombre del plan (archivo en baton/plans/)
@@ -44,6 +46,20 @@ enum Command {
     },
     /// Ejecuta un plan (también: `baton <plan>`)
     Run(RunArgs),
+    /// Arma un plan a partir de lo que encuentra en la carpeta y abre el editor para revisarlo
+    Init {
+        /// Nombre del plan (por defecto, el de la carpeta)
+        plan: Option<String>,
+        /// Destino por defecto de los pasos encontrados
+        #[arg(long)]
+        target: Option<String>,
+        /// Ambientes a crear, separados por coma (ej. dev,staging,prod)
+        #[arg(long)]
+        ambiente: Option<String>,
+        /// No escanea la carpeta: el plan queda vacío
+        #[arg(long)]
+        no_scan: bool,
+    },
     /// Abre el editor de pasos y gates de un plan y guarda los cambios en su archivo
     Edit {
         /// Nombre del plan (archivo en baton/plans/)
@@ -92,6 +108,9 @@ struct RunArgs {
     /// No hace backup aunque el plan lo pida
     #[arg(long)]
     no_backup: bool,
+    /// Ambiente del que se resuelven las credenciales (`.baton/credentials/<ambiente>/`)
+    #[arg(long)]
+    ambiente: Option<String>,
 }
 
 /// Solo para leer las opciones de `baton <plan> ...` con el mismo parser de `run`.
@@ -117,6 +136,7 @@ impl From<RunArgs> for (String, run::RunFlags) {
                 resume: a.resume,
                 assume_yes: a.assume_yes,
                 backup,
+                ambiente: a.ambiente,
             },
         )
     }
@@ -155,6 +175,10 @@ impl From<DemoScreen> for Screen {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if let Command::Version = cli.command {
+        println!("baton {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     if let Command::Demo { fast, screen } = cli.command {
         return demo(fast, screen.into());
     }
@@ -169,6 +193,27 @@ fn main() -> ExitCode {
             }
         },
     };
+
+    // `init` no necesita que ya exista un proyecto: es lo que lo crea.
+    if let Command::Init {
+        plan,
+        target,
+        ambiente,
+        no_scan,
+    } = cli.command
+    {
+        let project = Project::discover(&start).unwrap_or_else(|| Project::at(&start));
+        return run::init(
+            &project,
+            plan,
+            run::InitFlags {
+                target,
+                ambiente,
+                no_scan,
+            },
+        );
+    }
+
     let Some(project) = Project::discover(&start) else {
         eprintln!(
             "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
@@ -194,6 +239,8 @@ fn main() -> ExitCode {
             run::run(&project, &plan, flags)
         }
         Command::Demo { .. } => unreachable!("se atiende antes de buscar el proyecto"),
+        Command::Init { .. } => unreachable!("se atiende antes de buscar el proyecto"),
+        Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
     }
 }
 

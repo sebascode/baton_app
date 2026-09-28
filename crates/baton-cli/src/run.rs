@@ -21,6 +21,8 @@ pub struct RunFlags {
     pub assume_yes: bool,
     /// `--backup` o `--no-backup`; sin valor, manda el plan.
     pub backup: Option<bool>,
+    /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
+    pub ambiente: Option<String>,
 }
 
 /// Carga y valida la configuración y el plan. Imprime los diagnósticos y devuelve el código de
@@ -83,6 +85,7 @@ pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
             plan,
             Flags {
                 resume: flags.resume,
+                ambiente: flags.ambiente.clone(),
             },
         );
         let app = driver.app(preview);
@@ -101,6 +104,7 @@ pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
     options.resume = flags.resume;
     options.assume_yes = flags.assume_yes;
     options.interactive = false;
+    options.ambiente = flags.ambiente.clone();
     if let Some(b) = flags.backup {
         options.backup = b;
     }
@@ -110,6 +114,102 @@ pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
         plan,
         options,
     })
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InitFlags {
+    /// Destino por defecto de los pasos encontrados (si no se da, usan el del plan).
+    pub target: Option<String>,
+    /// Ambientes a crear, separados por coma (`dev,staging,prod`); ninguno si se omite.
+    pub ambiente: Option<String>,
+    /// No escanea la carpeta: el plan queda vacío, listo para armar a mano en el editor.
+    pub no_scan: bool,
+}
+
+/// `baton init [plan]`: arma un plan a partir de lo que encuentra en la carpeta (compose,
+/// Dockerfile) y, si hay terminal, abre el editor para revisarlo. No pisa un plan que ya existe.
+pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCode {
+    let default_name = project
+        .root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let plan_name = baton_core::slug::slug(plan.as_deref().unwrap_or(&default_name), "plan");
+
+    if let Err(e) = baton_store::scaffold::create_plan(project, &plan_name) {
+        eprintln!("error: {e}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+
+    let found = if flags.no_scan {
+        baton_store::discover::Discovered::default()
+    } else {
+        baton_store::discover::scan_project(&project.root)
+    };
+    let steps = baton_store::scaffold::starter_steps(&found, flags.target.as_deref());
+
+    if !steps.is_empty() {
+        let config = check_config(project);
+        for d in &config.diagnostics {
+            eprintln!("{d}");
+        }
+        let valid = config.is_valid();
+        let config = config.value.filter(|_| valid);
+        if let Err(e) =
+            baton_store::plan_edit::save_plan_steps(project, &plan_name, &steps, config.as_ref())
+        {
+            eprintln!("error: {e}");
+            // no deja un plan a medias
+            let _ = std::fs::remove_file(project.plan_path(&plan_name));
+            return ExitCode::from(EXIT_INVALID);
+        }
+    }
+
+    let ambientes: Vec<&str> = flags
+        .ambiente
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !ambientes.is_empty() {
+        if let Err(e) = baton_store::init::ensure_baton_dir(project) {
+            eprintln!("aviso: no se pudo crear .baton/: {e}");
+        }
+        for amb in &ambientes {
+            if let Err(e) = std::fs::create_dir_all(project.credentials_dir().join(amb)) {
+                eprintln!("aviso: no se pudo crear el ambiente '{amb}': {e}");
+            }
+        }
+    }
+
+    println!(
+        "plan '{plan_name}' creado en {}",
+        project.display_path(&project.plan_path(&plan_name))
+    );
+    if steps.is_empty() {
+        println!(
+            "sin compose ni Dockerfile detectados: el plan queda vacío, agrega pasos en el editor"
+        );
+    } else {
+        for s in &steps {
+            println!("  paso '{}': {} archivo(s)", s.id, s.source.0.len());
+        }
+    }
+    if !ambientes.is_empty() {
+        println!(
+            "ambientes creados: {} (.baton/credentials/<ambiente>/)",
+            ambientes.join(", ")
+        );
+    }
+
+    if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+        edit(project, &plan_name)
+    } else {
+        println!("revisa y completa el plan con: baton edit {plan_name}");
+        ExitCode::SUCCESS
+    }
 }
 
 /// `baton edit <plan>`: el editor de pasos y gates sobre el plan real.

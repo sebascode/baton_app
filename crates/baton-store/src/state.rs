@@ -81,12 +81,25 @@ pub struct PlanState {
     pub last_run: Option<LastRun>,
 }
 
+/// "No volver a preguntar" de una credencial: el flag vive aquí, nunca en su `.env`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialFlag {
+    #[serde(default)]
+    pub silenced: bool,
+    /// Cuándo se puso (o se renovó) `silenced`, para mostrar "no preguntar · desde hace 3 días".
+    #[serde(default)]
+    pub confirmed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
     #[serde(default = "one")]
     pub version: u32,
     #[serde(default)]
     pub plans: BTreeMap<String, PlanState>,
+    /// Por clave de credencial (ver [`credential_key`]).
+    #[serde(default)]
+    pub credentials: BTreeMap<String, CredentialFlag>,
     /// Lo que este módulo no interpreta se conserva tal cual.
     #[serde(flatten)]
     pub other: BTreeMap<String, serde_json::Value>,
@@ -101,8 +114,18 @@ impl Default for State {
         State {
             version: 1,
             plans: BTreeMap::new(),
+            credentials: BTreeMap::new(),
             other: BTreeMap::new(),
         }
+    }
+}
+
+/// La clave de [`State::credentials`] para una referencia, en el ambiente dado (si hay uno):
+/// distintos ambientes silencian el flag por separado, porque son credenciales distintas.
+pub fn credential_key(ambiente: Option<&str>, r: &baton_core::CredentialRef) -> String {
+    match ambiente {
+        Some(a) => format!("{a}/{r}"),
+        None => r.to_string(),
     }
 }
 
@@ -149,6 +172,26 @@ impl State {
 
     pub fn set_last_run(&mut self, plan: &str, run: LastRun) {
         self.plans.entry(plan.to_string()).or_default().last_run = Some(run);
+    }
+
+    pub fn is_silenced(&self, key: &str) -> bool {
+        self.credentials.get(key).is_some_and(|f| f.silenced)
+    }
+
+    /// Pone (o quita) "no volver a preguntar" y anota cuándo, con la hora que le pasen (para
+    /// poder probarlo sin depender del reloj real).
+    pub fn set_silenced(&mut self, key: &str, silenced: bool, when: &str) {
+        let flag = self.credentials.entry(key.to_string()).or_default();
+        flag.silenced = silenced;
+        flag.confirmed_at = Some(when.to_string());
+    }
+
+    /// Reactiva en silencio un flag silenciado (fallo de autenticación). No hace nada si ya no
+    /// estaba silenciado: no hay que "anunciarlo" porque no cambia nada visible.
+    pub fn reactivate(&mut self, key: &str) {
+        if let Some(flag) = self.credentials.get_mut(key) {
+            flag.silenced = false;
+        }
     }
 }
 
@@ -262,5 +305,43 @@ mod tests {
         let last = s.last_run("instalar").unwrap();
         assert_eq!(last.steps["a"].duration_ms, 0);
         assert_eq!(s.version, 1);
+    }
+
+    #[test]
+    fn silencing_confirming_and_reactivating_a_credential() {
+        let mut s = State::default();
+        let key = "docker.env#GHCR";
+        assert!(!s.is_silenced(key));
+        s.set_silenced(key, true, "2026-09-24T14:00:00-03:00");
+        assert!(s.is_silenced(key));
+        assert_eq!(
+            s.credentials[key].confirmed_at.as_deref(),
+            Some("2026-09-24T14:00:00-03:00")
+        );
+        // un fallo de autenticación lo reactiva en silencio
+        s.reactivate(key);
+        assert!(!s.is_silenced(key));
+        // reactivar algo que no estaba silenciado no hace nada raro
+        s.reactivate("nunca-silenciada");
+        assert!(!s.is_silenced("nunca-silenciada"));
+        assert!(!s.credentials.contains_key("nunca-silenciada"));
+    }
+
+    #[test]
+    fn credential_flags_round_trip_through_a_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Project::at(tmp.path());
+        let mut s = State::default();
+        s.set_silenced("docker.env#GHCR", true, "hoy");
+        s.save(&p).unwrap();
+        let loaded = State::load(&p).unwrap();
+        assert!(loaded.is_silenced("docker.env#GHCR"));
+    }
+
+    #[test]
+    fn the_ambiente_is_part_of_the_credential_key() {
+        let r: baton_core::CredentialRef = "servers.env#PROD".parse().unwrap();
+        assert_eq!(credential_key(None, &r), "servers.env#PROD");
+        assert_eq!(credential_key(Some("prod"), &r), "prod/servers.env#PROD");
     }
 }

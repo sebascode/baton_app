@@ -3,20 +3,25 @@
 
 use baton_core::compose::Service;
 use baton_core::events::{LogKind, RunEvent, RunOutcome};
-use baton_core::plan::{Plan, Step};
-use baton_core::{Config, Issue};
+use baton_core::plan::{CredentialKind, Plan, Step};
+use baton_core::{Config, Issue, Requirement};
 use baton_exec::{RunHandle, RunInput, RunOptions, scan_compose, spawn};
 use baton_store::plan_edit::{SaveError, save_plan_steps};
 use baton_store::sources::expand_sources;
+use baton_store::state::{State, credential_key};
 use baton_store::{Project, check_plan};
+use baton_tui::app::Mode;
+use baton_tui::credentials::{CredField, CredItem, CredStatus, CredentialsState};
 use baton_tui::demo::{Driver, Flow};
 use baton_tui::gate_view::ScannedService;
 use baton_tui::{App, EditorState, Effect, PreviewState, RunRequest, plan_step_infos};
 
 /// Lo que el usuario pidió por línea de comandos y la vista previa no decide.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Flags {
     pub resume: bool,
+    /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
+    pub ambiente: Option<String>,
 }
 
 pub struct RunDriver {
@@ -25,6 +30,9 @@ pub struct RunDriver {
     plan: Plan,
     flags: Flags,
     handle: Option<RunHandle>,
+    /// Las credenciales que arma `app()`, en el mismo orden que `CredentialsState::items`: hace
+    /// falta para saber a qué archivo y campos volver a escribir cuando se confirman.
+    cred_reqs: Vec<Requirement>,
     /// Cómo terminó la ejecución, si llegó a terminar.
     pub outcome: Option<RunOutcome>,
 }
@@ -37,6 +45,7 @@ impl RunDriver {
             plan,
             flags,
             handle: None,
+            cred_reqs: Vec::new(),
             outcome: None,
         }
     }
@@ -75,16 +84,105 @@ impl RunDriver {
         )
     }
 
-    /// La aplicación con la vista previa del plan, con el editor y el pipeline ya conectados.
-    pub fn app(&self, preview: PreviewState) -> App {
+    /// La aplicación con la vista previa del plan, con el editor, el pipeline y (si el plan
+    /// necesita credenciales) la pantalla 2 ya conectados.
+    pub fn app(&mut self, preview: PreviewState) -> App {
         let root = self.project.root.display().to_string();
-        App::new(preview)
+        let mut app = App::new(preview)
             .with_editor(self.editor())
             .with_live_pipeline(
                 &self.plan.name,
                 &root,
                 plan_step_infos(&self.plan, self.config.default_target()),
-            )
+            );
+        if let Some(creds) = self.build_credentials() {
+            app = app.with_credentials(creds);
+        }
+        app
+    }
+
+    /// Credenciales que el plan necesita, resueltas contra `.baton/credentials/` y `state.json`.
+    /// `None` si no necesita ninguna (no se muestra la pantalla).
+    fn build_credentials(&mut self) -> Option<CredentialsState> {
+        let reqs = baton_core::required_credentials(&self.plan, &self.config);
+        if reqs.is_empty() {
+            self.cred_reqs.clear();
+            return None;
+        }
+        let ambiente = self.flags.ambiente.as_deref();
+        let state = State::load(&self.project).unwrap_or_default();
+        let items = reqs
+            .iter()
+            .map(|req| credential_item(&self.project, ambiente, req, &state))
+            .collect();
+        let mut files: Vec<String> = reqs.iter().map(|r| r.reference.file.clone()).collect();
+        files.sort();
+        files.dedup();
+        self.cred_reqs = reqs;
+        Some(CredentialsState::new(
+            items,
+            credentials_tree(&files, ambiente),
+        ))
+    }
+
+    /// Escribe en disco lo que el usuario confirmó o silenció en la pantalla de credenciales
+    /// (valores editados en su `.env`, el flag "no preguntar" en `state.json`). Se llama justo
+    /// antes de arrancar la ejecución: solo se llega ahí cuando todo quedó confirmado o silenciado.
+    fn persist_credentials(&self, app: &mut App) {
+        let Mode::Credentials(c) = &app.mode else {
+            return;
+        };
+        if c.items.is_empty() {
+            return;
+        }
+        let ambiente = self.flags.ambiente.as_deref();
+        let mut state = State::load(&self.project).unwrap_or_default();
+        let now = baton_store::clock::iso();
+        let mut errors = Vec::new();
+        for (item, req) in c.items.iter().zip(&self.cred_reqs) {
+            let specs = baton_core::fields_for(req.kind);
+            let pairs: Vec<(&str, String)> = specs
+                .iter()
+                .zip(&item.fields)
+                .map(|(spec, f)| (spec.key, f.value.value()))
+                .collect();
+            if let Err(e) = baton_store::credentials::save_fields(
+                &self.project,
+                ambiente,
+                &req.reference,
+                &pairs,
+            ) {
+                errors.push(format!("{}: {e}", req.reference));
+                continue;
+            }
+            state.set_silenced(
+                &credential_key(ambiente, &req.reference),
+                item.status == CredStatus::Silenced,
+                &now,
+            );
+        }
+        if let Err(e) = state.save(&self.project) {
+            errors.push(e.to_string());
+        }
+        if !errors.is_empty() {
+            app.notify(&format!(
+                "no se pudieron guardar algunas credenciales: {}",
+                errors.join("; ")
+            ));
+        }
+    }
+
+    /// Prueba real (docker) o simulada (los demás tipos, con el hito o versión donde llegan) con
+    /// los valores que hay en pantalla, sin necesidad de haberlos confirmado antes.
+    fn test_credential(&self, app: &mut App, i: usize) {
+        let Mode::Credentials(c) = &mut app.mode else {
+            return;
+        };
+        let (Some(item), Some(req)) = (c.items.get(i), self.cred_reqs.get(i)) else {
+            return;
+        };
+        let (ok, message) = test_connection(req.kind, item);
+        c.set_test_result(i, ok, &message);
     }
 
     /// La aplicación que abre directamente el editor de pasos (`baton edit`).
@@ -93,6 +191,7 @@ impl RunDriver {
     }
 
     fn start(&mut self, app: &mut App, req: RunRequest) {
+        self.persist_credentials(app);
         let mut options = RunOptions::for_plan(&self.plan);
         options.only = Some(req.steps);
         options.backup = req.backup;
@@ -100,6 +199,7 @@ impl RunDriver {
         options.auto_rollback = req.rollback;
         options.resume = self.flags.resume;
         options.interactive = true;
+        options.ambiente = self.flags.ambiente.clone();
         let input = RunInput {
             project: self.project.clone(),
             config: self.config.clone(),
@@ -222,6 +322,130 @@ impl RunDriver {
     }
 }
 
+/// Arma la fila de la credencial (título, estado y campos) a partir de lo que hay resuelto en
+/// disco (archivo o variable de entorno) y del flag "no preguntar" de `state.json`.
+fn credential_item(
+    project: &Project,
+    ambiente: Option<&str>,
+    req: &Requirement,
+    state: &State,
+) -> CredItem {
+    let specs = baton_core::fields_for(req.kind);
+    let mut fields = Vec::with_capacity(specs.len());
+    let mut present = true;
+    for spec in specs {
+        let value =
+            baton_store::credentials::resolve_field(project, ambiente, &req.reference, spec.key)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        if !spec.optional && value.is_empty() {
+            present = false;
+        }
+        fields.push(CredField::new(spec.label, &value, spec.secret));
+    }
+    let silenced = state.is_silenced(&credential_key(ambiente, &req.reference));
+    let status = match (present, silenced) {
+        (true, true) => CredStatus::Silenced,
+        (true, false) => CredStatus::FromFile,
+        (false, _) => CredStatus::NotFound,
+    };
+    CredItem::new(&req.label, status, &req.reference.file, fields)
+}
+
+/// El árbol de `.baton/` que se muestra a la izquierda de la pantalla de credenciales.
+fn credentials_tree(files: &[String], ambiente: Option<&str>) -> Vec<String> {
+    let mut out = vec![
+        ".baton/".to_string(),
+        "├─ config.toml".to_string(),
+        "├─ state.json".to_string(),
+        "├─ credentials/".to_string(),
+    ];
+    let indent = if let Some(a) = ambiente {
+        out.push(format!("│  └─ {a}/"));
+        "│     "
+    } else {
+        "│  "
+    };
+    let n = files.len();
+    for (i, f) in files.iter().enumerate() {
+        let branch = if i + 1 == n { "└─" } else { "├─" };
+        out.push(format!("{indent}{branch} {f}"));
+    }
+    out.push("├─ backups/".to_string());
+    out.push("└─ logs/".to_string());
+    out
+}
+
+/// Prueba de conexión con los datos que hay en pantalla. Solo docker es real por ahora (usa
+/// `docker login`, que no imprime el token en ningún caso); el resto queda simulado hasta que
+/// tengan con qué probarse de verdad.
+fn test_connection(kind: CredentialKind, item: &CredItem) -> (bool, String) {
+    let value_of = |key: &str| -> String {
+        baton_core::fields_for(kind)
+            .iter()
+            .position(|s| s.key == key)
+            .and_then(|i| item.fields.get(i))
+            .map(|f| f.value.value())
+            .unwrap_or_default()
+    };
+    match kind {
+        CredentialKind::Docker => {
+            let (registry, user, token) =
+                (value_of("REGISTRY"), value_of("USER"), value_of("TOKEN"));
+            if registry.is_empty() || user.is_empty() || token.is_empty() {
+                return (false, "faltan datos para probar".to_string());
+            }
+            match docker_login(&registry, &user, &token) {
+                Ok(()) => (true, format!("conectado a {registry}")),
+                Err(e) => (false, e),
+            }
+        }
+        CredentialKind::Ssh => (false, "probar conexión ssh llega en el hito f".to_string()),
+        CredentialKind::Db => (
+            false,
+            "probar conexión de base de datos llega en v0.3".to_string(),
+        ),
+        CredentialKind::Git | CredentialKind::Otro => {
+            (false, "sin prueba automática todavía".to_string())
+        }
+    }
+}
+
+fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("docker")
+        .args(["login", registry, "-u", user, "--password-stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => "no se encontró docker en el PATH".to_string(),
+            _ => format!("no se pudo ejecutar docker: {e}"),
+        })?;
+    child
+        .stdin
+        .take()
+        .expect("stdin es piped")
+        .write_all(token.as_bytes())
+        .map_err(|e| format!("no se pudo enviar el token: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("no se pudo esperar a docker: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // nunca se imprime el token: `docker login` no lo repite, solo tomamos su última línea.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(stderr
+        .lines()
+        .next_back()
+        .unwrap_or("docker login falló")
+        .to_string())
+}
+
 fn describe_issues(issues: &[Issue]) -> String {
     let lines: Vec<String> = issues
         .iter()
@@ -253,7 +477,8 @@ impl Driver for RunDriver {
             Effect::Edit(_) | Effect::AddGate(_) => {
                 app.notify("no se pudo abrir el editor de pasos");
             }
-            Effect::TestCredential(_) | Effect::TestTarget(_) | Effect::OpenPlan(_) => {}
+            Effect::TestCredential(i) => self.test_credential(app, i),
+            Effect::TestTarget(_) | Effect::OpenPlan(_) => {}
         }
         Flow::Continue
     }

@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use baton_core::config::Config;
+use baton_core::CredentialRef;
+use baton_core::auth_failure::looks_like_auth_failure;
+use baton_core::config::{Config, Target};
 use baton_core::events::{
     Badge, BadgeTone, Failure, FailureKind, LogKind, LogLine, RunCommand, RunEvent, RunOutcome,
     RunSummary, StepStatus,
@@ -22,7 +24,7 @@ use baton_store::Project;
 use baton_store::clock;
 use baton_store::init::ensure_baton_dir;
 use baton_store::logs::{LogSink, resolve_log_path};
-use baton_store::state::{LastRun, RunStatus, State, StepRecord, StepState};
+use baton_store::state::{LastRun, RunStatus, State, StepRecord, StepState, credential_key};
 use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounded_channel};
 
 use crate::gate::{GateResult, run_auto_gate};
@@ -97,6 +99,7 @@ struct Persist {
 pub(crate) struct Ctx {
     pub(crate) project: Project,
     pub(crate) plan: Plan,
+    pub(crate) config: Config,
     pub(crate) opts: RunOptions,
     pub(crate) steps: Vec<PStep>,
     fecha: String,
@@ -240,6 +243,47 @@ impl Ctx {
         // Un fallo al guardar no debe detener un despliegue en marcha.
         let _ = p.state.save(project);
     }
+
+    /// Si `text` (mensaje + salida) tiene pinta de fallo de autenticación, reactiva en silencio
+    /// el flag "no volver a preguntar" de la credencial implicada (nunca ante otro tipo de fallo).
+    fn classify_failure(&self, text: &str, target: Option<&str>) -> FailureKind {
+        if !looks_like_auth_failure(text) {
+            return FailureKind::Other;
+        }
+        self.reactivate_credentials(target);
+        FailureKind::Auth
+    }
+
+    /// La credencial del destino del paso que falló, si es ssh y la declara (más preciso); si
+    /// no, todas las que el plan declara (no sabemos cuál de ellas causó el fallo).
+    fn credentials_for(&self, target: Option<&str>) -> Vec<CredentialRef> {
+        if let Some(t) = target
+            && let Some(Target::Ssh(ssh)) = self.config.targets.get(t)
+            && let Some(r) = &ssh.credential
+        {
+            return vec![r.clone()];
+        }
+        self.plan
+            .credentials
+            .iter()
+            .map(|c| c.reference.clone())
+            .collect()
+    }
+
+    fn reactivate_credentials(&self, target: Option<&str>) {
+        let refs = self.credentials_for(target);
+        if refs.is_empty() {
+            return;
+        }
+        let Ok(mut p) = self.persist.lock() else {
+            return;
+        };
+        for r in &refs {
+            p.state
+                .reactivate(&credential_key(self.opts.ambiente.as_deref(), r));
+        }
+        Self::save(&mut p, &self.plan.name, &self.project);
+    }
 }
 
 fn describe(exit: Exit, timeout: Option<Duration>) -> String {
@@ -359,23 +403,26 @@ async fn run_command(
         }
     }
     ctx.log(step, LogKind::Error, last.clone());
+    let output_tail = ctx.tail(8);
+    let target = ctx.steps.get(step).map(|s| s.target.as_str());
+    let kind = ctx.classify_failure(&format!("{last}\n{}", output_tail.join("\n")), target);
     Err(StepEnd::Failed(Failure {
         message: last,
         command: cmd.line,
-        output_tail: ctx.tail(8),
-        // La detección de fallos de credenciales llega con el hito e.
-        kind: FailureKind::Other,
+        output_tail,
+        kind,
         rollback_to: None,
     }))
 }
 
 fn failure(ctx: &Ctx, message: String, command: String) -> StepEnd {
     ctx.log(0, LogKind::Error, message.clone());
+    let kind = ctx.classify_failure(&message, None);
     StepEnd::Failed(Failure {
         message,
         command,
         output_tail: Vec::new(),
-        kind: FailureKind::Other,
+        kind,
         rollback_to: None,
     })
 }
@@ -781,6 +828,7 @@ async fn run(
     let ctx = Ctx {
         project,
         plan,
+        config,
         opts,
         steps,
         fecha,

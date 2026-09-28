@@ -280,7 +280,7 @@ impl EditorState {
                 if !d.step_id.is_empty() {
                     return d.step_id.clone();
                 }
-                let base = slug(&d.name());
+                let base = baton_core::slug::slug(&d.name(), "paso");
                 let mut id = base.clone();
                 let mut n = 2;
                 while used.contains(&id) {
@@ -1021,35 +1021,5 @@ fn kind_of(label: &str) -> StepKind {
         "backup" => StepKind::Backup,
         "gate" => StepKind::Gate,
         _ => StepKind::Comando,
-    }
-}
-
-/// Un id válido (minúsculas, números, `-` y `_`) a partir de un nombre en español.
-fn slug(name: &str) -> String {
-    let fold = |c: char| match c {
-        'á' | 'à' | 'ä' | 'â' | 'Á' => 'a',
-        'é' | 'è' | 'ë' | 'ê' | 'É' => 'e',
-        'í' | 'ì' | 'ï' | 'î' | 'Í' => 'i',
-        'ó' | 'ò' | 'ö' | 'ô' | 'Ó' => 'o',
-        'ú' | 'ù' | 'ü' | 'û' | 'Ú' => 'u',
-        'ñ' | 'Ñ' => 'n',
-        c => c,
-    };
-    let mut out = String::new();
-    let mut dash = false;
-    for c in name.chars().map(fold) {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            dash = false;
-        } else if !dash && !out.is_empty() {
-            out.push('-');
-            dash = true;
-        }
-    }
-    let out = out.trim_end_matches('-').to_string();
-    if out.is_empty() {
-        "paso".to_string()
-    } else {
-        out
     }
 }

@@ -70,6 +70,15 @@ impl Fx {
     fn has(&self, rel: &str) -> bool {
         Path::new(&self.root).join(rel).exists()
     }
+
+    fn write_credential(&self, ambiente: Option<&str>, file: &str, content: &str) {
+        let dir = match ambiente {
+            Some(a) => self.root.join(".baton/credentials").join(a),
+            None => self.root.join(".baton/credentials"),
+        };
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(file), content).unwrap();
+    }
 }
 
 fn out(o: &Output) -> String {
@@ -398,6 +407,72 @@ fn validate_and_other_subcommands_still_win_over_the_plan_shortcut() {
     let o = fx.baton(&["validate"]);
     assert_eq!(o.status.code(), Some(0));
     assert!(out(&o).contains("baton/plans/instalar.toml"));
+}
+
+#[test]
+fn a_missing_credential_fails_in_ci_naming_the_field_and_the_expected_file() {
+    let plan = format!(
+        "{PLAN}\n[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nlabel = \"Docker registry\"\nref = \"docker.env#GHCR\"\n"
+    );
+    let fx = Fx::new(&plan);
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    let e = err(&o);
+    assert!(e.contains("Docker registry"), "{e}");
+    assert!(e.contains("docker.env#GHCR"), "{e}");
+    assert!(e.contains(".baton/credentials/docker.env"), "{e}");
+    assert!(
+        fx.calls().is_empty(),
+        "no debe ejecutarse nada si falta la credencial"
+    );
+}
+
+#[test]
+fn a_credential_present_in_the_file_lets_the_plan_run_in_ci() {
+    let plan = format!(
+        "{PLAN}\n[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n"
+    );
+    let fx = Fx::new(&plan);
+    fx.write_credential(
+        None,
+        "docker.env",
+        "GHCR_REGISTRY=ghcr.io\nGHCR_USER=u\nGHCR_TOKEN=t\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+}
+
+#[test]
+fn an_ambiente_looks_in_its_own_credentials_subfolder() {
+    let plan = format!(
+        "{PLAN}\n[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n"
+    );
+    let fx = Fx::new(&plan);
+    fx.write_credential(
+        Some("prod"),
+        "docker.env",
+        "GHCR_REGISTRY=ghcr.io\nGHCR_USER=u\nGHCR_TOKEN=t\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "sin --ambiente no debe verla");
+    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+}
+
+#[test]
+fn version_prints_the_installed_version_and_needs_no_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(tmp.path())
+        .arg("version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let text = out(&o);
+    assert!(text.starts_with("baton "), "{text}");
+    assert_eq!(text.trim(), format!("baton {}", env!("CARGO_PKG_VERSION")));
 }
 
 /// Copia `examples/prueba-local` a un directorio temporal para ejecutarlo sin ensuciar el repo.

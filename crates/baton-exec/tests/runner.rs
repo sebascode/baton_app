@@ -493,6 +493,102 @@ fn failure_output_tail_keeps_only_the_last_lines() {
 }
 
 #[test]
+fn an_auth_looking_failure_is_classified_as_auth_and_reactivates_a_silenced_credential() {
+    let fx = Fx::new(&[]);
+    let mut st = State::default();
+    st.set_silenced("docker.env#GHCR", true, "ayer");
+    st.save(&fx.project).unwrap();
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"docker.env#GHCR".parse().unwrap(),
+        &[
+            ("registry", "ghcr.io".to_string()),
+            ("user", "sofia".to_string()),
+            ("token", "ghp_x".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo 'denied: requested access' >&2; exit 1\"\n",
+    );
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(failure(&events).kind, baton_core::events::FailureKind::Auth);
+    assert!(
+        !fx.state().is_silenced("docker.env#GHCR"),
+        "el flag se reactiva en silencio"
+    );
+}
+
+#[test]
+fn a_plain_failure_does_not_touch_a_silenced_credential() {
+    let fx = Fx::new(&[]);
+    let mut st = State::default();
+    st.set_silenced("docker.env#GHCR", true, "ayer");
+    st.save(&fx.project).unwrap();
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"docker.env#GHCR".parse().unwrap(),
+        &[
+            ("registry", "ghcr.io".to_string()),
+            ("user", "sofia".to_string()),
+            ("token", "ghp_x".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"exit 1\"\n",
+    );
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(
+        failure(&events).kind,
+        baton_core::events::FailureKind::Other
+    );
+    assert!(
+        fx.state().is_silenced("docker.env#GHCR"),
+        "un fallo que no es de autenticación no reactiva nada"
+    );
+}
+
+#[test]
+fn a_dry_run_failure_never_touches_state() {
+    let fx = Fx::new(&[]);
+    let mut st = State::default();
+    st.set_silenced("docker.env#GHCR", true, "ayer");
+    st.save(&fx.project).unwrap();
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"docker.env#GHCR".parse().unwrap(),
+        &[
+            ("registry", "ghcr.io".to_string()),
+            ("user", "sofia".to_string()),
+            ("token", "ghp_x".to_string()),
+        ],
+    )
+    .unwrap();
+
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo unauthorized >&2; exit 1\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.dry_run = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Completed); // dry-run no ejecuta nada, no falla
+    assert!(fx.state().is_silenced("docker.env#GHCR"));
+}
+
+#[test]
 fn a_timeout_fails_the_step_and_does_not_wait_for_the_command() {
     let fx = Fx::new(&[]);
     let p = plan(
