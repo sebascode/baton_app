@@ -19,11 +19,18 @@ const SLOW_AFTER: Duration = Duration::from_millis(1500);
 pub struct ConfigDriver {
     project: Project,
     name: String,
+    /// Plan que el usuario pidió abrir desde la pestaña Planes: al cerrar esta pantalla se abre
+    /// su editor.
+    pub open_plan: Option<String>,
 }
 
 impl ConfigDriver {
     pub fn new(project: Project, name: String) -> ConfigDriver {
-        ConfigDriver { project, name }
+        ConfigDriver {
+            project,
+            name,
+            open_plan: None,
+        }
     }
 
     /// "Probar conexión" de un destino: local es instantáneo, ssh se conecta de verdad
@@ -146,8 +153,9 @@ impl Driver for ConfigDriver {
             Effect::Quit => return Flow::Quit,
             Effect::SaveConfig(config) => self.save(app, *config),
             Effect::TestTarget(i) => self.test_target(app, i),
-            Effect::OpenPlan(_) => {
-                app.notify("abrir un plan desde aquí todavía no está disponible")
+            Effect::OpenPlan(plan) => {
+                self.open_plan = Some(plan);
+                return Flow::Quit;
             }
             _ => {}
         }

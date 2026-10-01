@@ -8,6 +8,7 @@ use baton_core::{Config, Plan};
 use baton_exec::{Mode, RunInput, RunOptions, spawn};
 use baton_store::{Project, check_config, check_plan};
 use baton_tui::PreviewState;
+use baton_tui::demo::Driver;
 
 use crate::text_run::run_text;
 use crate::tui_run::{Flags, RunDriver};
@@ -88,7 +89,16 @@ pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
                 ambiente: flags.ambiente.clone(),
             },
         );
-        let app = driver.app(preview);
+        let mut app = driver.app(preview);
+        // `baton run` va directo a la ejecución (pasando por las credenciales si el plan las
+        // necesita); la vista previa para revisar el plan es `baton start`.
+        match app.run_now() {
+            Some(effect) => {
+                driver.on_effect(&mut app, effect);
+            }
+            None if app.in_preview() => app.notify("no hay pasos activos que ejecutar"),
+            None => {}
+        }
         return match baton_tui::demo::run_app(app, &mut driver) {
             Ok(()) => driver.outcome.map_or(ExitCode::SUCCESS, exit_for),
             Err(e) => {
@@ -189,10 +199,9 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         project.display_path(&project.plan_path(&plan_name))
     );
     if steps.is_empty() {
-        println!(
-            "sin compose ni Dockerfile detectados: el plan queda vacío, agrega pasos en el editor"
-        );
+        println!("no encontré docker-compose ni Dockerfile en esta carpeta: el plan quedó vacío");
     } else {
+        println!("armado con lo que encontré en la carpeta:");
         for s in &steps {
             println!("  paso '{}': {} archivo(s)", s.id, s.source.0.len());
         }
@@ -204,33 +213,43 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         );
     }
 
+    let tip = init_next_steps(&plan_name, steps.is_empty());
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        edit(project, &plan_name)
+        println!("abriendo el plan para que lo revises (e edita los pasos, esc sale)...");
+        let code = crate::start::open(project, &plan_name, true);
+        println!("{tip}");
+        code
     } else {
-        println!("revisa y completa el plan con: baton edit {plan_name}");
+        println!("{tip}");
         ExitCode::SUCCESS
     }
 }
 
-/// `baton edit <plan>`: el editor de pasos y gates sobre el plan real.
-pub fn edit(project: &Project, plan_name: &str) -> ExitCode {
-    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        eprintln!("error: baton edit necesita una terminal interactiva");
-        return ExitCode::from(EXIT_USAGE);
+/// Qué hacer después de `baton init`.
+fn init_next_steps(plan: &str, empty: bool) -> String {
+    let mut rows: Vec<(String, &str)> = Vec::new();
+    if empty {
+        rows.push((
+            format!("baton start {plan}"),
+            "abre el plan para agregar sus pasos",
+        ));
+        rows.push((
+            "baton import <archivo>".to_string(),
+            "o crea otro plan desde un pipeline de GitHub, GitLab o Azure",
+        ));
+    } else {
+        rows.push((
+            format!("baton start {plan}"),
+            "revisa el plan y ajusta sus pasos",
+        ));
+        rows.push((format!("baton run {plan}"), "ejecuta el plan directo"));
     }
-    let (config, plan) = match load(project, plan_name) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let mut driver = RunDriver::new(project.clone(), config, plan, Flags::default());
-    let app = driver.editor_app();
-    match baton_tui::demo::run_app(app, &mut driver) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    rows.push((
+        "baton config".to_string(),
+        "destinos, logs y credenciales del proyecto",
+    ));
+    rows.push(("baton".to_string(), "muestra el estado del proyecto"));
+    format!("\n{}", crate::start::next_steps(&rows))
 }
 
 pub fn rollback(project: &Project, plan_name: &str) -> ExitCode {

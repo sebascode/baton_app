@@ -12,9 +12,9 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use baton_core::config::{CommandProvider, Config, SecretProvider};
+use baton_core::config::{Config, SecretProvider};
 use baton_core::credential::CredentialRef;
-use baton_core::secrets::{is_safe_ambiente, render};
+use baton_core::secrets::{is_safe_ambiente, provider_command};
 
 use crate::credentials::{env_path, read_env};
 use crate::project::Project;
@@ -81,8 +81,8 @@ impl<'a> Resolver<'a> {
         }
 
         let mut error = None;
-        if let Some((name, SecretProvider::Command(cmd))) = self.config.secret_provider(provider) {
-            match self.ask(name, cmd, r, field) {
+        if let Some((name, spec)) = self.config.secret_provider(provider) {
+            match self.ask(name, spec, r, field) {
                 Ok(Some(v)) => {
                     return Resolved {
                         value: Some(v),
@@ -118,7 +118,7 @@ impl<'a> Resolver<'a> {
     fn ask(
         &self,
         name: &str,
-        cmd: &CommandProvider,
+        spec: &SecretProvider,
         r: &CredentialRef,
         field: &str,
     ) -> Result<Option<String>, String> {
@@ -129,8 +129,8 @@ impl<'a> Resolver<'a> {
                 "el ambiente '{a}' no se puede usar en un comando (solo letras, números, . - _)"
             ));
         }
-        let line = render(&cmd.get, self.ambiente, r, field);
-        let timeout = cmd.timeout.map_or(DEFAULT_TIMEOUT, |t| t.as_duration());
+        let line = provider_command(spec, self.ambiente, r, field);
+        let timeout = spec.timeout().map_or(DEFAULT_TIMEOUT, |t| t.as_duration());
         let key = format!("{name}\0{line}");
         if let Some(v) = cache().lock().ok().and_then(|c| c.get(&key).cloned()) {
             return Ok(Some(v));
@@ -208,6 +208,8 @@ fn run_command(line: &str, cwd: &Path, timeout: Duration) -> Result<Option<Strin
             .find(|l| !l.trim().is_empty())
             .map(|l| l.trim().chars().take(200).collect::<String>());
         return Err(match (status.code(), tail) {
+            // 127: el shell no encontró el comando (`vault`, `az`, `op`...)
+            (Some(127), Some(t)) => format!("{t} (¿está instalado y en el PATH?)"),
             (_, Some(t)) => t,
             (Some(c), None) => format!("terminó con código {c}"),
             (None, None) => "terminó por una señal".to_string(),
@@ -320,6 +322,16 @@ mod tests {
             res.error.as_deref(),
             Some("proveedor 'vault': terminó con código 3")
         );
+    }
+
+    #[test]
+    fn a_missing_command_says_to_check_the_install() {
+        let (_t, p) = project();
+        let c = cfg("baton-no-existe-xyz --version", "");
+        let res = Resolver::new(&p, &c, None).resolve_with(&r(), "TOKEN", Some("vault"), no_env);
+        let err = res.error.unwrap();
+        assert!(err.starts_with("proveedor 'vault': "), "{err}");
+        assert!(err.ends_with("(¿está instalado y en el PATH?)"), "{err}");
     }
 
     #[test]

@@ -27,6 +27,14 @@ impl Project {
             .map(Project::at)
     }
 
+    /// Si `start` está dentro del proyecto pero no en su raíz (se encontró subiendo desde una
+    /// subcarpeta), la ruta de `start` relativa a la raíz (`web`, `services/api`).
+    pub fn subfolder_of(&self, start: &Path) -> Option<PathBuf> {
+        let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+        let rel = start.strip_prefix(&self.root).ok()?;
+        (!rel.as_os_str().is_empty()).then(|| rel.to_path_buf())
+    }
+
     pub fn baton_dir(&self) -> PathBuf {
         self.root.join(BATON_DIR)
     }
@@ -105,5 +113,28 @@ mod tests {
         }
         fs::create_dir(p.plans_dir().join("subdir.toml")).unwrap();
         assert_eq!(p.list_plans(), ["alfa", "zeta"]);
+    }
+
+    #[test]
+    fn a_project_is_found_from_a_subfolder_and_says_where_you_are() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("baton/plans")).unwrap();
+        std::fs::create_dir_all(root.join("web/src")).unwrap();
+
+        let from_root = Project::discover(&root).unwrap();
+        assert_eq!(from_root.root, root);
+        assert_eq!(from_root.subfolder_of(&root), None);
+
+        let from_sub = Project::discover(&root.join("web/src")).unwrap();
+        assert_eq!(from_sub.root, root, "sube hasta el proyecto");
+        assert_eq!(
+            from_sub.subfolder_of(&root.join("web/src")),
+            Some(PathBuf::from("web/src"))
+        );
+
+        // fuera de cualquier proyecto no hay nada que encontrar
+        let other = tempfile::tempdir().unwrap();
+        assert!(Project::discover(other.path()).is_none());
     }
 }

@@ -8,6 +8,9 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 
+[profile.release]
+strip = true
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

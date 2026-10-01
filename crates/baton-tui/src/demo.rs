@@ -106,7 +106,7 @@ impl Driver for DemoDriver {
             Effect::SavePlan(_) | Effect::SaveConfig(_) => {
                 app.notify("demo: los datos son de mentira, no se guarda nada");
             }
-            Effect::Edit(_) | Effect::AddGate(_) | Effect::OpenPlan(_) => {}
+            Effect::Edit(_) | Effect::AddGate(_) | Effect::OpenPlan(_) | Effect::SwitchPlan(_) => {}
         }
         Flow::Continue
     }

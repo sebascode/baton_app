@@ -1,0 +1,536 @@
+.\" Página de manual de baton. Se instala con scripts/install.sh.
+.\" Probar sin instalar: man ./man/baton.1
+.TH BATON 1 "" "baton" "Manual de baton"
+.
+.SH NOMBRE
+baton \- orquesta instalaciones y despliegues definidos en carpetas
+.
+.SH SINOPSIS
+.B baton
+.RI [ \-C " carpeta" ]
+.RI [ comando ]
+.RI [ opciones ]
+.br
+.B baton
+.I plan
+.RI [ opciones\ de\ run ]
+.br
+.B baton
+.RB "(sin argumentos: muestra el estado del proyecto)"
+.
+.SH DESCRIPCIÓN
+.B baton
+ejecuta, en orden y mostrando en todo momento qué está haciendo, los pasos de un
+.I plan
+(archivos docker\-compose, Dockerfiles y comandos) distribuidos en las carpetas de un proyecto.
+Funciona en la terminal, con pantallas navegables con el teclado, y también sin terminal (por ejemplo en CI), donde nunca pregunta nada.
+.PP
+Un plan se ejecuta en la máquina local, en un servidor por \fBssh\fR o en un \fBdocker context\fR. Antes de ejecutar valida todo de una vez, pide o confirma las credenciales necesarias, y después de cada paso puede esperar una condición (un \fIgate\fR) antes de seguir. El backup y el rollback son siempre opcionales.
+.PP
+Además de ejecutar planes, \fBbaton\fR trae cuatro preguntas para usar dentro de scripts de bash (\fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR e \fBinput\fR) y puede convertir pipelines de GitHub Actions, GitLab CI y Azure Pipelines en planes.
+.
+.SH EMPEZAR
+.nf
+.RS
+baton init              prepara el proyecto y abre su primer plan para editarlo
+baton start             abre el plan: revisarlo, editarlo y ejecutarlo
+baton run               ejecuta el plan directo
+baton config            destinos, logs y credenciales del proyecto
+.RE
+.fi
+.PP
+Para ver las pantallas sin tocar nada: \fBbaton demo\fR.
+.
+.SH CONCEPTOS
+.TP
+.B proyecto
+Una carpeta que contiene \fIbaton/plans/\fR o \fI.baton/\fR. \fBbaton\fR busca el proyecto en la carpeta actual y hacia arriba, así que funciona desde cualquier subcarpeta (por ejemplo \fIapp1/web\fR). Cuando lo encuentra en una carpeta superior lo dice en stderr (\fBproyecto: /ruta (una carpeta superior; estás en web/)\fR). Con \fB\-C\fR se indica otra carpeta.
+.TP
+.B plan
+Una lista ordenada de pasos, guardada en \fIbaton/plans/<plan>.toml\fR. Es parte del proyecto y se versiona con él. El nombre del plan debe coincidir con el del archivo.
+.TP
+.B paso
+Una acción del plan: levantar un compose, construir un Dockerfile, correr un comando, verificar algo, hacer un backup o esperar una confirmación. Los pasos corren de forma secuencial, en el orden del plan.
+.TP
+.B gate
+Una condición que debe cumplirse antes de pasar al paso siguiente: una confirmación del usuario (manual) o uno o varios checks automáticos (healthcheck de docker, HTTP, un comando, un contenedor corriendo).
+.TP
+.B destino
+Dónde corre un paso: \fBlocal\fR, \fBssh\fR (host, usuario, directorio remoto, bastion opcional) o \fBcontext\fR (un docker context). Cada paso elige su destino.
+.TP
+.B ambiente
+Una dimensión aparte del destino (dev, staging, prod...). Solo decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR); nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes.
+.TP
+.B credencial
+Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAMPO\fR (por ejemplo \fIdocker.env#GHCR\fR agrupa \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR y \fBGHCR_TOKEN\fR). El plan guarda la referencia, nunca el valor.
+.
+.SH OPCIONES GLOBALES
+.TP
+.BR \-C ", " \-\-dir " " \fIcarpeta\fR
+Carpeta del proyecto. Por defecto, la actual o la primera superior que sea un proyecto. Las rutas relativas que se den a un comando (por ejemplo el archivo de \fBimport\fR) se resuelven contra esta carpeta.
+.TP
+.BR \-h ", " \-\-help
+Muestra la ayuda de \fBbaton\fR o de un comando.
+.TP
+.BR \-V ", " \-\-version
+Muestra la versión y el commit del que se compiló.
+.
+.SH COMANDOS
+.SS baton start [plan]
+Abre la \fIvista del plan\fR: la lista de pasos con sus toggles de backup, rollback automático y dry-run. Desde ahí se edita (\fBe\fR), se ejecuta (\fBenter\fR), se ve el pipeline (\fBv\fR) y se cambia de plan (\fBp\fR). Si el plan no existe, lo crea vacío y lo abre en el editor. Con un plan vacío entra directo al editor; \fBesc\fR vuelve a la vista del plan.
+.PP
+Sin nombre usa el único plan del proyecto; si hay varios y hay terminal ofrece una lista numerada. Necesita una terminal interactiva. Un plan que se pueda leer se abre aunque tenga errores de validación: el editor es donde se arreglan.
+.PP
+\fBedit\fR es un alias antiguo (no aparece en la ayuda).
+.SS baton run [plan]
+Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la ejecución en pantalla (pasando antes por la de credenciales si el plan las necesita); sin terminal, con \fB\-\-no\-tui\fR o con \fBCI\fR definido imprime texto plano y un resumen. \fBbaton <plan>\fR es un atajo de \fBbaton run <plan>\fR.
+.TP
+.B \-\-no\-tui
+Texto plano en vez de la pantalla.
+.TP
+.B \-\-dry\-run
+No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado).
+.TP
+.B \-\-resume
+Salta los pasos que terminaron bien en la última ejecución (los muestra como omitidos).
+.TP
+.B \-\-assume\-yes
+Responde que sí a los gates manuales cuando no hay terminal. Sin esta opción, un plan con un gate manual falla antes de ejecutar si no hay terminal.
+.TP
+.BR \-\-backup ", " \-\-no\-backup
+Fuerzan hacer (o no hacer) backup, por encima de lo que diga el plan.
+.TP
+.BI \-\-ambiente " ambiente"
+Ambiente del que se resuelven las credenciales.
+.SS baton create plan
+Crea el archivo de un plan vacío y nada más (no lo abre ni toca \fI.baton/\fR). No pisa un plan existente. El nombre se normaliza a minúsculas, números, \fB\-\fR y \fB_\fR, y se avisa si cambió.
+.SS baton init [plan]
+Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR y \fIDockerfile\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma como máximo dos pasos: \fIbuild\fR (los Dockerfile) y \fIservicios\fR (los compose). El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
+.TP
+.BI \-\-target " destino"
+Destino de los pasos encontrados.
+.TP
+.BI \-\-ambiente " a,b,c"
+Crea las carpetas de credenciales de esos ambientes.
+.TP
+.B \-\-no\-scan
+No escanea la carpeta: el plan queda vacío.
+.TP
+.B \-\-here
+Crea el proyecto en esta carpeta aunque una carpeta superior ya tenga uno. Sin esta opción, \fBinit\fR ejecutado en una subcarpeta de un proyecto agrega el plan a ese proyecto.
+.SS baton import archivo
+Convierte un pipeline de otra plataforma en un plan. Es de mejor esfuerzo y con pérdida: nada se descarta en silencio. Lo que no tiene equivalente queda como un paso \fBdesactivado\fR (con el original como comentario) o como una nota del informe.
+.PP
+Se aceptan GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) y Azure Pipelines (\fIazure\-pipelines.yml\fR). Todo paso con una condición (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) se importa desactivado. Un \fBenvironment\fR o \fBwhen: manual\fR genera un gate manual antes del job (activo si el ambiente parece producción). Un \fBdocker compose up\fR suelto se convierte en un paso \fBcompose\fR. Las acciones que solo preparan el agente (checkout, cache, artifacts, setup) se omiten.
+.PP
+El informe lista lo desactivado, lo omitido y las variables que los comandos esperan en el entorno, y sugiere los bloques \fB[[credentials]]\fR cuando el nombre lo permite (por ejemplo \fBGHCR_TOKEN\fR). Esos bloques no se escriben en el plan: se pegan \fBal final\fR del archivo.
+.TP
+.BR \-\-from " " github | gitlab | azure
+Plataforma de origen. Por defecto se detecta por el nombre y el contenido del archivo.
+.TP
+.BI \-\-plan " nombre"
+Nombre del plan (por defecto, el del archivo).
+.TP
+.BI \-\-target " destino"
+Destino de todos los pasos importados.
+.TP
+.B \-\-dry\-run
+Muestra el informe sin escribir nada.
+.SS baton rollback [plan]
+Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso que terminó (y del que falló, que pudo dejar cosas a medias), en orden inverso.
+.SS baton validate [plan]
+Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
+.SS baton config
+Abre la configuración del proyecto, con pestañas \fBDestinos\fR, \fBLogs\fR, \fBCredenciales\fR y \fBPlanes\fR. Permite probar la conexión de un destino y guardar con \fBctrl s\fR. \fBenter\fR sobre un plan, en la pestaña Planes, lo abre. Necesita una terminal.
+.SS baton demo
+Recorre todas las pantallas con datos de mentira, sin tocar ningún proyecto. Sirve para conocer baton y para mostrarlo.
+.TP
+.B \-\-fast
+Acorta las esperas del escenario.
+.TP
+.BR \-\-screen " " vista | credenciales | config | editor | gate | pipeline
+Pantalla con la que empezar.
+.SS baton shell-init [bash|zsh|fish]
+Imprime el código de shell que muestra el proyecto en el prompt, como \fB(venv)\fR o la rama de git: \fB(baton:app1)\fR mientras se está dentro de un proyecto o de cualquiera de sus subcarpetas. Sin argumento usa el shell de \fB$SHELL\fR. Ver \fBPROMPT DE LA TERMINAL\fR. No necesita proyecto.
+.TP
+.B \-\-no\-prefix
+Solo define la función \fB__baton_ps1\fR y no toca el prompt (para quien arma su \fBPS1\fR a mano).
+.TP
+.B \-\-color
+La etiqueta en cian.
+.SS baton prompt
+Imprime la etiqueta del proyecto que contiene la carpeta actual, por ejemplo \fB(baton:app1)\fR. Fuera de un proyecto no imprime nada y sale con 1, de modo que sirve como condición en herramientas de prompt (por ejemplo starship).
+.TP
+.BI \-\-format " texto"
+Formato de la etiqueta: \fB{name}\fR es la carpeta del proyecto y \fB{root}\fR su ruta completa. Por defecto, \fB(baton:{name})\fR.
+.SS baton version
+Imprime \fBbaton <versión> (<commit>)\fR, o \fB(<commit>, con cambios locales)\fR si se compiló con cambios sin commitear. No necesita proyecto.
+.SS baton (sin argumentos)
+Muestra el proyecto, sus planes (cantidad de pasos, si tienen errores y cómo terminó la última ejecución) y qué comandos usar a continuación. Fuera de un proyecto, explica cómo empezar.
+.
+.SH PREGUNTAS PARA SCRIPTS
+.nf
+.RS
+env=$(baton select "¿Ambiente?" dev staging prod \-\-default dev)
+servicios=$(baton multiselect "¿Qué instalar?" postgres redis nginx \-\-min 1)
+nombre=$(baton input "Nombre del stack" \-\-default demo)
+if baton confirm "¿Desplegar a $env?" \-\-default no; then ...; fi
+.RE
+.fi
+.PP
+La pregunta se dibuja en la terminal y \fBsolo la respuesta va a la salida estándar\fR, de modo que \fB$(...)\fR la captura. Esto vale aunque el script redirija stderr (\fB2>/dev/null\fR): en ese caso \fBbaton\fR vuelve a ejecutarse con stderr apuntando a \fI/dev/tty\fR. No necesitan un proyecto.
+.TP
+.BI select " pregunta opción..."
+Elige una opción y la imprime.
+.TP
+.BI multiselect " pregunta opción..."
+Elige varias y las imprime, una por línea. \fB\-\-sep\fR \fIs\fR las une con otro separador (\fB\\n\fR y \fB\\t\fR escritos a mano valen); \fB\-\-min\fR \fIn\fR exige al menos \fIn\fR.
+.TP
+.BI confirm " pregunta"
+Pregunta sí o no. No imprime nada: responde con el código de salida (0 sí, 1 no), para usarlo en un \fBif\fR. Acepta \fBs\fR, \fBsi\fR, \fBsí\fR, \fBy\fR, \fByes\fR, \fBn\fR y \fBno\fR.
+.TP
+.BI input " pregunta"
+Pregunta un texto y lo imprime. \fB\-\-secret\fR no muestra lo que se escribe.
+.PP
+Opciones comunes: \fB\-\-default\fR \fIvalor\fR (la respuesta cuando no hay terminal, y la que aparece marcada al preguntar; en \fBmultiselect\fR, varias separadas por coma) y \fB\-\-name\fR \fInombre\fR (ver más abajo).
+.SS Cómo se resuelve cada respuesta
+.IP 1. 4
+La variable \fBBATON_<NOMBRE>\fR, si está definida. Siempre gana, incluso con terminal, y se avisa en stderr de dónde salió. Un valor que no es una de las opciones, o un sí/no inválido, es un error.
+.IP 2. 4
+La pregunta, si hay quien pueda responder.
+.IP 3. 4
+\fB\-\-default\fR, si no hay terminal.
+.IP 4. 4
+Un error que dice qué falta (por ejemplo: define BATON_AMBIENTE o pasa \-\-default).
+.PP
+\fI<NOMBRE>\fR sale de \fB\-\-name\fR o, si no se da, del texto de la pregunta sin acentos ni signos: \fB¿Qué instalar?\fR da \fBBATON_QUE_INSTALAR\fR. Una variable vacía cuenta como no definida, salvo en \fBinput\fR.
+.PP
+No se pregunta nada si \fBCI\fR o \fBBATON_NONINTERACTIVE\fR están definidas, ni si no hay una terminal que abrir.
+.
+.SH PROMPT DE LA TERMINAL
+Para ver siempre en qué proyecto estás (como \fB(venv)\fR de python o la rama de git), agrega una línea al archivo de arranque de tu shell:
+.nf
+.RS
+eval "$(baton shell-init bash)"          # en ~/.bashrc
+eval "$(baton shell-init zsh)"           # en ~/.zshrc
+baton shell-init fish | source           # en ~/.config/fish/config.fish
+.RE
+.fi
+.PP
+El prompt pasa a mostrar \fB(baton:app1) \fR delante, dentro del proyecto y de todas sus subcarpetas, y lo quita al salir. \fBbaton\fR no modifica ningún archivo por su cuenta: la línea la agregas tú.
+.PP
+El código que se imprime \fBno ejecuta baton en cada prompt\fR: busca el proyecto hacia arriba comprobando si existe \fIbaton/plans/\fR o \fI.baton/\fR, igual que \fBbaton\fR, así que no se nota. La etiqueta usa la carpeta del proyecto más cercano. En bash y zsh el nombre de la carpeta se sanea antes de ponerlo en el prompt, porque el prompt expande \fB$(...)\fR.
+.PP
+Si ya armas tu \fBPS1\fR a mano (por ejemplo con funciones como \fB$(__prompt_git)\fR), usa \fB\-\-no\-prefix\fR y coloca la etiqueta donde quieras:
+.nf
+.RS
+eval "$(baton shell-init bash --no-prefix --color)"
+PS1='$(__baton_ps1)\\u@\\h \\w\\$ '
+.RE
+.fi
+.PP
+Para herramientas de prompt que ejecutan un comando (starship, por ejemplo), usa \fBbaton prompt\fR:
+.nf
+.RS
+[custom.baton]
+command = "baton prompt"
+when = "baton prompt"
+.RE
+.fi
+.PP
+Con herramientas que reescriben todo el prompt en cada comando (starship, oh\-my\-posh), el prefijo automático puede perderse: usa \fB\-\-no\-prefix\fR con su módulo propio, o \fBbaton prompt\fR. El script de bash y el de fish están probados; el de zsh no se pudo probar en la máquina de desarrollo.
+.
+.SH ARCHIVOS
+.TP
+.I baton/plans/<plan>.toml
+Los planes. Se versionan con el proyecto.
+.TP
+.I .baton/
+Carpeta local de esta máquina. Se crea en la primera ejecución real y se agrega al \fI.gitignore\fR. \fBNunca sale de la máquina\fR: a los destinos solo viajan las carpetas del plan y, al ejecutar, las variables que cada paso necesita.
+.TP
+.I .baton/config.toml
+Destinos, logs y proveedores de secretos de esta máquina. \fBlocal\fR existe siempre aunque no se declare.
+.TP
+.I .baton/state.json
+Última ejecución de cada plan (estado por paso, para reanudar y para el pipeline) y los flags de "no volver a preguntar" por credencial.
+.TP
+.I .baton/credentials/[<ambiente>/]{git,docker,servers,db}.env
+Credenciales en formato \fBCLAVE=valor\fR, con permisos 600.
+.TP
+.I .baton/logs/
+Un log por ejecución (por defecto \fI{plan}\-{fecha}.log\fR).
+.TP
+.I .baton/backups/
+Backups de volúmenes (un \fI.tgz\fR por volumen).
+.
+.SH FORMATO DE UN PLAN
+.nf
+.RS
+name = "instalar"
+
+[options]
+backup = false            # interruptor general de backups
+auto_rollback = false     # deshacer solo al abortar o sin terminal
+dry_run = false
+
+[backup]
+volumes = ["pg_data"]
+dir = ".baton/backups"
+
+[[credentials]]
+id = "ghcr"
+kind = "docker"           # git | docker | ssh | db | otro
+ref = "docker.env#GHCR"
+provider = "vault"        # opcional, ver PROVEEDORES DE SECRETOS
+
+[[steps]]
+id = "servicios"
+name = "Levantar servicios"
+type = "compose"
+source = "services/*/docker\-compose.yml"
+target = "prod\-app"
+depends_on = ["build"]
+timeout = "5m"
+retries = 1
+
+[steps.gate]
+mode = "auto"             # o "manual"
+condition = "all"         # all | at_least | critical
+[[steps.gate.checks]]
+kind = "http"
+url = "http://{destino}:8080/health"
+.RE
+.fi
+.PP
+Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
+.PP
+En \fBcompose\fR y \fBdockerfile\fR el comando corre una vez por archivo, dentro de su carpeta (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{file}\fR, \fB{dir}\fR y \fB{name}\fR; un marcador desconocido se deja tal cual y solo da una advertencia.
+.PP
+Los checks de un gate son \fBhealthcheck\fR, \fBhttp\fR, \fBcommand\fR y \fBrunning\fR. Al escanear un origen, cada servicio infiere su check: el \fBhealthcheck\fR del compose si existe; si no, HTTP contra el primer puerto; si no, contenedor arriba durante un tiempo mínimo. Un servicio nuevo nunca se activa solo.
+.PP
+Los pasos se ejecutan en el orden del archivo. \fBdepends_on\fR se valida (existencia, ciclos, dependencias hacia un paso posterior): un paso cuya dependencia no se ejecutó se omite, con el motivo.
+.
+.SH FORMATO DE .baton/config.toml
+.nf
+.RS
+[defaults]
+target = "local"
+secrets = "vault"         # proveedor de secretos por defecto
+
+[targets.prod\-app]
+type = "ssh"
+host = "10.0.4.12"
+port = 22
+user = "deploy"
+credential = "servers.env#PROD_APP"
+remote_dir = "/opt/stack"
+bastion = "bastion"       # otro destino ssh
+sync = true               # rsync de las carpetas del plan antes de usarlo
+
+[targets.qa]
+type = "context"
+context = "qa\-swarm"
+
+[logs]
+local = ".baton/logs/{plan}\-{fecha}.log"
+remote = "/var/log/baton"
+format = "text"           # o "json"
+[logs.retention]
+days = 30
+max_size = "500MB"
+.RE
+.fi
+.PP
+Un destino \fBssh\fR usa el binario \fBssh\fR del sistema (respeta \fI~/.ssh/config\fR). Si \fBsync\fR está activo, \fBrsync\fR copia la raíz del proyecto, nunca \fI.baton/\fR, una sola vez por destino y por ejecución. El bastion se traduce a \fB\-J\fR. Solo se soportan llaves sin frase secreta o cargadas en un agente. Un \fBcontext\fR ejecuta con \fBDOCKER_CONTEXT\fR definida.
+.
+.SH CREDENCIALES
+Antes de ejecutar, \fBbaton\fR pide o confirma las credenciales que el plan necesita (las declaradas con \fB[[credentials]]\fR más la de cada destino ssh que use un paso activo). En la pantalla se puede confirmar, editar, probar la conexión (real solo para docker) o marcar "no volver a preguntar", un flag por credencial que se guarda en \fIstate.json\fR. Si una credencial silenciada falla por autenticación, el flag se reactiva sin avisar.
+.PP
+Los valores secretos se enmascaran en pantalla (\fBghp_••••3kQ\fR) y se tachan de todo lo que \fBbaton\fR muestra o guarda (pantalla, log, mensaje de fallo).
+.PP
+Los comandos reciben las credenciales declaradas como variables de entorno \fBPREFIJO_CAMPO\fR, \fBpero solo las que mencionan\fR (\fB$GHCR_TOKEN\fR, \fB${GHCR_TOKEN}\fR). Los pasos \fBcompose\fR y \fBdockerfile\fR reciben todas, porque sus archivos interpolan \fB${VAR}\fR. Los secretos nunca viajan en los argumentos de un proceso: en local van por el entorno y por ssh por la entrada estándar.
+.PP
+Campos por tipo: \fBgit\fR (USER, TOKEN), \fBdocker\fR (REGISTRY, USER, TOKEN), \fBssh\fR (KEY, PASSPHRASE), \fBdb\fR (USER, PASSWORD) y \fBotro\fR (VALUE).
+.PP
+Sin terminal no se pregunta nada: cada campo debe resolverse desde el \fI.env\fR, la variable de entorno o el proveedor, o la ejecución falla antes de empezar diciendo qué credencial, qué campo y dónde se esperaba.
+.
+.SH PROVEEDORES DE SECRETOS
+Además del \fI.env\fR, un valor puede venir de un gestor de secretos. Se declaran en \fI.baton/config.toml\fR (nunca viajan con el plan) y una credencial elige uno con \fBprovider\fR (\fBfile\fR fuerza solo el \fI.env\fR). Sin \fBprovider\fR se usa \fB[defaults].secrets\fR.
+.nf
+.RS
+[secrets.vault]
+type = "vault"
+path = "secret/baton/{ambiente}/{prefijo}"
+addr = "https://vault.empresa.cl"   # opcional
+# opcionales: mount, field, namespace, timeout
+
+[secrets.kv]
+type = "azure\-keyvault"
+vault = "kv\-empresa"
+name = "{ambiente}\-{prefijo}\-{campo}"
+# opcionales: subscription, timeout
+
+[secrets.otro]
+type = "command"
+get = "op read op://infra/{prefijo}/{campo}"
+timeout = "15s"
+.RE
+.fi
+.PP
+\fBvault\fR corre \fBvault kv get\fR y \fBazure\-keyvault\fR corre \fBaz keyvault secret show\fR, con el inicio de sesión que ya tenga la máquina (\fBvault login\fR, \fBaz login\fR). \fBcommand\fR corre cualquier comando que imprima el valor. Los marcadores son \fB{ambiente}\fR, \fB{prefijo}\fR, \fB{campo}\fR (en minúsculas), \fB{variable}\fR y \fB{archivo}\fR.
+.PP
+El orden de resolución de cada campo es: variable de entorno, proveedor y, por último, el \fI.env\fR. Si el proveedor falla, se usa el \fI.env\fR como respaldo, de modo que sin red todo sigue funcionando con lo que haya en disco; si tampoco hay valor, el error dice por qué falló el proveedor. Un valor que viene de un proveedor \fBnunca se escribe en disco\fR. Son de solo lectura: \fBbaton\fR no escribe en el gestor.
+.
+.SH TECLAS
+.SS Vista del plan
+.TP
+.BR espacio
+Activar o desactivar el paso.
+.TP
+.B shift + flechas
+Mover el paso.
+.TP
+.BR e ", " g
+Editar el paso, o añadirle un gate.
+.TP
+.B b, r, d
+Alternar backup, rollback automático y dry-run.
+.TP
+.B v
+Ver el pipeline del plan.
+.TP
+.B p
+Cambiar de plan (solo si hay más de uno). Se niega si el editor tiene cambios sin guardar.
+.TP
+.B enter
+Ejecutar.
+.TP
+.BR q ", " esc
+Salir.
+.SS Editor de pasos
+.TP
+.B tab
+Pasar al campo siguiente.
+.TP
+.B ctrl + s
+Guardar en el archivo del plan, conservando comentarios y formato.
+.TP
+.B ctrl + t
+Probar el paso (siempre en dry-run).
+.TP
+.B ctrl + d
+Duplicar el paso.
+.TP
+.B ctrl + g
+Configurar el gate.
+.TP
+.B esc
+Volver a la vista del plan.
+.SS Durante la ejecución
+.TP
+.B p
+Pausar entre pasos.
+.TP
+.B v
+Alternar el log y el pipeline.
+.TP
+.BR q ", " ctrl + c
+Salir (pide confirmación).
+.PP
+Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer rollback o abortar.
+.
+.SH ENTORNO
+.TP
+.B SHELL
+Si \fBshell\-init\fR no recibe un shell, usa el de esta variable.
+.TP
+.B CI
+Si está definida, \fBrun\fR usa texto plano y los helpers no preguntan.
+.TP
+.B BATON_NONINTERACTIVE
+Los helpers nunca preguntan.
+.TP
+.B BATON_<NOMBRE>
+La respuesta a una pregunta de \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR o \fBinput\fR.
+.TP
+.B <PREFIJO>_<CAMPO>
+El valor de un campo de credencial (por ejemplo \fBGHCR_TOKEN\fR). Gana sobre el \fI.env\fR y sobre el proveedor, así que en CI no hace falta \fI.baton/\fR.
+.TP
+.B VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE
+Los usa \fBvault\fR en los proveedores de ese tipo.
+.
+.SH CÓDIGOS DE SALIDA
+.TP
+.B 0
+Todo bien (en \fBconfirm\fR, la respuesta fue sí).
+.TP
+.B 1
+El proyecto o el plan tienen errores, o no se pudo preparar la ejecución (en \fBconfirm\fR, la respuesta fue no).
+.TP
+.B 2
+Error de uso: no hay proyecto, el plan no existe, opciones contradictorias, o a un helper le falta una respuesta.
+.TP
+.B 3
+La ejecución falló o se abortó.
+.TP
+.B 130
+Una pregunta fue cancelada (\fBesc\fR o \fBctrl + c\fR).
+.
+.SH EJEMPLOS
+Armar un plan desde cero y ejecutarlo:
+.PP
+.nf
+.RS
+baton init
+baton start            # revisar y ajustar los pasos
+baton run
+.RE
+.fi
+.PP
+Ejecutar en CI, sin terminal, con las credenciales en variables y los gates manuales aceptados:
+.PP
+.nf
+.RS
+GHCR_REGISTRY=ghcr.io GHCR_USER=ci GHCR_TOKEN=$TOKEN \\
+  baton run instalar \-\-assume\-yes \-\-ambiente prod
+.RE
+.fi
+.PP
+Convertir un workflow de GitHub y ver antes qué se importaría:
+.PP
+.nf
+.RS
+baton import .github/workflows/deploy.yml \-\-dry\-run
+baton import .github/workflows/deploy.yml \-\-plan deploy
+.RE
+.fi
+.PP
+Retomar un plan que falló a la mitad, o deshacerlo:
+.PP
+.nf
+.RS
+baton run instalar \-\-resume
+baton rollback instalar
+.RE
+.fi
+.PP
+Preguntas en un script, sin terminal en CI:
+.PP
+.nf
+.RS
+BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
+.RE
+.fi
+.
+.SH LIMITACIONES
+Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. \fB{ambiente}\fR no se reemplaza dentro de los comandos de un plan. El editor no borra pasos (solo los desactiva). "Abrir shell" en la pantalla de fallo todavía no está disponible. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+.
+.SH VER TAMBIÉN
+.BR docker (1),
+.BR docker\-compose (1),
+.BR ssh (1),
+.BR rsync (1),
+.BR sh (1)
+.
+.SH AUTOR
+Proyecto en desarrollo; \fB"baton"\fR es un nombre de trabajo y puede cambiar.

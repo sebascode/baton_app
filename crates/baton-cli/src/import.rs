@@ -63,6 +63,7 @@ pub fn run(project: &Project, shown: &Path, file: &Path, flags: ImportFlags) -> 
         println!("simulacro: no se escribe nada (plan '{plan_name}')");
         print_steps(&imported);
         print_notes(&imported);
+        print_credentials(&imported);
         return ExitCode::SUCCESS;
     }
 
@@ -94,11 +95,12 @@ pub fn run(project: &Project, shown: &Path, file: &Path, flags: ImportFlags) -> 
     );
     print_steps(&imported);
     print_notes(&imported);
+    print_credentials(&imported);
 
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        crate::run::edit(project, &plan_name)
+        crate::start::open(project, &plan_name, true)
     } else {
-        println!("revisa y completa el plan con: baton edit {plan_name}");
+        println!("revisa y completa el plan con: baton start {plan_name}");
         ExitCode::SUCCESS
     }
 }
@@ -110,6 +112,29 @@ fn print_steps(imported: &Imported) {
         imported.steps.len(),
         imported.steps.len() - active
     );
+}
+
+/// Los `[[credentials]]` sugeridos, listos para pegar en el plan.
+fn print_credentials(imported: &Imported) {
+    if imported.credentials.is_empty() {
+        return;
+    }
+    println!(
+        "credenciales sugeridas (pégalas al final del plan para que los comandos reciban sus variables):"
+    );
+    for c in &imported.credentials {
+        for line in c.to_toml().lines() {
+            println!("  {line}");
+        }
+        println!("  # usa: {}", c.found.join(", "));
+        if !c.missing.is_empty() {
+            println!(
+                "  # falta definir: {} (se piden o se confirman al ejecutar)",
+                c.missing.join(", ")
+            );
+        }
+        println!();
+    }
 }
 
 fn print_notes(imported: &Imported) {

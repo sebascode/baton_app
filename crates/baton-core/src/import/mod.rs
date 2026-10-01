@@ -4,6 +4,7 @@
 //! informe. Sin IO: recibe el texto del YAML y devuelve los pasos y el informe.
 
 mod azure;
+pub mod credentials;
 mod github;
 mod gitlab;
 
@@ -64,6 +65,9 @@ pub struct Imported {
     pub notes: Vec<Note>,
     /// Variables o secretos que los comandos esperan encontrar en el entorno.
     pub env_needed: Vec<String>,
+    /// `[[credentials]]` que se pueden declarar con lo que esperan los comandos (solo los casos
+    /// claros; ver `credentials`). No se escriben en el plan: se sugieren en el informe.
+    pub credentials: Vec<credentials::CredentialSuggestion>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -371,6 +375,7 @@ impl Builder {
         Ok(Imported {
             platform,
             steps,
+            credentials: credentials::suggest(&self.env_needed.iter().cloned().collect::<Vec<_>>()),
             env_needed: self.env_needed.into_iter().collect(),
             notes: self.notes,
         })

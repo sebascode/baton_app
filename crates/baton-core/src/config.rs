@@ -89,20 +89,68 @@ pub struct Defaults {
     pub secrets: Option<String>,
 }
 
-/// Un proveedor de secretos. Hoy solo `command`; `vault` y `azure-keyvault` llegarán como
-/// atajos que generan el comando.
+/// Un proveedor de secretos. `vault` y `azure-keyvault` son atajos: arman el comando del
+/// gestor (`vault kv get`, `az keyvault secret show`) y corren como un `command` más (ver
+/// `secrets::provider_command`), con el login que ya tenga la máquina.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum SecretProvider {
+    #[serde(rename = "command")]
     Command(CommandProvider),
+    #[serde(rename = "vault")]
+    Vault(VaultProvider),
+    #[serde(rename = "azure-keyvault")]
+    AzureKeyvault(AzureKeyvaultProvider),
 }
 
 impl SecretProvider {
     pub fn kind_label(&self) -> &'static str {
         match self {
             SecretProvider::Command(_) => "command",
+            SecretProvider::Vault(_) => "vault",
+            SecretProvider::AzureKeyvault(_) => "azure-keyvault",
         }
     }
+
+    /// Timeout por llamada declarado, si lo hay.
+    pub fn timeout(&self) -> Option<Dur> {
+        match self {
+            SecretProvider::Command(p) => p.timeout,
+            SecretProvider::Vault(p) => p.timeout,
+            SecretProvider::AzureKeyvault(p) => p.timeout,
+        }
+    }
+}
+
+/// HashiCorp Vault: `vault kv get -field=<campo> <ruta>`. Usa el login de la máquina
+/// (`vault login`, `VAULT_TOKEN`); `addr` y `namespace` solo se ponen si hace falta pisar
+/// `VAULT_ADDR` y `VAULT_NAMESPACE`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultProvider {
+    /// Ruta del secreto, con placeholders (`secret/baton/{ambiente}/{prefijo}`). Con `mount` va
+    /// sin el montaje.
+    pub path: String,
+    /// Montaje del motor KV (`-mount=`), si la ruta no lo trae.
+    pub mount: Option<String>,
+    /// Clave dentro del secreto; por defecto `{campo}`.
+    pub field: Option<String>,
+    pub addr: Option<String>,
+    pub namespace: Option<String>,
+    pub timeout: Option<Dur>,
+}
+
+/// Azure Key Vault: `az keyvault secret show`. Usa el login de la máquina (`az login`).
+/// Un secreto de Key Vault solo admite letras, números y `-`: lo demás del nombre pasa a `-`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AzureKeyvaultProvider {
+    /// Nombre del vault (`--vault-name`).
+    pub vault: String,
+    /// Nombre del secreto, con placeholders; por defecto `{prefijo}-{campo}`.
+    pub name: Option<String>,
+    pub subscription: Option<String>,
+    pub timeout: Option<Dur>,
 }
 
 /// Corre un comando (`sh -c`) por campo de credencial y toma su salida como el valor.

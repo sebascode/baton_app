@@ -92,7 +92,9 @@ impl RunDriver {
 
     /// La aplicación con la vista previa del plan, con el editor, el pipeline y (si el plan
     /// necesita credenciales) la pantalla 2 ya conectados.
-    pub fn app(&mut self, preview: PreviewState) -> App {
+    pub fn app(&mut self, mut preview: PreviewState) -> App {
+        // para poder cambiar de plan desde la vista previa (`p`)
+        preview.plans = self.project.list_plans();
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_editor(self.editor())
@@ -105,6 +107,36 @@ impl RunDriver {
             app = app.with_credentials(creds);
         }
         app
+    }
+
+    /// La aplicación del plan tal como está en disco (vista previa con los toggles del plan).
+    pub fn initial_app(&mut self) -> App {
+        let preview = PreviewState::from_plan(&self.plan);
+        self.app(preview)
+    }
+
+    /// Cambia al plan `name` dentro de la misma pantalla: reemplaza la aplicación entera por la
+    /// de ese plan. No se hace si el editor tiene cambios sin guardar (se perderían).
+    fn switch_plan(&mut self, app: &mut App, name: &str) {
+        if let Some(edited) = app.editor_steps() {
+            match edited {
+                Ok(steps) if steps == self.plan.steps => {}
+                _ => {
+                    return app.notify(
+                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de plan",
+                    );
+                }
+            }
+        }
+        let checked = check_plan(&self.project, name, Some(&self.config));
+        let Some(plan) = checked.value else {
+            return app.notify(&format!("no se pudo leer el plan '{name}'"));
+        };
+        self.plan = plan;
+        *app = self.initial_app();
+        if self.plan.steps.is_empty() {
+            app.open_editor_first();
+        }
     }
 
     /// Credenciales que el plan necesita, resueltas contra `.baton/credentials/` y `state.json`.
@@ -193,11 +225,6 @@ impl RunDriver {
         };
         let (ok, message) = test_connection(req.kind, item);
         c.set_test_result(i, ok, &message);
-    }
-
-    /// La aplicación que abre directamente el editor de pasos (`baton edit`).
-    pub fn editor_app(&self) -> App {
-        App::editor_only(self.editor())
     }
 
     fn start(&mut self, app: &mut App, req: RunRequest) {
@@ -510,6 +537,7 @@ impl Driver for RunDriver {
                 app.notify("no se pudo abrir el editor de pasos");
             }
             Effect::TestCredential(i) => self.test_credential(app, i),
+            Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}
         }
         Flow::Continue
@@ -532,6 +560,33 @@ impl Driver for RunDriver {
 mod tests {
     use super::*;
     use baton_core::plan::CredentialKind;
+
+    /// Cambiar de plan se niega si el editor tiene cambios sin guardar; para que no se niegue
+    /// siempre, abrir el editor sin tocar nada debe dar exactamente los pasos del plan en disco.
+    #[test]
+    fn an_untouched_editor_matches_the_plan_so_switching_is_not_blocked() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/stack-produccion/baton/plans");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let plan = Plan::parse(&text).unwrap();
+            let editor = baton_tui::EditorState::from_plan(
+                &plan,
+                &["local".to_string()],
+                "local",
+                &vec![None; plan.steps.len()],
+            );
+            assert_eq!(
+                editor.to_steps().unwrap(),
+                plan.steps,
+                "{}",
+                entry.path().display()
+            );
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
 
     #[test]
     fn only_what_the_user_changed_is_written() {

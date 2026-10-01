@@ -476,7 +476,10 @@ fn version_prints_the_installed_version_and_needs_no_project() {
     assert_eq!(o.status.code(), Some(0));
     let text = out(&o);
     assert!(text.starts_with("baton "), "{text}");
-    assert_eq!(text.trim(), format!("baton {}", env!("CARGO_PKG_VERSION")));
+    // `baton 0.1.0 (<commit>[, con cambios locales])`
+    let prefix = format!("baton {} (", env!("CARGO_PKG_VERSION"));
+    assert!(text.trim().starts_with(&prefix), "{text}");
+    assert!(text.trim().ends_with(')'), "{text}");
 }
 
 /// Copia `examples/prueba-local` a un directorio temporal para ejecutarlo sin ensuciar el repo.
@@ -615,5 +618,117 @@ fn an_unknown_provider_in_the_plan_is_a_validation_error() {
         "{}\n{}",
         out(&o),
         err(&o)
+    );
+}
+
+// ------------------------------------------- presets vault y azure-keyvault (hito i)
+
+/// `vault` y `az` de mentira: registran con qué entorno y argumentos los llamó baton y responden
+/// `vault-<campo>` / `az-<nombre del secreto>`.
+const FAKE_VAULT: &str = r#"#!/bin/sh
+echo "VAULT_ADDR=$VAULT_ADDR VAULT_NAMESPACE=$VAULT_NAMESPACE $*" >> "$PWD/_provider_calls"
+for a in "$@"; do case "$a" in -field=*) f="${a#-field=}" ;; esac; done
+printf 'vault-%s\n' "$f"
+"#;
+
+const FAKE_AZ: &str = r#"#!/bin/sh
+echo "$*" >> "$PWD/_provider_calls"
+while [ $# -gt 0 ]; do [ "$1" = "--name" ] && n="$2"; shift; done
+printf 'az-%s\n' "$n"
+"#;
+
+fn install_fake(fx: &Fx, name: &str, script: &str) {
+    let p = fx.root.join("_bin").join(name);
+    fs::write(&p, script).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn provider_calls(fx: &Fx) -> String {
+    fs::read_to_string(fx.root.join("_provider_calls")).unwrap_or_default()
+}
+
+fn provider_plan(provider: &str) -> String {
+    format!(
+        "name = \"instalar\"\n\
+         [[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\nprovider = \"{provider}\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"printf '%s|%s' \\\"$GHCR_TOKEN\\\" \\\"$GHCR_USER\\\" > visto.txt\"\n"
+    )
+}
+
+#[test]
+fn the_vault_preset_runs_vault_kv_get_with_the_ambiente_in_the_path() {
+    let fx = Fx::new(&provider_plan("vault"));
+    install_fake(&fx, "vault", FAKE_VAULT);
+    write_config(
+        &fx,
+        "[secrets.vault]\ntype = \"vault\"\npath = \"secret/baton/{ambiente}/{prefijo}\"\n\
+         addr = \"https://vault.test\"\nnamespace = \"equipo-a\"\n",
+    );
+    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
+        "vault-token|vault-user"
+    );
+    let calls = provider_calls(&fx);
+    assert!(
+        calls.contains(
+            "VAULT_ADDR=https://vault.test VAULT_NAMESPACE=equipo-a kv get -field=token secret/baton/prod/GHCR"
+        ),
+        "{calls}"
+    );
+    assert!(
+        !fx.root.join(".baton/credentials").exists(),
+        "nada del vault llega a disco"
+    );
+}
+
+#[test]
+fn the_azure_keyvault_preset_asks_az_for_a_valid_secret_name() {
+    let fx = Fx::new(&provider_plan("kv"));
+    install_fake(&fx, "az", FAKE_AZ);
+    write_config(
+        &fx,
+        "[secrets.kv]\ntype = \"azure-keyvault\"\nvault = \"kv-empresa\"\nname = \"{ambiente}_{prefijo}_{campo}\"\n",
+    );
+    let o = fx.baton(&["run", "instalar", "--ambiente", "qa"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
+        "az-qa-GHCR-token|az-qa-GHCR-user"
+    );
+    let calls = provider_calls(&fx);
+    assert!(
+        calls.contains(
+            "keyvault secret show --vault-name kv-empresa --name qa-GHCR-token --query value -o tsv"
+        ),
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_missing_provider_binary_falls_back_to_the_env_file_and_says_why_when_nothing_is_there() {
+    // `vault` no está instalado: sin respaldo en el .env, el error nombra al proveedor
+    let fx = Fx::new(&provider_plan("vault"));
+    write_config(
+        &fx,
+        "[secrets.vault]\ntype = \"vault\"\npath = \"secret/{prefijo}\"\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(err(&o).contains("proveedor 'vault'"), "{}", err(&o));
+
+    // con el respaldo en el .env, el plan corre igual (autonomía sin red)
+    fx.write_credential(
+        None,
+        "docker.env",
+        "GHCR_REGISTRY=ghcr.io\nGHCR_USER=u\nGHCR_TOKEN=t\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
+        "t|u"
     );
 }

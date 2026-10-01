@@ -1,15 +1,20 @@
 //! Binario `baton`.
 
+mod ask;
 mod config_run;
 mod import;
+mod overview;
+mod pick;
 mod run;
+mod shell_init;
+mod start;
 mod text_run;
 mod tui_run;
 mod validate;
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use baton_store::Project;
@@ -22,11 +27,15 @@ pub const EXIT_INVALID: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_RUN_FAILED: u8 = 3;
 
+/// Versión y build (`0.1.0 (985e6c2)`, o `0.1.0 (985e6c2, con cambios locales)`): ver `build.rs`.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BATON_BUILD"), ")");
+
 #[derive(Parser)]
 #[command(
     name = "baton",
-    version,
-    about = "Orquesta instalaciones y despliegues definidos en carpetas"
+    version = VERSION,
+    about = "Orquesta instalaciones y despliegues definidos en carpetas",
+    after_help = "Primeros pasos:\n  baton init               prepara el proyecto y abre su primer plan para editarlo\n  baton import <archivo>   o arma el plan desde un pipeline de GitHub, GitLab o Azure\n  baton start [plan]       abre un plan: revisarlo, editarlo y ejecutarlo (p cambia de plan)\n  baton run [plan]         ejecuta un plan directo\n  baton create <plan>      crea un plan vacío\n  baton config             destinos, logs y credenciales del proyecto\n  baton                    sin argumentos: muestra el estado del proyecto\n\nPara scripts bash (la pregunta va a la terminal, solo la respuesta a stdout):\n  env=$(baton select \"¿Ambiente?\" dev staging prod)\n  baton confirm \"¿Seguimos?\" --default no && echo listo\n  (también multiselect e input; sin terminal se responde con BATON_<NOMBRE> o --default)"
 )]
 struct Cli {
     /// Carpeta del proyecto (por defecto, la actual o la primera superior que sea un proyecto baton)
@@ -34,7 +43,7 @@ struct Cli {
     dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -46,9 +55,9 @@ enum Command {
         /// Nombre del plan (archivo en baton/plans/)
         plan: Option<String>,
     },
-    /// Ejecuta un plan (también: `baton <plan>`)
+    /// Ejecuta un plan directo, sin pasar por la vista previa (también: `baton <plan>`)
     Run(RunArgs),
-    /// Arma un plan a partir de lo que encuentra en la carpeta y abre el editor para revisarlo
+    /// Prepara el proyecto (escanea la carpeta, crea .baton/) y abre su primer plan para editarlo
     Init {
         /// Nombre del plan (por defecto, el de la carpeta)
         plan: Option<String>,
@@ -61,6 +70,9 @@ enum Command {
         /// No escanea la carpeta: el plan queda vacío
         #[arg(long)]
         no_scan: bool,
+        /// Crea el proyecto en esta carpeta aunque una carpeta superior ya tenga uno
+        #[arg(long)]
+        here: bool,
     },
     /// Convierte un pipeline de GitHub Actions, GitLab CI o Azure Pipelines en un plan de baton
     Import {
@@ -79,15 +91,97 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Abre el editor de pasos y gates de un plan y guarda los cambios en su archivo
-    Edit {
-        /// Nombre del plan (archivo en baton/plans/)
+    /// Pregunta y elige una opción; imprime la elegida (para scripts: `env=$(baton select ...)`)
+    Select {
+        /// La pregunta
+        prompt: String,
+        /// Las opciones a elegir
+        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        options: Vec<String>,
+        /// Opción que se usa sin terminal (y la que aparece marcada al preguntar)
+        #[arg(long)]
+        default: Option<String>,
+        /// Nombre de la respuesta: sin terminal se lee de BATON_<NOMBRE> (por defecto, de la pregunta)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Pregunta y elige varias opciones; imprime las elegidas, una por línea
+    Multiselect {
+        /// La pregunta
+        prompt: String,
+        /// Las opciones a elegir
+        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        options: Vec<String>,
+        /// Opciones que se usan sin terminal (separadas por coma) y las que aparecen marcadas
+        #[arg(long)]
+        default: Option<String>,
+        /// Nombre de la respuesta: sin terminal se lee de BATON_<NOMBRE> (por defecto, de la pregunta)
+        #[arg(long)]
+        name: Option<String>,
+        /// Separador de lo elegido en la salida (por defecto, un salto de línea)
+        #[arg(long, default_value = "\n")]
+        sep: String,
+        /// Cuántas hay que elegir como mínimo
+        #[arg(long, default_value_t = 0)]
+        min: usize,
+    },
+    /// Pregunta sí o no; responde con el código de salida (0 sí, 1 no), sin imprimir nada
+    Confirm {
+        /// La pregunta
+        prompt: String,
+        /// Respuesta sin terminal (yes o no) y la que propone al preguntar
+        #[arg(long)]
+        default: Option<String>,
+        /// Nombre de la respuesta: sin terminal se lee de BATON_<NOMBRE> (por defecto, de la pregunta)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Pregunta un texto; imprime lo escrito
+    Input {
+        /// La pregunta
+        prompt: String,
+        /// Texto que se usa sin terminal y que propone al preguntar
+        #[arg(long)]
+        default: Option<String>,
+        /// Nombre de la respuesta: sin terminal se lee de BATON_<NOMBRE> (por defecto, de la pregunta)
+        #[arg(long)]
+        name: Option<String>,
+        /// No muestra lo que se escribe (contraseñas, tokens)
+        #[arg(long)]
+        secret: bool,
+    },
+    /// Muestra el proyecto en el prompt de la terminal, como (venv): imprime el código del shell
+    ShellInit {
+        /// bash, zsh o fish (por defecto, el de $SHELL)
+        shell: Option<String>,
+        /// Solo define __baton_ps1 (para armar tu PS1 a mano); no toca el prompt
+        #[arg(long)]
+        no_prefix: bool,
+        /// La etiqueta en cian
+        #[arg(long)]
+        color: bool,
+    },
+    /// Imprime la etiqueta del proyecto actual, (baton:app1); sin proyecto no imprime nada y sale con 1
+    Prompt {
+        /// Formato de la etiqueta: {name} es la carpeta del proyecto y {root} su ruta
+        #[arg(long)]
+        format: Option<String>,
+    },
+    /// Abre un plan para revisarlo, editarlo y ejecutarlo; si no existe, lo crea vacío
+    #[command(alias = "edit")]
+    Start {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+    },
+    /// Crea un plan vacío (solo el archivo, no lo abre)
+    Create {
+        /// Nombre del plan
         plan: String,
     },
     /// Deshace lo que hizo la última ejecución de un plan (corre los `rollback` de sus pasos)
     Rollback {
-        /// Nombre del plan
-        plan: String,
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
     Config,
@@ -107,8 +201,8 @@ enum Command {
 
 #[derive(Args, Debug, Clone)]
 struct RunArgs {
-    /// Nombre del plan (archivo en baton/plans/)
-    plan: String,
+    /// Nombre del plan (archivo en baton/plans/); sin él, el único del proyecto o se pregunta
+    plan: Option<String>,
     /// Texto plano en vez de la TUI (es lo que ocurre sin terminal o con CI definido)
     #[arg(long)]
     no_tui: bool,
@@ -140,7 +234,7 @@ struct ExternalRun {
     args: RunArgs,
 }
 
-impl From<RunArgs> for (String, run::RunFlags) {
+impl From<RunArgs> for (Option<String>, run::RunFlags) {
     fn from(a: RunArgs) -> Self {
         let backup = match (a.backup, a.no_backup) {
             (true, _) => Some(true),
@@ -212,12 +306,72 @@ impl From<DemoScreen> for Screen {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    if let Command::Version = cli.command {
-        println!("baton {}", env!("CARGO_PKG_VERSION"));
+    if let Some(Command::Version) = cli.command {
+        println!("baton {VERSION}");
         return ExitCode::SUCCESS;
     }
-    if let Command::Demo { fast, screen } = cli.command {
+    if let Some(Command::Demo { fast, screen }) = cli.command {
         return demo(fast, screen.into());
+    }
+
+    // Los helpers de scripts no necesitan proyecto ni carpeta.
+    match &cli.command {
+        Some(Command::ShellInit {
+            shell,
+            no_prefix,
+            color,
+        }) => return shell_init::init(shell.as_deref(), !*no_prefix, *color),
+        Some(Command::Select {
+            prompt,
+            options,
+            default,
+            name,
+        }) => {
+            let c = ask::Common {
+                prompt: prompt.clone(),
+                name: name.clone(),
+            };
+            return ask::select(&c, options.clone(), default.clone());
+        }
+        Some(Command::Multiselect {
+            prompt,
+            options,
+            default,
+            name,
+            sep,
+            min,
+        }) => {
+            let c = ask::Common {
+                prompt: prompt.clone(),
+                name: name.clone(),
+            };
+            let sep = sep.replace("\\n", "\n").replace("\\t", "\t");
+            return ask::multiselect(&c, options.clone(), default.clone(), &sep, *min);
+        }
+        Some(Command::Confirm {
+            prompt,
+            default,
+            name,
+        }) => {
+            let c = ask::Common {
+                prompt: prompt.clone(),
+                name: name.clone(),
+            };
+            return ask::confirm(&c, default.clone());
+        }
+        Some(Command::Input {
+            prompt,
+            default,
+            name,
+            secret,
+        }) => {
+            let c = ask::Common {
+                prompt: prompt.clone(),
+                name: name.clone(),
+            };
+            return ask::input(&c, default.clone(), *secret);
+        }
+        _ => {}
     }
 
     let start = match cli.dir {
@@ -231,15 +385,40 @@ fn main() -> ExitCode {
         },
     };
 
+    if let Some(Command::Prompt { format }) = &cli.command {
+        return shell_init::prompt(&start, format.as_deref());
+    }
+
+    // Sin subcomando: dónde estás, qué hay y qué sigue.
+    let Some(command) = cli.command else {
+        return overview::show(&start, VERSION);
+    };
+
     // `init` no necesita que ya exista un proyecto: es lo que lo crea.
     if let Command::Init {
         plan,
         target,
         ambiente,
         no_scan,
-    } = cli.command
+        here,
+    } = command
     {
-        let project = Project::discover(&start).unwrap_or_else(|| Project::at(&start));
+        let project = if here {
+            Project::at(&start)
+        } else {
+            let found = open_project(&start);
+            if found
+                .as_ref()
+                .is_some_and(|p| p.subfolder_of(&start).is_some())
+            {
+                // `init` desde una subcarpeta agrega el plan al proyecto de arriba; que no sea
+                // una sorpresa, y cómo hacer lo otro
+                eprintln!(
+                    "  el plan se agrega a ese proyecto (para crear uno nuevo en esta carpeta: baton init --here)"
+                );
+            }
+            found.unwrap_or_else(|| Project::at(&start))
+        };
         return run::init(
             &project,
             plan,
@@ -251,6 +430,16 @@ fn main() -> ExitCode {
         );
     }
 
+    // `create` y `start <plan>` también pueden crear el proyecto, igual que `init`.
+    if let Command::Create { plan } = &command {
+        let project = open_project(&start).unwrap_or_else(|| Project::at(&start));
+        return start::create(&project, plan);
+    }
+    if let Command::Start { plan: Some(plan) } = &command {
+        let project = open_project(&start).unwrap_or_else(|| Project::at(&start));
+        return start::start(&project, plan);
+    }
+
     // `import` también puede crear el proyecto, igual que `init`.
     if let Command::Import {
         archivo,
@@ -258,9 +447,9 @@ fn main() -> ExitCode {
         plan,
         target,
         dry_run,
-    } = cli.command
+    } = command
     {
-        let project = Project::discover(&start).unwrap_or_else(|| Project::at(&start));
+        let project = open_project(&start).unwrap_or_else(|| Project::at(&start));
         let file = start.join(&archivo); // `-C` cambia la base de las rutas relativas
         return import::run(
             &project,
@@ -275,35 +464,69 @@ fn main() -> ExitCode {
         );
     }
 
-    let Some(project) = Project::discover(&start) else {
+    let Some(project) = open_project(&start) else {
         eprintln!(
             "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
             start.display()
         );
+        eprintln!("  para crear uno aquí: baton init   (o baton import <archivo>)");
         return ExitCode::from(EXIT_USAGE);
     };
 
-    match cli.command {
+    match command {
         Command::Validate { plan } => validate::run(&project, plan.as_deref()),
         Command::Config => config(&project),
         Command::Run(args) => {
             let (plan, flags) = args.into();
-            run::run(&project, &plan, flags)
+            match pick::resolve(&project, plan, "run", "ejecutar") {
+                Ok(plan) => run::run(&project, &plan, flags),
+                Err(code) => code,
+            }
         }
-        Command::Rollback { plan } => run::rollback(&project, &plan),
-        Command::Edit { plan } => run::edit(&project, &plan),
+        Command::Rollback { plan } => match pick::resolve(&project, plan, "rollback", "deshacer") {
+            Ok(plan) => run::rollback(&project, &plan),
+            Err(code) => code,
+        },
+        Command::Start { plan } => match pick::resolve(&project, plan, "start", "abrir") {
+            Ok(plan) => start::open(&project, &plan, false),
+            Err(code) => code,
+        },
         Command::External(args) => {
             let parsed =
                 ExternalRun::try_parse_from(std::iter::once(OsString::from("baton")).chain(args))
                     .unwrap_or_else(|e| e.exit());
             let (plan, flags) = parsed.args.into();
-            run::run(&project, &plan, flags)
+            match pick::resolve(&project, plan, "run", "ejecutar") {
+                Ok(plan) => run::run(&project, &plan, flags),
+                Err(code) => code,
+            }
         }
-        Command::Demo { .. } => unreachable!("se atiende antes de buscar el proyecto"),
-        Command::Init { .. } => unreachable!("se atiende antes de buscar el proyecto"),
-        Command::Import { .. } => unreachable!("se atiende antes de buscar el proyecto"),
-        Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
+        Command::ShellInit { .. }
+        | Command::Prompt { .. }
+        | Command::Select { .. }
+        | Command::Multiselect { .. }
+        | Command::Confirm { .. }
+        | Command::Input { .. }
+        | Command::Demo { .. }
+        | Command::Init { .. }
+        | Command::Create { .. }
+        | Command::Import { .. }
+        | Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
     }
+}
+
+/// Busca el proyecto desde `start` hacia arriba. Si lo encuentra en una carpeta superior (se está
+/// dentro de una subcarpeta), lo dice en stderr: así no queda duda de qué proyecto se usa.
+fn open_project(start: &Path) -> Option<Project> {
+    let project = Project::discover(start)?;
+    if let Some(rel) = project.subfolder_of(start) {
+        eprintln!(
+            "proyecto: {} (una carpeta superior; estás en {}/)",
+            project.root.display(),
+            rel.display()
+        );
+    }
+    Some(project)
 }
 
 fn require_terminal(command: &str) -> bool {
@@ -334,7 +557,11 @@ fn config(project: &Project) -> ExitCode {
     let state = ConfigState::from_config(&config, &name, project.list_plans());
     let mut driver = config_run::ConfigDriver::new(project.clone(), name);
     match baton_tui::demo::run_app(baton_tui::App::config_only(state), &mut driver) {
-        Ok(()) => ExitCode::SUCCESS,
+        // `enter` en la pestaña Planes: se cierra esta pantalla y se abre el editor de ese plan
+        Ok(()) => match driver.open_plan.take() {
+            Some(plan) => start::open(project, &plan, false),
+            None => ExitCode::SUCCESS,
+        },
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE

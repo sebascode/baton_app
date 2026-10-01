@@ -167,11 +167,18 @@ impl EditorState {
             .map(|(i, s)| StepDraft::new(i as u32 + 1, s, &targets))
             .collect();
         let next_id = steps.len() as u32 + 1;
+        // Sin pasos no hay campo donde estar: se parte en la lista (en "+ nuevo paso"), si no la
+        // primera tecla se perdería.
+        let focus = if steps.is_empty() {
+            Focus::List
+        } else {
+            Focus::Field(F_NAME)
+        };
         EditorState {
             plan: plan.into(),
             steps,
             selected: 0,
-            focus: Focus::Field(F_NAME),
+            focus,
             targets,
             next_id,
             gate_open: false,
@@ -389,7 +396,12 @@ impl EditorState {
     /// Abre el editor en el paso `idx`.
     pub fn open_at(&mut self, idx: usize, gate: bool) {
         self.selected = idx.min(self.steps.len().saturating_sub(1));
-        self.focus = Focus::Field(F_NAME);
+        // Sin pasos no hay campo donde estar: se queda en la lista ("+ nuevo paso").
+        self.focus = if self.steps.is_empty() {
+            Focus::List
+        } else {
+            Focus::Field(F_NAME)
+        };
         self.test = None;
         self.notice = None;
         self.gate_open = false;
@@ -1021,5 +1033,22 @@ fn kind_of(label: &str) -> StepKind {
         "backup" => StepKind::Backup,
         "gate" => StepKind::Gate,
         _ => StepKind::Comando,
+    }
+}
+
+#[cfg(test)]
+mod empty_plan_tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn an_empty_plan_starts_on_the_new_step_row_and_the_first_enter_adds_one() {
+        let mut e = EditorState::new("vacio", &["local"], Vec::new());
+        assert_eq!(e.steps.len(), 0);
+        // abrirlo desde la vista previa (`e`, `baton start`) no cambia eso
+        e.open_at(0, false);
+        e.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(e.steps.len(), 1, "la primera tecla no se pierde");
+        assert_eq!(e.steps[0].form.fields[F_NAME].value(), "Nuevo paso");
     }
 }

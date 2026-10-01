@@ -80,6 +80,9 @@ pub enum Effect {
     Rescan,
     /// Abrir un plan desde la pestaña Planes.
     OpenPlan(String),
+    /// Pasar a otro plan del proyecto (selector de la vista previa). Quien atiende reemplaza la
+    /// aplicación entera con la del plan elegido, o responde con `notify` si no puede.
+    SwitchPlan(String),
     /// Guardar los pasos editados en el plan (el editor ya comprobó que los campos se entienden).
     /// Quien atiende responde con `apply_saved_plan` o `notify`.
     SavePlan(Vec<Step>),
@@ -117,7 +120,7 @@ impl App {
         }
     }
 
-    /// Arranca directamente en el editor de pasos (`baton edit`); `esc` sale del programa.
+    /// Arranca directamente en el editor de pasos (pruebas del editor); `esc` sale del programa.
     pub fn editor_only(editor: EditorState) -> App {
         App {
             mode: Mode::Editor(Box::new(editor)),
@@ -398,6 +401,7 @@ impl App {
                     }
                     None
                 }
+                PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
                 PreviewAction::Quit => Some(Effect::Quit),
             },
             Mode::Pipeline(r) => match r.handle_key(key)? {
@@ -459,6 +463,30 @@ impl App {
             return None;
         }
         Some(Effect::StartRun(req))
+    }
+
+    /// ¿Se está en la vista previa del plan?
+    pub fn in_preview(&self) -> bool {
+        matches!(self.mode, Mode::Preview(_))
+    }
+
+    /// Abre el editor de pasos de entrada (un plan vacío, o `baton init`); `esc` vuelve a la vista
+    /// previa. Sin datos de editor no hace nada.
+    pub fn open_editor_first(&mut self) {
+        let _ = self.open_editor(0, false);
+    }
+
+    /// Pide ejecutar lo que muestra la vista previa sin esperar a que se pulse `enter`
+    /// (`baton run`). Pasa por la pantalla de credenciales si el plan las necesita.
+    pub fn run_now(&mut self) -> Option<Effect> {
+        let Mode::Preview(p) = &self.mode else {
+            return None;
+        };
+        if p.active_count() == 0 {
+            return None;
+        }
+        let request = p.request();
+        self.start_or_confirm_credentials(request)
     }
 
     fn open_editor(&mut self, idx: usize, gate: bool) -> Option<Effect> {

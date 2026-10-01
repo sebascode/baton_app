@@ -63,7 +63,7 @@ fn step(
 
 #[derive(Debug)]
 pub enum CreateError {
-    /// Ya existe un plan con ese nombre: se edita con `baton edit`, no se crea de nuevo.
+    /// Ya existe un plan con ese nombre: se abre con `baton start`, no se crea de nuevo.
     AlreadyExists,
     Io(io::Error),
 }
@@ -72,7 +72,10 @@ impl fmt::Display for CreateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CreateError::AlreadyExists => {
-                write!(f, "ya existe un plan con ese nombre (usa: baton edit)")
+                write!(
+                    f,
+                    "ya existe un plan con ese nombre (usa: baton start <plan>)"
+                )
             }
             CreateError::Io(e) => write!(f, "no se pudo crear el plan: {e}"),
         }

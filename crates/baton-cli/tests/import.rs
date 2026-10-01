@@ -98,7 +98,7 @@ fn imports_each_platform_into_a_plan_that_validates() {
             stdout.contains(&format!("{steps} paso(s)")),
             "{file}: {stdout}"
         );
-        assert!(stdout.contains(&format!("baton edit {plan}")), "{stdout}");
+        assert!(stdout.contains(&format!("baton start {plan}")), "{stdout}");
 
         let v = baton(root, &["validate", plan]);
         assert_eq!(v.status.code(), Some(0), "{file}\n{}\n{}", out(&v), err(&v));
@@ -185,4 +185,73 @@ fn bad_input_is_reported_clearly() {
     assert_eq!(o.status.code(), Some(1));
     assert!(err(&o).contains("circulares"), "{}", err(&o));
     assert!(!root.join("baton").exists(), "un error no deja nada creado");
+}
+
+#[test]
+fn the_report_suggests_credentials_only_for_clear_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        root,
+        ".github/workflows/deploy.yml",
+        r#"
+jobs:
+  deploy:
+    steps:
+      - run: echo "${{ secrets.GHCR_TOKEN }} ${{ secrets.AWS_ACCESS_KEY }} ${{ secrets.BUILD_TOKEN }}"
+"#,
+    );
+    let o = baton(root, &["import", ".github/workflows/deploy.yml"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let stdout = out(&o);
+    assert!(stdout.contains("credenciales sugeridas"), "{stdout}");
+    assert!(stdout.contains("[[credentials]]"), "{stdout}");
+    assert!(stdout.contains("ref = \"docker.env#GHCR\""), "{stdout}");
+    assert!(stdout.contains("# usa: GHCR_TOKEN"), "{stdout}");
+    assert!(
+        stdout.contains("# falta definir: REGISTRY, USER"),
+        "{stdout}"
+    );
+    let suggested: String = stdout
+        .lines()
+        .skip_while(|l| !l.contains("credenciales sugeridas"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!suggested.contains("AWS_ACCESS_KEY"), "{suggested}");
+    assert!(!suggested.contains("BUILD_TOKEN"), "{suggested}");
+    // sigue listando todas las variables esperadas
+    assert!(
+        stdout.contains("AWS_ACCESS_KEY, BUILD_TOKEN, GHCR_TOKEN"),
+        "{stdout}"
+    );
+
+    // el plan guardado no lleva las credenciales: solo se sugieren
+    let plan = fs::read_to_string(root.join("baton/plans/deploy.toml")).unwrap();
+    assert!(!plan.contains("[[credentials]]"), "{plan}");
+}
+
+#[test]
+fn a_suggested_credential_pasted_into_the_plan_validates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        root,
+        ".github/workflows/deploy.yml",
+        "jobs:\n  d:\n    steps:\n      - run: echo ${{ secrets.GHCR_TOKEN }}\n",
+    );
+    assert_eq!(
+        baton(root, &["import", ".github/workflows/deploy.yml"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let path = root.join("baton/plans/deploy.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    // al final del archivo: un `[[credentials]]` antes de `name = ...` se lo comería
+    let pasted = format!(
+        "{text}\n[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n"
+    );
+    fs::write(&path, pasted).unwrap();
+    let v = baton(root, &["validate", "deploy"]);
+    assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
 }

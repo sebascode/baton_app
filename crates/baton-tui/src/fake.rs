@@ -92,6 +92,8 @@ pub fn preview() -> PreviewState {
         rollback: true,
         dry_run: false,
         notice: Vec::new(),
+        plans: Vec::new(),
+        switcher: None,
     }
 }
 

@@ -602,7 +602,7 @@ impl ConfigState {
             ConfigTab::Planes => vec![
                 ("tab", "sección"),
                 ("↑↓", "elegir"),
-                ("enter", "abrir"),
+                ("enter", "editar plan"),
                 ("esc", "volver"),
             ],
         }
@@ -836,8 +836,11 @@ impl ConfigState {
     fn render_plans(&self, buf: &mut Buffer, area: Rect) {
         self.section_title(buf, area, "planes en baton/plans/");
         if self.plans.is_empty() {
-            Line::from(Span::styled("no hay planes todavía", theme::muted()))
-                .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
+            Line::from(Span::styled(
+                "no hay planes todavía: crea uno con baton init o baton import",
+                theme::muted(),
+            ))
+            .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
             return;
         }
         for (i, p) in self

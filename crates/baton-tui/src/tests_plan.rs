@@ -209,3 +209,125 @@ fn step_infos_use_the_default_target_for_steps_without_one() {
     assert_eq!(targets, ["local", "local", "prod-db", "local", "local"]);
     assert!(infos[2].gate.is_some() && infos[3].gate.as_ref().unwrap().manual);
 }
+
+// ---------------------------------------------- plan vacío y cambio de plan (comandos start / run)
+
+fn empty_plan() -> Plan {
+    Plan::parse("name = \"vacio\"\n").unwrap()
+}
+
+fn preview_of(plan: &Plan, plans: &[&str]) -> PreviewState {
+    let mut p = PreviewState::from_plan(plan);
+    p.plans = plans.iter().map(|s| s.to_string()).collect();
+    p
+}
+
+fn shown(app: &App, w: u16, h: u16) -> String {
+    text(&render(w, h, |b, a| app.render(b, a)))
+}
+
+#[test]
+fn an_empty_plan_says_how_to_add_the_first_step() {
+    let app = App::new(PreviewState::from_plan(&empty_plan()));
+    let t = shown(&app, 100, 20);
+    assert!(t.contains("Este plan no tiene pasos todavía."), "{t}");
+    assert!(t.contains("Pulsa e para agregar el primero."), "{t}");
+}
+
+#[test]
+fn e_works_on_an_empty_plan_and_enter_explains_why_nothing_runs() {
+    let mut p = PreviewState::from_plan(&empty_plan());
+    assert_eq!(
+        p.handle_key(key(KeyCode::Char('e'))),
+        Some(crate::preview::PreviewAction::Edit(0))
+    );
+    assert_eq!(p.handle_key(key(KeyCode::Enter)), None);
+    assert!(
+        p.notice[0].contains("no tiene pasos todavía"),
+        "{:?}",
+        p.notice
+    );
+    // `g` (añadir gate) sigue necesitando un paso
+    assert_eq!(p.handle_key(key(KeyCode::Char('g'))), None);
+}
+
+#[test]
+fn enter_with_every_step_disabled_says_so_instead_of_doing_nothing() {
+    let plan = Plan::parse(
+        "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\nenabled = false\n",
+    )
+    .unwrap();
+    let mut p = PreviewState::from_plan(&plan);
+    assert_eq!(p.handle_key(key(KeyCode::Enter)), None);
+    assert!(
+        p.notice[0].contains("no hay pasos activos"),
+        "{:?}",
+        p.notice
+    );
+}
+
+#[test]
+fn p_is_only_offered_when_there_are_other_plans() {
+    let plan = empty_plan();
+    let alone = App::new(preview_of(&plan, &["vacio"]));
+    assert!(!shown(&alone, 110, 20).contains("cambiar de plan"));
+    let mut p = preview_of(&plan, &["vacio"]);
+    assert_eq!(p.handle_key(key(KeyCode::Char('p'))), None);
+    assert_eq!(p.switcher, None, "con un solo plan no hay selector");
+
+    let several = App::new(preview_of(&plan, &["instalar", "vacio"]));
+    assert!(shown(&several, 110, 20).contains("[p] cambiar de plan"));
+}
+
+#[test]
+fn the_switcher_opens_on_the_current_plan_and_picks_another() {
+    let plan = Plan::parse(PLAN).unwrap(); // se llama "instalar"
+    let mut app = App::new(preview_of(&plan, &["desinstalar", "instalar", "zeta"]));
+    assert_eq!(app.handle_key(key(KeyCode::Char('p'))), None);
+    let t = shown(&app, 100, 24);
+    assert!(t.contains("Cambiar de plan"), "{t}");
+    assert!(t.contains("● instalar") || t.contains(" ● instalar"), "{t}");
+    assert!(t.contains("esc cerrar"), "{t}");
+
+    // abre en el plan actual (posición 1); bajar lleva a "zeta"
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::SwitchPlan("zeta".into()))
+    );
+}
+
+#[test]
+fn choosing_the_current_plan_or_pressing_esc_only_closes_the_switcher() {
+    let plan = Plan::parse(PLAN).unwrap();
+    let mut p = preview_of(&plan, &["desinstalar", "instalar"]);
+    p.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(p.handle_key(key(KeyCode::Enter)), None, "es el mismo plan");
+    assert_eq!(p.switcher, None);
+
+    p.handle_key(key(KeyCode::Char('p')));
+    p.handle_key(key(KeyCode::Up));
+    assert_eq!(p.handle_key(key(KeyCode::Esc)), None);
+    assert_eq!(p.switcher, None);
+    // y las demás teclas no se filtran a la lista mientras está abierto
+    p.handle_key(key(KeyCode::Char('p')));
+    let before = p.clone();
+    p.handle_key(key(KeyCode::Char('b')));
+    assert_eq!(p.backup, before.backup);
+}
+
+#[test]
+fn run_now_asks_for_the_run_without_pressing_enter() {
+    let plan = Plan::parse(PLAN).unwrap();
+    let mut app = App::new(PreviewState::from_plan(&plan));
+    match app.run_now() {
+        Some(Effect::StartRun(req)) => {
+            assert_eq!(req.steps, ["pre", "build", "db", "ok"]);
+            assert!(req.backup && req.rollback);
+        }
+        other => panic!("se esperaba StartRun, hay {other:?}"),
+    }
+    // un plan sin pasos activos no ejecuta nada
+    let mut empty = App::new(PreviewState::from_plan(&empty_plan()));
+    assert_eq!(empty.run_now(), None);
+}

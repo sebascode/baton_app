@@ -262,27 +262,64 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
                 "el nombre 'file' está reservado para leer solo del .env",
             ));
         }
+        let at = |field: &str| path!["secrets", name.as_str(), field];
+        let required = |value: &str, field: &str, what: &str, out: &mut Vec<Issue>| {
+            if value.trim().is_empty() {
+                out.push(Issue::error(at(field), what.to_string()));
+            }
+            template_warnings(value, SECRET_VARS, at(field), out);
+        };
         match provider {
-            SecretProvider::Command(c) => {
-                if c.get.trim().is_empty() {
-                    out.push(Issue::error(
-                        path!["secrets", name.as_str(), "get"],
-                        "get necesita el comando que imprime el valor del secreto",
-                    ));
-                }
-                template_warnings(
-                    &c.get,
-                    SECRET_VARS,
-                    path!["secrets", name.as_str(), "get"],
+            SecretProvider::Command(c) => required(
+                &c.get,
+                "get",
+                "get necesita el comando que imprime el valor del secreto",
+                out,
+            ),
+            SecretProvider::Vault(v) => {
+                required(
+                    &v.path,
+                    "path",
+                    "path necesita la ruta del secreto (ej. secret/baton/{ambiente}/{prefijo})",
                     out,
                 );
-                if c.timeout.is_some_and(|t| t.as_duration().is_zero()) {
+                if let Some(f) = &v.field {
+                    required(f, "field", "field no puede estar vacío", out);
+                }
+                if let Some(addr) = &v.addr
+                    && !(addr.starts_with("http://") || addr.starts_with("https://"))
+                {
                     out.push(Issue::error(
-                        path!["secrets", name.as_str(), "timeout"],
-                        "el timeout debe ser mayor que 0",
+                        at("addr"),
+                        "addr debe ser una URL (https://vault.ejemplo.com)",
                     ));
                 }
             }
+            SecretProvider::AzureKeyvault(a) => {
+                if a.vault.is_empty()
+                    || !a
+                        .vault
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                {
+                    out.push(Issue::error(
+                        at("vault"),
+                        "vault necesita el nombre del Key Vault (letras, números y -)",
+                    ));
+                }
+                if let Some(n) = &a.name {
+                    required(n, "name", "name no puede estar vacío", out);
+                }
+            }
+        }
+        if provider
+            .timeout()
+            .is_some_and(|t| t.as_duration().is_zero())
+        {
+            out.push(Issue::error(
+                at("timeout"),
+                "el timeout debe ser mayor que 0",
+            ));
         }
     }
 }
@@ -1143,5 +1180,47 @@ mod tests {
         let issues = validate_plan(&plan, Some(&cfg));
         assert_error(&issues, "credentials[0].provider", "'vault' no existe");
         assert!(!issues.iter().any(|i| i.message.contains("'file'")));
+    }
+
+    #[test]
+    fn vault_and_azure_presets_are_validated() {
+        let ok = config(
+            "[secrets.v]\ntype = \"vault\"\npath = \"secret/{prefijo}\"\naddr = \"https://v.empresa.cl\"\n\
+             [secrets.a]\ntype = \"azure-keyvault\"\nvault = \"kv-empresa\"\nname = \"{prefijo}-{campo}\"\n",
+        );
+        assert!(
+            validate_config(&ok).is_empty(),
+            "{:?}",
+            validate_config(&ok)
+        );
+
+        let bad = config(
+            "[secrets.v]\ntype = \"vault\"\npath = \" \"\naddr = \"vault.local\"\nfield = \"\"\ntimeout = \"0s\"\n\
+             [secrets.a]\ntype = \"azure-keyvault\"\nvault = \"kv_malo\"\nname = \"{raro}\"\n",
+        );
+        let all: Vec<String> = validate_config(&bad)
+            .iter()
+            .map(|i| i.message.clone())
+            .collect();
+        let all = all.join("\n");
+        assert!(all.contains("path necesita la ruta"), "{all}");
+        assert!(all.contains("addr debe ser una URL"), "{all}");
+        assert!(all.contains("field no puede estar vacío"), "{all}");
+        assert!(all.contains("timeout debe ser mayor"), "{all}");
+        assert!(
+            all.contains("vault necesita el nombre del Key Vault"),
+            "{all}"
+        );
+        assert!(all.contains("placeholder desconocido {raro}"), "{all}");
+    }
+
+    #[test]
+    fn unknown_fields_and_types_are_parse_errors() {
+        assert!(Config::parse("[secrets.v]\ntype = \"vault\"\npath = \"a\"\nextra = 1\n").is_err());
+        assert!(Config::parse("[secrets.v]\ntype = \"consul\"\n").is_err());
+        assert!(
+            Config::parse("[secrets.v]\ntype = \"azure-keyvault\"\n").is_err(),
+            "falta vault"
+        );
     }
 }

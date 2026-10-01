@@ -47,7 +47,7 @@ fn scans_the_folder_and_creates_a_plan_with_both_kinds_of_step() {
     assert!(stdout.contains("plan 'instalar' creado en baton/plans/instalar.toml"));
     assert!(stdout.contains("paso 'build': 2 archivo(s)"));
     assert!(stdout.contains("paso 'servicios': 1 archivo(s)"));
-    assert!(stdout.contains("baton edit instalar"), "{stdout}");
+    assert!(stdout.contains("baton start instalar"), "{stdout}");
 
     let text = plan_text(root, "instalar");
     assert!(text.contains("name = \"instalar\""));
@@ -64,7 +64,7 @@ fn an_empty_folder_produces_an_empty_plan_without_failing() {
     let tmp = tempfile::tempdir().unwrap();
     let o = baton(tmp.path(), &["init", "vacio"]);
     assert_eq!(o.status.code(), Some(0));
-    assert!(out(&o).contains("el plan queda vacío"), "{}", out(&o));
+    assert!(out(&o).contains("el plan quedó vacío"), "{}", out(&o));
     assert_eq!(plan_text(tmp.path(), "vacio"), "name = \"vacio\"\n");
 }
 
@@ -101,7 +101,7 @@ fn running_init_twice_does_not_overwrite_the_existing_plan() {
 
     let o = baton(tmp.path(), &["init", "instalar"]);
     assert_eq!(o.status.code(), Some(2), "{}", out(&o));
-    assert!(err(&o).contains("baton edit"), "{}", err(&o));
+    assert!(err(&o).contains("baton start"), "{}", err(&o));
     assert_eq!(plan_text(tmp.path(), "instalar"), before);
 }
 
