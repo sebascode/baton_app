@@ -411,6 +411,28 @@ mod tests {
     }
 
     #[test]
+    fn secret_providers_survive_saving_a_change_elsewhere() {
+        let original = "[defaults]\nsecrets = \"vault\"\n\n# de dónde salen los tokens\n[secrets.vault]\ntype = \"command\"\nget = \"vault kv get -field={campo} secret/{prefijo}\"\ntimeout = \"10s\"\n\n[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n";
+        let (_t, p) = project_with(original);
+        let mut c = Config::parse(&read(&p)).unwrap();
+        let Target::Context(t) = c.targets.get_mut("prod").unwrap() else {
+            panic!()
+        };
+        t.context = "otro".into();
+        save_config(&p, &c).unwrap();
+        let text = read(&p);
+        assert!(text.contains("context = \"otro\""), "{text}");
+        assert!(text.contains("secrets = \"vault\""), "{text}");
+        assert!(text.contains("# de dónde salen los tokens"), "{text}");
+        assert!(
+            text.contains("get = \"vault kv get -field={campo} secret/{prefijo}\""),
+            "{text}"
+        );
+        assert!(text.contains("timeout = \"10s\""), "{text}");
+        assert_eq!(Config::parse(&text).unwrap().secrets, c.secrets);
+    }
+
+    #[test]
     fn only_the_changed_field_is_touched_the_rest_and_comments_survive() {
         let (_t, p) = project_with(
             "# config de esta máquina\n[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"deploy\"\nremote_dir = \"/opt/stack\"\n",

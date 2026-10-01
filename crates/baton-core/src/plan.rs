@@ -74,6 +74,10 @@ pub struct CredentialReq {
     pub label: Option<String>,
     #[serde(rename = "ref")]
     pub reference: CredentialRef,
+    /// Proveedor de secretos (un `[secrets.<nombre>]` de `config.toml`, o `"file"` para forzar
+    /// solo el `.env`). Sin valor se usa `[defaults].secrets`. Es solo un nombre: dónde vive el
+    /// secreto se decide en la configuración local.
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

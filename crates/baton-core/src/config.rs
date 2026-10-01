@@ -4,10 +4,13 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::credential::CredentialRef;
-use crate::units::ByteSize;
+use crate::units::{ByteSize, Dur};
 
 /// Nombre del destino local, que siempre existe aunque no se declare.
 pub const LOCAL_TARGET: &str = "local";
+
+/// Nombre reservado para "sin proveedor": las credenciales se leen del `.env` (o del entorno).
+pub const FILE_PROVIDER: &str = "file";
 
 /// Plantilla de ruta de log cuando `[logs].local` no está definido.
 pub const DEFAULT_LOG_TEMPLATE: &str = ".baton/logs/{plan}-{fecha}.log";
@@ -23,6 +26,10 @@ pub struct Config {
     pub targets: IndexMap<String, Target>,
     #[serde(default)]
     pub logs: LogsConfig,
+    /// Proveedores de secretos (`[secrets.<nombre>]`): de dónde sacar los valores de las
+    /// credenciales además del `.env`. Es de esta máquina, nunca viaja con el plan.
+    #[serde(default)]
+    pub secrets: IndexMap<String, SecretProvider>,
 }
 
 fn one() -> u32 {
@@ -36,6 +43,7 @@ impl Default for Config {
             defaults: Defaults::default(),
             targets: IndexMap::new(),
             logs: LogsConfig::default(),
+            secrets: IndexMap::new(),
         }
     }
 }
@@ -56,6 +64,18 @@ impl Config {
     }
 
     /// Plantilla efectiva de la ruta de log local.
+    /// El proveedor que corresponde a una credencial: el que pida ella (`provider = "..."`) o, si
+    /// no pide ninguno, `[defaults].secrets`. `"file"` o nada significa "solo el `.env`".
+    pub fn secret_provider(&self, requested: Option<&str>) -> Option<(&str, &SecretProvider)> {
+        let name = requested.or(self.defaults.secrets.as_deref())?;
+        if name == FILE_PROVIDER {
+            return None;
+        }
+        self.secrets
+            .get_key_value(name)
+            .map(|(k, v)| (k.as_str(), v))
+    }
+
     pub fn log_template(&self) -> &str {
         self.logs.local.as_deref().unwrap_or(DEFAULT_LOG_TEMPLATE)
     }
@@ -65,6 +85,34 @@ impl Config {
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     pub target: Option<String>,
+    /// Proveedor de secretos por defecto (nombre de un `[secrets.<nombre>]`).
+    pub secrets: Option<String>,
+}
+
+/// Un proveedor de secretos. Hoy solo `command`; `vault` y `azure-keyvault` llegarán como
+/// atajos que generan el comando.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum SecretProvider {
+    Command(CommandProvider),
+}
+
+impl SecretProvider {
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            SecretProvider::Command(_) => "command",
+        }
+    }
+}
+
+/// Corre un comando (`sh -c`) por campo de credencial y toma su salida como el valor.
+/// Placeholders: `{ambiente} {prefijo} {campo} {variable} {archivo}` (ver `secrets::render`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandProvider {
+    pub get: String,
+    /// Por cada llamada; por defecto 15 s.
+    pub timeout: Option<Dur>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

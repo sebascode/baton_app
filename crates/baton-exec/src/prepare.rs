@@ -9,6 +9,7 @@ use baton_core::compose::{Service, parse_services};
 use baton_core::config::{Config, Target};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_store::Project;
+use baton_store::secrets::Resolver;
 use baton_store::sources::expand_sources;
 use baton_store::state::LastRun;
 
@@ -182,23 +183,20 @@ pub fn prepare_run(
                 if field.optional {
                     continue;
                 }
-                let resolved = baton_store::credentials::resolve_field(
-                    project,
-                    opts.ambiente.as_deref(),
+                let resolved = Resolver::new(project, config, opts.ambiente.as_deref()).resolve(
                     &req.reference,
                     field.key,
+                    req.provider.as_deref(),
                 );
-                let missing = match resolved {
-                    Ok(v) => v.is_none_or(|v| v.is_empty()),
-                    Err(e) => {
+                if resolved.value.as_deref().is_none_or(str::is_empty) {
+                    if let Some(why) = &resolved.error {
+                        // el proveedor falló y no hay respaldo en el .env: se dice por qué
                         errors.push(format!(
-                            "credencial '{}' ({}): {e}",
-                            req.label, req.reference
+                            "credencial '{}' ({}): falta {}; {why}",
+                            req.label, req.reference, field.label
                         ));
                         continue;
                     }
-                };
-                if missing {
                     let path = baton_store::credentials::env_path(
                         project,
                         opts.ambiente.as_deref(),

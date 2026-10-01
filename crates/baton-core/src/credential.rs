@@ -164,6 +164,8 @@ pub struct Requirement {
     pub kind: CredentialKind,
     pub label: String,
     pub reference: CredentialRef,
+    /// Proveedor pedido por la credencial declarada (los destinos ssh no lo piden).
+    pub provider: Option<String>,
 }
 
 /// Credenciales que necesita el plan: las declaradas más las de los destinos ssh que sus pasos
@@ -178,6 +180,7 @@ pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
             kind: c.kind,
             label: c.label.clone().unwrap_or_else(|| c.id.clone()),
             reference: c.reference.clone(),
+            provider: c.provider.clone(),
         })
         .collect();
 
@@ -200,6 +203,7 @@ pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
             kind: CredentialKind::Ssh,
             label: format!("ssh · {target}"),
             reference: reference.clone(),
+            provider: None,
         });
     }
     out

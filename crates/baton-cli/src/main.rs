@@ -1,6 +1,7 @@
 //! Binario `baton`.
 
 mod config_run;
+mod import;
 mod run;
 mod text_run;
 mod tui_run;
@@ -60,6 +61,23 @@ enum Command {
         /// No escanea la carpeta: el plan queda vacío
         #[arg(long)]
         no_scan: bool,
+    },
+    /// Convierte un pipeline de GitHub Actions, GitLab CI o Azure Pipelines en un plan de baton
+    Import {
+        /// Archivo del pipeline (ej. .github/workflows/deploy.yml, .gitlab-ci.yml)
+        archivo: PathBuf,
+        /// Plataforma de origen (por defecto se detecta por el nombre o el contenido)
+        #[arg(long, value_enum)]
+        from: Option<Origin>,
+        /// Nombre del plan (por defecto, el del archivo)
+        #[arg(long)]
+        plan: Option<String>,
+        /// Destino de todos los pasos importados
+        #[arg(long)]
+        target: Option<String>,
+        /// Muestra lo que se importaría sin escribir nada
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Abre el editor de pasos y gates de un plan y guarda los cambios en su archivo
     Edit {
@@ -143,6 +161,24 @@ impl From<RunArgs> for (String, run::RunFlags) {
     }
 }
 
+/// Plataformas de las que `baton import` sabe leer un pipeline.
+#[derive(Clone, Copy, ValueEnum)]
+enum Origin {
+    Github,
+    Gitlab,
+    Azure,
+}
+
+impl From<Origin> for baton_core::import::Platform {
+    fn from(o: Origin) -> Self {
+        match o {
+            Origin::Github => Self::Github,
+            Origin::Gitlab => Self::Gitlab,
+            Origin::Azure => Self::Azure,
+        }
+    }
+}
+
 /// Pantallas por las que se puede empezar la demo.
 #[derive(Clone, Copy, ValueEnum)]
 enum DemoScreen {
@@ -215,6 +251,30 @@ fn main() -> ExitCode {
         );
     }
 
+    // `import` también puede crear el proyecto, igual que `init`.
+    if let Command::Import {
+        archivo,
+        from,
+        plan,
+        target,
+        dry_run,
+    } = cli.command
+    {
+        let project = Project::discover(&start).unwrap_or_else(|| Project::at(&start));
+        let file = start.join(&archivo); // `-C` cambia la base de las rutas relativas
+        return import::run(
+            &project,
+            &archivo,
+            &file,
+            import::ImportFlags {
+                platform: from.map(Into::into),
+                plan,
+                target,
+                dry_run,
+            },
+        );
+    }
+
     let Some(project) = Project::discover(&start) else {
         eprintln!(
             "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
@@ -241,6 +301,7 @@ fn main() -> ExitCode {
         }
         Command::Demo { .. } => unreachable!("se atiende antes de buscar el proyecto"),
         Command::Init { .. } => unreachable!("se atiende antes de buscar el proyecto"),
+        Command::Import { .. } => unreachable!("se atiende antes de buscar el proyecto"),
         Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
     }
 }

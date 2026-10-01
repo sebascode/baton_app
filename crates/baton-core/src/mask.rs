@@ -21,6 +21,31 @@ pub fn mask_secret(secret: &str) -> String {
     format!("{prefix}{BULLETS}{suffix}")
 }
 
+/// Largo mínimo de un secreto para redactarlo de la salida: uno más corto (`1`, `ab`) destrozaría
+/// líneas que no tienen nada que ver.
+const MIN_REDACT_LEN: usize = 4;
+
+/// Reemplaza cada aparición de los `secrets` en `text` por puntos, para que ninguna salida de un
+/// comando (pantalla, log, mensaje de fallo) los deje a la vista. Los más largos van primero, así
+/// un secreto que contiene a otro no queda a medias.
+pub fn redact(text: &str, secrets: &[String]) -> String {
+    let mut sorted: Vec<&String> = secrets
+        .iter()
+        .filter(|s| s.chars().count() >= MIN_REDACT_LEN)
+        .collect();
+    if sorted.is_empty() {
+        return text.to_string();
+    }
+    sorted.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    let mut out = text.to_string();
+    for s in sorted {
+        if out.contains(s.as_str()) {
+            out = out.replace(s.as_str(), BULLETS);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +70,21 @@ mod tests {
     fn never_leaks_the_middle() {
         let s = "ghp_SECRETMIDDLEPART3kQ";
         assert!(!mask_secret(s).contains("SECRET"));
+    }
+
+    #[test]
+    fn redacts_every_occurrence_longest_first() {
+        let secrets = vec!["abcd".to_string(), "abcdefgh".to_string()];
+        assert_eq!(
+            redact("x abcdefgh y abcd z", &secrets),
+            format!("x {BULLETS} y {BULLETS} z")
+        );
+    }
+
+    #[test]
+    fn short_or_absent_secrets_leave_the_text_alone() {
+        assert_eq!(redact("a1b2", &["1".to_string(), "".to_string()]), "a1b2");
+        assert_eq!(redact("hola", &[]), "hola");
+        assert_eq!(redact("hola", &["otro-valor".to_string()]), "hola");
     }
 }

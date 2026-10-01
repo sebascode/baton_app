@@ -11,6 +11,7 @@ pub mod logs;
 pub mod plan_edit;
 pub mod project;
 pub mod scaffold;
+pub mod secrets;
 pub mod sources;
 pub mod state;
 

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use baton_core::config::{Config, SshTarget, Target};
 use baton_store::Project;
-use baton_store::credentials::resolve_field;
+use baton_store::secrets::Resolver;
 
 use crate::prepare::PStep;
 use crate::transport::{ContextTransport, LocalTransport, SshTransport, Transport};
@@ -33,11 +33,16 @@ fn jump_of(config: &Config, bastion: &str) -> Option<String> {
     Some(format!("{}@{}:{}", b.user, b.host, b.port))
 }
 
-fn identity_of(project: &Project, ambiente: Option<&str>, s: &SshTarget) -> Option<PathBuf> {
+fn identity_of(
+    project: &Project,
+    config: &Config,
+    ambiente: Option<&str>,
+    s: &SshTarget,
+) -> Option<PathBuf> {
     let r = s.credential.as_ref()?;
-    resolve_field(project, ambiente, r, "KEY")
-        .ok()
-        .flatten()
+    Resolver::new(project, config, ambiente)
+        .resolve(r, "KEY", None)
+        .value
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
 }
@@ -47,7 +52,7 @@ fn ssh_conn(project: &Project, config: &Config, ambiente: Option<&str>, s: &SshT
         host: s.host.clone(),
         port: s.port,
         user: s.user.clone(),
-        identity: identity_of(project, ambiente, s),
+        identity: identity_of(project, config, ambiente, s),
         jump: s.bastion.as_deref().and_then(|b| jump_of(config, b)),
         remote_dir: PathBuf::from(s.remote_dir.clone().unwrap_or_default()),
         sync: s.sync,

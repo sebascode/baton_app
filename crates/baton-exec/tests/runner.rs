@@ -1669,3 +1669,112 @@ fn without_logs_remote_nothing_is_copied() {
         "solo la sincronización del proyecto: {calls}"
     );
 }
+
+// ------------------------------------------------------------------ credenciales (hito i)
+
+const GHCR_PLAN: &str =
+    "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n";
+
+fn save_ghcr(fx: &Fx, token: &str) {
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"docker.env#GHCR".parse().unwrap(),
+        &[
+            ("registry", "ghcr.io".to_string()),
+            ("user", "sofia".to_string()),
+            ("token", token.to_string()),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_step_receives_the_credential_variables_its_command_mentions() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(&format!(
+        "{GHCR_PLAN}[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"printf '%s|%s' \\\"$GHCR_TOKEN\\\" \\\"$GHCR_USER\\\" > seen.txt\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let seen = fs::read_to_string(fx.root().join("seen.txt")).unwrap();
+    assert_eq!(seen, "ghp_secreto_12345|sofia");
+}
+
+#[test]
+fn a_step_that_does_not_mention_a_variable_does_not_get_it() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(&format!(
+        "{GHCR_PLAN}[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"env > seen.txt\"\n\n\
+         [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"comando\"\n\
+         command = \"echo $GHCR_TOKEN_OTRO > seen2.txt; env >> seen2.txt\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    for f in ["seen.txt", "seen2.txt"] {
+        let seen = fs::read_to_string(fx.root().join(f)).unwrap();
+        assert!(!seen.contains("ghp_secreto_12345"), "{f}: {seen}");
+    }
+}
+
+#[test]
+fn secret_values_are_redacted_from_events_and_the_log_file_but_plain_fields_are_not() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(&format!(
+        "{GHCR_PLAN}[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo token=$GHCR_TOKEN; echo usuario=$GHCR_USER; echo err $GHCR_TOKEN >&2; exit 3\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+
+    let shown = all_logs(&events);
+    assert!(!shown.contains("ghp_secreto_12345"), "{shown}");
+    assert!(shown.contains("token=••••••••"), "{shown}");
+    assert!(shown.contains("usuario=sofia"), "{shown}");
+
+    // tampoco en el mensaje ni en la salida que muestra la pantalla de fallo
+    let f = failure(&events);
+    let failure_text = format!("{f:?}");
+    assert!(
+        !failure_text.contains("ghp_secreto_12345"),
+        "{failure_text}"
+    );
+
+    // ni en el archivo de log
+    let logs = fx.root().join(".baton/logs");
+    for entry in fs::read_dir(logs).unwrap() {
+        let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(!text.contains("ghp_secreto_12345"), "{text}");
+    }
+}
+
+#[test]
+fn values_from_a_provider_are_injected_and_redacted_like_any_other_secret() {
+    let fx = Fx::new(&[]);
+    let config = Config::parse(
+        "[secrets.vault]\ntype = \"command\"\nget = \"printf 'vault-%s-9876' {campo}\"\n",
+    )
+    .unwrap();
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\nprovider = \"vault\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo token=$GHCR_TOKEN user=$GHCR_USER\"\n",
+    );
+    let options = fx.options(&p);
+    let handle = spawn(fx.input_with(&p, options, config)).unwrap();
+    let events = drive(handle, |_, _| {});
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let shown = all_logs(&events);
+    assert!(!shown.contains("vault-token-9876"), "{shown}");
+    assert!(shown.contains("token=••••••••"), "{shown}");
+    assert!(
+        shown.contains("user=vault-user-9876"),
+        "los campos no secretos se ven: {shown}"
+    );
+    assert!(!fx.root().join(".baton/credentials").exists());
+}

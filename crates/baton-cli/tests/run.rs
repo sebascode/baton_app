@@ -555,3 +555,65 @@ fn the_prueba_local_example_runs_without_docker_and_fails_on_demand() {
             && out(&o).contains("deshaciendo la preparación")
     );
 }
+
+// ------------------------------------------------------- proveedor de secretos (hito i)
+
+const VAULT_PLAN: &str = "name = \"instalar\"\n\
+    [[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\nprovider = \"vault\"\n\n\
+    [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+    command = \"printf '%s|%s' \\\"$GHCR_TOKEN\\\" \\\"$GHCR_USER\\\" > visto.txt\"\n";
+
+fn write_config(fx: &Fx, text: &str) {
+    let p = fx.root.join(".baton/config.toml");
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, text).unwrap();
+}
+
+#[test]
+fn a_provider_supplies_the_credentials_and_nothing_is_written_to_disk() {
+    let fx = Fx::new(VAULT_PLAN);
+    write_config(
+        &fx,
+        "[secrets.vault]\ntype = \"command\"\nget = \"printf 'del-vault-%s' {campo}\"\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
+        "del-vault-token|del-vault-user",
+        "el comando recibió los valores del proveedor"
+    );
+    assert!(
+        !fx.root.join(".baton/credentials").exists(),
+        "un valor del proveedor nunca se guarda en .baton/credentials"
+    );
+}
+
+#[test]
+fn a_failing_provider_is_named_in_the_ci_error_when_there_is_no_fallback() {
+    let fx = Fx::new(VAULT_PLAN);
+    write_config(
+        &fx,
+        "[secrets.vault]\ntype = \"command\"\nget = \"echo 'Error: sin sesión' >&2; exit 2\"\n",
+    );
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    let e = err(&o);
+    assert!(e.contains("proveedor 'vault': Error: sin sesión"), "{e}");
+    assert!(e.contains("docker.env#GHCR"), "{e}");
+    assert!(!fx.root.join("visto.txt").exists(), "no se ejecuta nada");
+}
+
+#[test]
+fn an_unknown_provider_in_the_plan_is_a_validation_error() {
+    let fx = Fx::new(VAULT_PLAN);
+    write_config(&fx, "");
+    let o = fx.baton(&["validate", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(
+        format!("{}{}", out(&o), err(&o)).contains("'vault' no existe"),
+        "{}\n{}",
+        out(&o),
+        err(&o)
+    );
+}

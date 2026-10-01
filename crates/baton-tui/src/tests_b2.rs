@@ -595,7 +595,7 @@ fn ctrl_s_asks_the_driver_to_save_the_converted_configuration() {
     let mut app = App::config_only(config_state());
     let expected = Config::parse(EXAMPLE_CONFIG).unwrap();
     match app.handle_key(ctrl('s')) {
-        Some(Effect::SaveConfig(got)) => assert_eq!(got, expected),
+        Some(Effect::SaveConfig(got)) => assert_eq!(*got, expected),
         other => panic!("se esperaba SaveConfig, hay {other:?}"),
     }
 }

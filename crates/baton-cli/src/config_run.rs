@@ -51,10 +51,11 @@ impl ConfigDriver {
                 }
             }
             Ok(Target::Ssh(ssh)) => {
+                let config = check_config(&self.project).value.unwrap_or_default();
                 let identity = ssh.credential.as_ref().and_then(|r| {
-                    baton_store::credentials::resolve_field(&self.project, None, r, "KEY")
-                        .ok()
-                        .flatten()
+                    baton_store::secrets::Resolver::new(&self.project, &config, None)
+                        .resolve(r, "KEY", None)
+                        .value
                         .filter(|v| !v.is_empty())
                 });
                 let mut args = vec![
@@ -143,7 +144,7 @@ impl Driver for ConfigDriver {
         use baton_tui::Effect;
         match effect {
             Effect::Quit => return Flow::Quit,
-            Effect::SaveConfig(config) => self.save(app, config),
+            Effect::SaveConfig(config) => self.save(app, *config),
             Effect::TestTarget(i) => self.test_target(app, i),
             Effect::OpenPlan(_) => {
                 app.notify("abrir un plan desde aquí todavía no está disponible")

@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::config::{Config, LOCAL_TARGET, Target};
+use crate::config::{Config, FILE_PROVIDER, LOCAL_TARGET, SecretProvider, Target};
 use crate::issue::{Issue, Seg};
 use crate::path;
 use crate::plan::{Check, CheckKind, Condition, Gate, GateMode, Plan, Step, StepKind};
+use crate::secrets::SECRET_VARS;
 use crate::template::{LOG_VARS, STEP_VARS, unknown_placeholders};
 
 /// Variables de plantilla disponibles fuera de los pasos escaneados (`{file}`, `{dir}` y `{name}`
@@ -36,6 +37,8 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
             format!("el destino por defecto '{t}' no existe en [targets]"),
         ));
     }
+
+    validate_secret_providers(config, &mut out);
 
     for (name, target) in &config.targets {
         let p = |field: &str| path!["targets", name.as_str(), field];
@@ -206,7 +209,7 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
     }
 
     validate_backup(plan, &mut out);
-    validate_credentials(plan, &mut out);
+    validate_credentials(plan, config, &mut out);
     validate_ids_and_dependencies(plan, &mut out);
 
     for (i, step) in plan.steps.iter().enumerate() {
@@ -232,9 +235,70 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
     }
 }
 
-fn validate_credentials(plan: &Plan, out: &mut Vec<Issue>) {
+fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
+    if let Some(d) = &config.defaults.secrets
+        && d != FILE_PROVIDER
+        && !config.secrets.contains_key(d)
+    {
+        out.push(Issue::error(
+            path!["defaults", "secrets"],
+            format!("el proveedor de secretos por defecto '{d}' no existe en [secrets]"),
+        ));
+    }
+    for (name, provider) in &config.secrets {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            out.push(Issue::error(
+                path!["secrets", name.as_str()],
+                format!("nombre de proveedor inválido '{name}' (usa letras, números, - y _)"),
+            ));
+        }
+        if name == FILE_PROVIDER {
+            out.push(Issue::error(
+                path!["secrets", name.as_str()],
+                "el nombre 'file' está reservado para leer solo del .env",
+            ));
+        }
+        match provider {
+            SecretProvider::Command(c) => {
+                if c.get.trim().is_empty() {
+                    out.push(Issue::error(
+                        path!["secrets", name.as_str(), "get"],
+                        "get necesita el comando que imprime el valor del secreto",
+                    ));
+                }
+                template_warnings(
+                    &c.get,
+                    SECRET_VARS,
+                    path!["secrets", name.as_str(), "get"],
+                    out,
+                );
+                if c.timeout.is_some_and(|t| t.as_duration().is_zero()) {
+                    out.push(Issue::error(
+                        path!["secrets", name.as_str(), "timeout"],
+                        "el timeout debe ser mayor que 0",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issue>) {
     let mut seen = HashSet::new();
     for (i, c) in plan.credentials.iter().enumerate() {
+        if let (Some(p), Some(cfg)) = (&c.provider, config)
+            && p != FILE_PROVIDER
+            && !cfg.secrets.contains_key(p)
+        {
+            out.push(Issue::error(
+                path!["credentials", i, "provider"],
+                format!("el proveedor '{p}' no existe en [secrets] de .baton/config.toml"),
+            ));
+        }
         if !is_slug(&c.id) {
             out.push(Issue::error(
                 path!["credentials", i, "id"],
@@ -1030,5 +1094,54 @@ mod tests {
     #[test]
     fn empty_config_is_valid() {
         assert!(validate_config(&Config::default()).is_empty());
+    }
+
+    #[test]
+    fn secret_providers_are_validated() {
+        let ok = config(
+            "[defaults]\nsecrets = \"vault\"\n[secrets.vault]\ntype = \"command\"\n\
+             get = \"vault kv get -field={campo} secret/{ambiente}/{prefijo}\"\ntimeout = \"10s\"\n",
+        );
+        assert!(
+            validate_config(&ok).is_empty(),
+            "{:?}",
+            validate_config(&ok)
+        );
+
+        let bad = config(
+            "[defaults]\nsecrets = \"fantasma\"\n[secrets.file]\ntype = \"command\"\nget = \"x\"\n\
+             [secrets.vacio]\ntype = \"command\"\nget = \"  \"\ntimeout = \"0s\"\n\
+             [secrets.raro]\ntype = \"command\"\nget = \"x {desconocido}\"\n",
+        );
+        let issues = validate_config(&bad);
+        let all: Vec<String> = issues.iter().map(|i| i.message.clone()).collect();
+        let all = all.join("\n");
+        assert!(all.contains("'fantasma' no existe"), "{all}");
+        assert!(all.contains("'file' está reservado"), "{all}");
+        assert!(all.contains("get necesita el comando"), "{all}");
+        assert!(all.contains("timeout debe ser mayor"), "{all}");
+        assert!(
+            all.contains("placeholder desconocido {desconocido}"),
+            "{all}"
+        );
+    }
+
+    #[test]
+    fn a_credential_provider_must_exist_when_the_config_is_known() {
+        let plan = Plan::parse(
+            "name = \"p\"\n[[credentials]]\nid = \"g\"\nkind = \"docker\"\nref = \"docker.env#G\"\n\
+             provider = \"vault\"\n[[credentials]]\nid = \"h\"\nkind = \"git\"\nref = \"git.env#H\"\n\
+             provider = \"file\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+        )
+        .unwrap();
+        let none = validate_plan(&plan, None);
+        assert!(
+            !none.iter().any(|i| i.message.contains("proveedor")),
+            "{none:?}"
+        );
+        let cfg = Config::default();
+        let issues = validate_plan(&plan, Some(&cfg));
+        assert_error(&issues, "credentials[0].provider", "'vault' no existe");
+        assert!(!issues.iter().any(|i| i.message.contains("'file'")));
     }
 }

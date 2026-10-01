@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command as Proc;
 
 /// Un comando de shell listo para correr.
@@ -19,6 +19,10 @@ pub struct Command {
     pub cwd: PathBuf,
     /// Variables de entorno extra (se suman a las del proceso).
     pub env: Vec<(String, String)>,
+    /// Variables con valores secretos (credenciales). Nunca van en los argumentos de un proceso
+    /// (se verían con `ps`): local y docker context las reciben por el entorno del proceso y ssh
+    /// por la entrada estándar.
+    pub secrets: Vec<(String, String)>,
     pub timeout: Option<Duration>,
 }
 
@@ -97,6 +101,7 @@ async fn spawn_and_stream(
     args: &[String],
     cwd: Option<&std::path::Path>,
     env: &[(String, String)],
+    stdin: Option<&[u8]>,
     timeout: Option<Duration>,
     on_line: LineFn<'_>,
 ) -> io::Result<Exit> {
@@ -106,7 +111,11 @@ async fn spawn_and_stream(
         builder.current_dir(cwd);
     }
     let mut child = builder
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -114,6 +123,12 @@ async fn spawn_and_stream(
         .process_group(0)
         .spawn()?;
     let mut guard = GroupKill { pgid: child.id() };
+    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        // Poco texto (unas líneas `export`): cabe en el búfer de la tubería, no hay riesgo de
+        // bloqueo. Si el proceso termina sin leerlo, no es un error.
+        let _ = pipe.write_all(data).await;
+        drop(pipe);
+    }
     let mut out = BufReader::new(child.stdout.take().expect("stdout con pipe"));
     let mut err = BufReader::new(child.stderr.take().expect("stderr con pipe"));
 
@@ -171,7 +186,8 @@ impl Transport for LocalTransport {
                 "sh",
                 &["-c".to_string(), cmd.line.clone()],
                 Some(&cmd.cwd),
-                &cmd.env,
+                &[cmd.env.as_slice(), cmd.secrets.as_slice()].concat(),
+                None,
                 cmd.timeout,
                 on_line,
             )
@@ -242,11 +258,31 @@ impl SshTransport {
             .iter()
             .map(|(k, v)| format!("{k}={} ", sh_quote(v)))
             .collect();
+        // Los secretos no van aquí: se leen de la entrada estándar (`. /dev/stdin`) y quedan
+        // exportados para el `sh -c` que sigue.
+        let load = if cmd.secrets.is_empty() {
+            ""
+        } else {
+            ". /dev/stdin && "
+        };
         format!(
-            "cd {} && {env}sh -c {}",
+            "cd {} && {load}{env}sh -c {}",
             sh_quote(&dir.to_string_lossy()),
             sh_quote(&cmd.line)
         )
+    }
+
+    /// `export K='v'` por secreto, para la entrada estándar del shell remoto.
+    fn secrets_script(cmd: &Command) -> Option<Vec<u8>> {
+        if cmd.secrets.is_empty() {
+            return None;
+        }
+        let script: String = cmd
+            .secrets
+            .iter()
+            .map(|(k, v)| format!("export {k}={}\n", sh_quote(v)))
+            .collect();
+        Some(script.into_bytes())
     }
 }
 
@@ -261,7 +297,17 @@ impl Transport for SshTransport {
             let args = self.args(&remote);
             // `envs()` sobre lo heredado solo agrega/pisa estas claves (no limpia el resto), así
             // que el proceso local de `ssh` conserva `SSH_AUTH_SOCK` y compañía igual.
-            spawn_and_stream(&self.ssh_bin, &args, None, &cmd.env, cmd.timeout, on_line).await
+            let stdin = Self::secrets_script(cmd);
+            spawn_and_stream(
+                &self.ssh_bin,
+                &args,
+                None,
+                &cmd.env,
+                stdin.as_deref(),
+                cmd.timeout,
+                on_line,
+            )
+            .await
         })
     }
 }
@@ -298,6 +344,7 @@ mod tests {
             line: line.into(),
             cwd: std::env::temp_dir(),
             env: vec![],
+            secrets: vec![],
             timeout: None,
         }
     }
@@ -513,7 +560,7 @@ sh -c "$last"
         // el ejecutable recién escrito puede verse "ocupado" (ETXTBSY) un instante: se reintenta.
         let mut attempts = 0;
         let exit = loop {
-            match spawn_and_stream(&t.ssh_bin, &args, None, &env, None, &mut on_line).await {
+            match spawn_and_stream(&t.ssh_bin, &args, None, &env, None, None, &mut on_line).await {
                 Ok(e) => break e,
                 Err(e) if e.raw_os_error() == Some(26) && attempts < 20 => {
                     attempts += 1;
@@ -531,6 +578,81 @@ sh -c "$last"
         assert!(recorded.contains("-p 2222"));
         assert!(recorded.contains("deploy@10.0.4.12"));
         assert!(recorded.contains(&format!("cd '{}'", remote.join("services/api").display())));
+    }
+
+    #[test]
+    fn secrets_never_appear_in_the_ssh_arguments() {
+        let root = PathBuf::from("/x");
+        let t = ssh(&root, "/opt/stack");
+        let mut c = cmd("echo $TOKEN");
+        c.cwd = root.clone();
+        c.secrets = vec![("TOKEN".into(), "ghp_it's secret".into())];
+        let remote = t.remote_command(&c);
+        assert_eq!(
+            remote,
+            "cd '/opt/stack/' && . /dev/stdin && sh -c 'echo $TOKEN'"
+        );
+        assert!(!t.args(&remote).join(" ").contains("ghp_"));
+        let script = SshTransport::secrets_script(&c).unwrap();
+        assert_eq!(
+            String::from_utf8(script).unwrap(),
+            "export TOKEN='ghp_it'\\''s secret'\n"
+        );
+        // sin secretos no hay nada que leer de la entrada estándar
+        c.secrets.clear();
+        assert!(SshTransport::secrets_script(&c).is_none());
+        assert!(!t.remote_command(&c).contains("/dev/stdin"));
+    }
+
+    #[tokio::test]
+    async fn ssh_delivers_secrets_on_stdin_so_the_remote_command_sees_them_but_ps_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("local");
+        let remote = tmp.path().join("remote");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&remote).unwrap();
+        let calls = tmp.path().join("_calls");
+        let mut t = ssh(&root, &remote.to_string_lossy());
+        t.identity = None;
+        t.ssh_bin = fake_ssh_bin(&tmp).to_string_lossy().into_owned();
+
+        let mut c = cmd("printf '%s' \"$TOKEN\"");
+        c.cwd = root.clone();
+        c.env = vec![("BATON_SSH_CALLS".into(), calls.display().to_string())];
+        c.secrets = vec![("TOKEN".into(), "ghp_valor_secreto".into())];
+
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let sink = lines.clone();
+        let mut on_line = move |s: Stream, l: String| sink.lock().unwrap().push((s, l));
+        // el ejecutable recién escrito puede verse "ocupado" (ETXTBSY) un instante: se reintenta.
+        let mut attempts = 0;
+        let exit = loop {
+            match t.run(&c, &mut on_line).await {
+                Ok(e) => break e,
+                Err(e) if e.raw_os_error() == Some(26) && attempts < 20 => {
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+        assert!(exit.success());
+        assert_eq!(
+            lines.lock().unwrap().as_slice(),
+            [(Stream::Stdout, "ghp_valor_secreto".to_string())],
+            "el comando remoto recibió el secreto"
+        );
+        let recorded = std::fs::read_to_string(&calls).unwrap();
+        assert!(!recorded.contains("ghp_valor_secreto"), "{recorded}");
+    }
+
+    #[tokio::test]
+    async fn local_secrets_reach_the_command_through_its_environment() {
+        let mut c = cmd("printf '%s' \"$TOKEN\"");
+        c.secrets = vec![("TOKEN".into(), "valor-local".into())];
+        let (exit, lines) = run(c).await;
+        assert!(exit.success());
+        assert_eq!(lines, [(Stream::Stdout, "valor-local".to_string())]);
     }
 
     // ------------------------------------------------------------- docker context

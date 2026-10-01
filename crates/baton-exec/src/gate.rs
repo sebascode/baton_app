@@ -409,6 +409,7 @@ async fn capture(
         line: line.clone(),
         cwd: cwd.to_path_buf(),
         env: ctx.opts.env.clone(),
+        secrets: ctx.secrets_for(&line, false),
         timeout: Some(timeout),
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());

@@ -7,6 +7,7 @@ use baton_core::plan::{CredentialKind, Plan, Step};
 use baton_core::{Config, Issue, Requirement};
 use baton_exec::{RunHandle, RunInput, RunOptions, scan_compose, spawn};
 use baton_store::plan_edit::{SaveError, save_plan_steps};
+use baton_store::secrets::{Resolver, Source};
 use baton_store::sources::expand_sources;
 use baton_store::state::{State, credential_key};
 use baton_store::{Project, check_plan};
@@ -33,6 +34,10 @@ pub struct RunDriver {
     /// Las credenciales que arma `app()`, en el mismo orden que `CredentialsState::items`: hace
     /// falta para saber a qué archivo y campos volver a escribir cuando se confirman.
     cred_reqs: Vec<Requirement>,
+    /// El valor de cada campo cuando se armó la pantalla (mismo orden que `cred_reqs` y sus
+    /// campos). Al continuar solo se escribe en el `.env` lo que el usuario cambió: lo que vino de
+    /// un proveedor de secretos o de una variable de entorno no debe quedar guardado en disco.
+    cred_initial: Vec<Vec<String>>,
     /// Cómo terminó la ejecución, si llegó a terminar.
     pub outcome: Option<RunOutcome>,
 }
@@ -46,6 +51,7 @@ impl RunDriver {
             flags,
             handle: None,
             cred_reqs: Vec::new(),
+            cred_initial: Vec::new(),
             outcome: None,
         }
     }
@@ -107,13 +113,18 @@ impl RunDriver {
         let reqs = baton_core::required_credentials(&self.plan, &self.config);
         if reqs.is_empty() {
             self.cred_reqs.clear();
+            self.cred_initial.clear();
             return None;
         }
         let ambiente = self.flags.ambiente.as_deref();
         let state = State::load(&self.project).unwrap_or_default();
-        let items = reqs
+        let items: Vec<CredItem> = reqs
             .iter()
-            .map(|req| credential_item(&self.project, ambiente, req, &state))
+            .map(|req| credential_item(&self.project, &self.config, ambiente, req, &state))
+            .collect();
+        self.cred_initial = items
+            .iter()
+            .map(|i| i.fields.iter().map(|f| f.value.value()).collect())
             .collect();
         let mut files: Vec<String> = reqs.iter().map(|r| r.reference.file.clone()).collect();
         files.sort();
@@ -139,19 +150,18 @@ impl RunDriver {
         let mut state = State::load(&self.project).unwrap_or_default();
         let now = baton_store::clock::iso();
         let mut errors = Vec::new();
-        for (item, req) in c.items.iter().zip(&self.cred_reqs) {
+        for (idx, (item, req)) in c.items.iter().zip(&self.cred_reqs).enumerate() {
             let specs = baton_core::fields_for(req.kind);
-            let pairs: Vec<(&str, String)> = specs
-                .iter()
-                .zip(&item.fields)
-                .map(|(spec, f)| (spec.key, f.value.value()))
-                .collect();
-            if let Err(e) = baton_store::credentials::save_fields(
-                &self.project,
-                ambiente,
-                &req.reference,
-                &pairs,
-            ) {
+            let shown: Vec<String> = item.fields.iter().map(|f| f.value.value()).collect();
+            let pairs = changed_fields(specs, &shown, self.cred_initial.get(idx));
+            if !pairs.is_empty()
+                && let Err(e) = baton_store::credentials::save_fields(
+                    &self.project,
+                    ambiente,
+                    &req.reference,
+                    &pairs,
+                )
+            {
                 errors.push(format!("{}: {e}", req.reference));
                 continue;
             }
@@ -322,23 +332,43 @@ impl RunDriver {
     }
 }
 
+/// Los campos (`clave corta`, valor) que el usuario cambió respecto de lo que mostraba la pantalla
+/// al abrirse: son los únicos que se escriben en el `.env`. Lo que vino de un proveedor de
+/// secretos o de una variable de entorno, sin tocar, no se guarda en disco.
+fn changed_fields<'a>(
+    specs: &'a [baton_core::credential::FieldSpec],
+    shown: &[String],
+    initial: Option<&Vec<String>>,
+) -> Vec<(&'a str, String)> {
+    specs
+        .iter()
+        .zip(shown)
+        .enumerate()
+        .filter(|(k, (_, now))| initial.and_then(|i| i.get(*k)) != Some(*now))
+        .map(|(_, (spec, now))| (spec.key, now.clone()))
+        .collect()
+}
+
 /// Arma la fila de la credencial (título, estado y campos) a partir de lo que hay resuelto en
 /// disco (archivo o variable de entorno) y del flag "no preguntar" de `state.json`.
 fn credential_item(
     project: &Project,
+    config: &Config,
     ambiente: Option<&str>,
     req: &Requirement,
     state: &State,
 ) -> CredItem {
     let specs = baton_core::fields_for(req.kind);
+    let resolver = Resolver::new(project, config, ambiente);
     let mut fields = Vec::with_capacity(specs.len());
     let mut present = true;
+    let mut provider = None;
     for spec in specs {
-        let value =
-            baton_store::credentials::resolve_field(project, ambiente, &req.reference, spec.key)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+        let found = resolver.resolve(&req.reference, spec.key, req.provider.as_deref());
+        if let Source::Provider(name) = &found.source {
+            provider = Some(name.clone());
+        }
+        let value = found.value.unwrap_or_default();
         if !spec.optional && value.is_empty() {
             present = false;
         }
@@ -350,7 +380,9 @@ fn credential_item(
         (true, false) => CredStatus::FromFile,
         (false, _) => CredStatus::NotFound,
     };
-    CredItem::new(&req.label, status, &req.reference.file, fields)
+    // "desde <origen>": el archivo, o el proveedor si de ahí salieron los valores
+    let origin = provider.unwrap_or_else(|| req.reference.file.clone());
+    CredItem::new(&req.label, status, &origin, fields)
 }
 
 /// El árbol de `.baton/` que se muestra a la izquierda de la pantalla de credenciales.
@@ -493,5 +525,44 @@ impl Driver for RunDriver {
             }
             app.on_event(ev);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baton_core::plan::CredentialKind;
+
+    #[test]
+    fn only_what_the_user_changed_is_written() {
+        let specs = baton_core::fields_for(CredentialKind::Docker); // registro, usuario, token
+        let initial = vec![
+            "ghcr.io".to_string(),
+            "sofia".to_string(),
+            "del-vault".to_string(),
+        ];
+        let same = initial.clone();
+        assert!(changed_fields(specs, &same, Some(&initial)).is_empty());
+
+        let edited = vec![
+            "ghcr.io".to_string(),
+            "sofia".to_string(),
+            "nuevo".to_string(),
+        ];
+        assert_eq!(
+            changed_fields(specs, &edited, Some(&initial)),
+            [("TOKEN", "nuevo".to_string())]
+        );
+
+        // borrar un campo es un cambio (se quita del .env)
+        let cleared = vec![
+            "ghcr.io".to_string(),
+            String::new(),
+            "del-vault".to_string(),
+        ];
+        assert_eq!(
+            changed_fields(specs, &cleared, Some(&initial)),
+            [("USER", String::new())]
+        );
     }
 }

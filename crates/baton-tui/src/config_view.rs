@@ -443,6 +443,8 @@ impl ConfigState {
             defaults: self.base.defaults.clone(),
             targets,
             logs,
+            // los proveedores de secretos no se editan en esta pantalla: se conservan tal cual
+            secrets: self.base.secrets.clone(),
         })
     }
 

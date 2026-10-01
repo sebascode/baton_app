@@ -811,3 +811,33 @@ fn gate_logs_show_progress_lines_with_the_right_kinds() {
         .collect();
     assert_eq!(kinds, [LogKind::Retry, LogKind::Success]);
 }
+
+#[test]
+fn a_command_check_receives_the_credential_variables_it_mentions() {
+    let fx = Fx::new("  api:\n    healthcheck:\n      test: [CMD, 'true']\n");
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"docker.env#GHCR".parse().unwrap(),
+        &[
+            ("registry", "ghcr.io".to_string()),
+            ("user", "sofia".to_string()),
+            ("token", "ghp_secreto_12345".to_string()),
+        ],
+    )
+    .unwrap();
+    // el check solo pasa si ve el token (sin imprimirlo)
+    let plan = Plan::parse(&format!(
+        "name = \"instalar\"\n[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"svc\"\nname = \"Servicios\"\ntype = \"compose\"\nsource = \"svc/docker-compose.yml\"\n\
+         [steps.gate]\nmode = \"auto\"\n{TIMING}[[steps.gate.checks]]\nname = \"ve-token\"\nkind = \"command\"\n\
+         run = \"test \\\"$GHCR_TOKEN\\\" = ghp_secreto_12345\"\n"
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let events = fx.run(&plan);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        check_states(&events, 0).last().map(|s| s.0),
+        Some(CheckState::Passed)
+    );
+}

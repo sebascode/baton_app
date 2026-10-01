@@ -24,6 +24,7 @@ use baton_store::Project;
 use baton_store::clock;
 use baton_store::init::ensure_baton_dir;
 use baton_store::logs::{LogSink, resolve_log_path};
+use baton_store::secrets::Resolver;
 use baton_store::state::{LastRun, RunStatus, State, StepRecord, StepState, credential_key};
 use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounded_channel};
 
@@ -119,6 +120,12 @@ pub(crate) struct Ctx {
     persist: Mutex<Persist>,
     /// Advertencias de la ejecución (checks no críticos fallidos, gates saltados).
     pub(crate) warnings: Mutex<Vec<String>>,
+    /// Variables de las credenciales declaradas en el plan (`PREFIJO_CAMPO` -> valor) que se
+    /// pudieron resolver. Cada comando recibe solo las que necesita (ver `secrets_for`).
+    secrets: Vec<(String, String)>,
+    /// Valores de esos campos que son secretos (token, contraseña...): se tachan de todo lo que
+    /// se muestra o se guarda.
+    redacted: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,8 +153,23 @@ impl Ctx {
         let _ = self.tx.send(event);
     }
 
+    /// Variables de credenciales que recibe un comando: las que su texto menciona. Un paso
+    /// `compose` o `dockerfile` (`all`) recibe todas, porque sus archivos interpolan `${VAR}`
+    /// y el comando no lo muestra.
+    pub(crate) fn secrets_for(&self, line: &str, all: bool) -> Vec<(String, String)> {
+        self.secrets
+            .iter()
+            .filter(|(name, _)| all || mentions_variable(line, name))
+            .cloned()
+            .collect()
+    }
+
+    fn redact(&self, text: &str) -> String {
+        baton_core::mask::redact(text, &self.redacted)
+    }
+
     pub(crate) fn log(&self, step: usize, kind: LogKind, text: impl Into<String>) {
-        let text = text.into();
+        let text = self.redact(&text.into());
         let at = clock::clock();
         if let Ok(mut sink) = self.sink.lock()
             && let Some(s) = sink.as_mut()
@@ -162,6 +184,7 @@ impl Ctx {
     }
 
     fn output(&self, step: usize, _stream: Stream, text: String) {
+        let text = self.redact(&text);
         if let Ok(mut t) = self.tail.lock() {
             t.push(text.clone());
             let extra = t.len().saturating_sub(200);
@@ -208,10 +231,11 @@ impl Ctx {
             None => self.project.root.clone(),
         };
         Command {
-            line,
             cwd,
             env: self.opts.env.clone(),
+            secrets: self.secrets_for(&line, ps.step.kind.is_scanned()),
             timeout: ps.step.timeout.map(|t| t.as_duration()),
+            line,
         }
     }
 
@@ -448,6 +472,51 @@ fn describe(exit: Exit, timeout: Option<Duration>) -> String {
             None => "El paso superó el timeout".to_string(),
         },
     }
+}
+
+// ------------------------------------------------------------ credenciales
+
+/// Resuelve los campos de las credenciales que declara el plan (`[[credentials]]`): archivo
+/// `.env` o variable de entorno, con el ambiente elegido. Devuelve las variables con su valor y,
+/// aparte, los valores que son secretos (para redactarlos de la salida). Un campo que no se
+/// pueda leer se omite: `prepare_run` ya avisó de lo que falta.
+fn resolve_credentials(
+    project: &Project,
+    config: &Config,
+    plan: &Plan,
+    ambiente: Option<&str>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let resolver = Resolver::new(project, config, ambiente);
+    let mut vars: Vec<(String, String)> = Vec::new();
+    let mut secret_values = Vec::new();
+    for req in &plan.credentials {
+        for spec in baton_core::credential::fields_for(req.kind) {
+            let found = resolver.resolve(&req.reference, spec.key, req.provider.as_deref());
+            let Some(value) = found.value.filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let name = req.reference.variable(spec.key);
+            if vars.iter().any(|(n, _)| *n == name) {
+                continue; // la misma referencia declarada dos veces
+            }
+            if spec.secret {
+                secret_values.push(value.clone());
+            }
+            vars.push((name, value));
+        }
+    }
+    (vars, secret_values)
+}
+
+/// `name` aparece en `line` como variable completa (`$NAME`, `${NAME}`, `NAME=`...), no como parte
+/// de un nombre más largo (`NAME_OTRO`).
+fn mentions_variable(line: &str, name: &str) -> bool {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    line.match_indices(name).any(|(i, _)| {
+        let before = line[..i].chars().next_back();
+        let after = line[i + name.len()..].chars().next();
+        !before.is_some_and(is_word) && !after.is_some_and(is_word)
+    })
 }
 
 // ------------------------------------------------------------ ejecución
@@ -980,6 +1049,11 @@ async fn run(
 
     let (transports, ssh_conns) =
         build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
+    let (secrets, redacted) = if opts.dry_run {
+        (Vec::new(), Vec::new())
+    } else {
+        resolve_credentials(&project, &config, &plan, opts.ambiente.as_deref())
+    };
     let ctx = Ctx {
         project,
         plan,
@@ -1001,6 +1075,8 @@ async fn run(
             enabled: false,
         }),
         warnings: Mutex::new(Vec::new()),
+        secrets,
+        redacted,
     };
     // El estado se guarda salvo en dry-run: probar un plan no debe pisar la última ejecución real.
     if let Ok(mut p) = ctx.persist.lock() {
@@ -1245,5 +1321,21 @@ async fn run_plan(
     match h {
         Halt::Failed => RunOutcome::Failed,
         Halt::Abort | Halt::Rollback => RunOutcome::Aborted,
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::mentions_variable;
+
+    #[test]
+    fn a_variable_counts_only_as_a_whole_name() {
+        assert!(mentions_variable("echo $GHCR_TOKEN", "GHCR_TOKEN"));
+        assert!(mentions_variable("echo ${GHCR_TOKEN}/x", "GHCR_TOKEN"));
+        assert!(mentions_variable("GHCR_TOKEN=1 make", "GHCR_TOKEN"));
+        assert!(mentions_variable("a\nb $GHCR_TOKEN", "GHCR_TOKEN"));
+        assert!(!mentions_variable("echo $GHCR_TOKEN_OTRO", "GHCR_TOKEN"));
+        assert!(!mentions_variable("echo $MY_GHCR_TOKEN", "GHCR_TOKEN"));
+        assert!(!mentions_variable("echo hola", "GHCR_TOKEN"));
     }
 }

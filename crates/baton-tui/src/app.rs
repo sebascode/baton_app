@@ -85,7 +85,7 @@ pub enum Effect {
     SavePlan(Vec<Step>),
     /// Guardar la configuración editada (`ConfigState` ya comprobó que los campos se entienden).
     /// Quien atiende responde con `apply_saved_config` o `notify`.
-    SaveConfig(Config),
+    SaveConfig(Box<Config>),
     Quit,
 }
 
@@ -414,7 +414,7 @@ impl App {
                 ConfigAction::Back => self.back_to_preview(),
                 ConfigAction::Test(i) => Some(Effect::TestTarget(i)),
                 ConfigAction::Save => match c.to_config() {
-                    Ok(config) => Some(Effect::SaveConfig(config)),
+                    Ok(config) => Some(Effect::SaveConfig(Box::new(config))),
                     Err(errors) => {
                         c.notice = Some(errors.join("; "));
                         None
