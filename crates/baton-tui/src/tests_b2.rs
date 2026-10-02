@@ -353,7 +353,8 @@ fn credentials_screen_sits_between_the_preview_and_the_run() {
             .to_vec(),
             backup: true,
             rollback: true,
-            dry_run: true
+            dry_run: true,
+            resume: false
         }
     );
 }
@@ -678,7 +679,7 @@ fn editor_shows_the_step_form_as_designed() {
         "+ nuevo paso",
         "nombre",
         "Levantar servicios",
-        "[compose]  dockerfile  script  comando  check  backup  gate",
+        "[compose]  dockerfile  script  sql  comando  check  backup  gate",
         "services/*/docker-compose.yml",
         "4 archivos",
         "prod-app",
@@ -716,7 +717,8 @@ fn editor_styles() {
         style_at(&buf, find(&buf, "[compose]")).fg,
         Some(theme::INFO)
     ); // opción activa
-    assert_eq!(style_at(&buf, find(&buf, "script")).fg, Some(theme::MUTED)); // v0.2: deshabilitada
+    // `script` ya se puede elegir: no va atenuada como una opción deshabilitada
+    assert_ne!(style_at(&buf, find(&buf, "script")).fg, Some(theme::MUTED));
     assert_eq!(style_at(&buf, find(&buf, "◆")).fg, Some(theme::WARN));
     assert_eq!(
         style_at(&buf, find(&buf, "configurar ›")).fg,
@@ -783,16 +785,20 @@ fn editing_the_source_drops_the_stale_file_count() {
 }
 
 #[test]
-fn kind_selector_skips_the_v0_2_script_type() {
+fn kind_selector_walks_through_script_like_any_other_type() {
     let mut app = app_at(Screen::Editor);
     press(&mut app, KeyCode::Tab); // tipo
     assert_eq!(editor(&mut app).steps[5].kind(), "compose");
     press(&mut app, KeyCode::Right);
     assert_eq!(editor(&mut app).steps[5].kind(), "dockerfile");
     press(&mut app, KeyCode::Right);
-    assert_eq!(editor(&mut app).steps[5].kind(), "comando"); // salta script
+    assert_eq!(editor(&mut app).steps[5].kind(), "script");
+    press(&mut app, KeyCode::Right);
+    assert_eq!(editor(&mut app).steps[5].kind(), "sql");
+    press(&mut app, KeyCode::Right);
+    assert_eq!(editor(&mut app).steps[5].kind(), "comando");
     press(&mut app, KeyCode::Left);
-    assert_eq!(editor(&mut app).steps[5].kind(), "dockerfile");
+    assert_eq!(editor(&mut app).steps[5].kind(), "sql");
 }
 
 #[test]
@@ -1453,4 +1459,48 @@ fn an_empty_gate_source_reads_naturally() {
     editor(&mut app).open_at(0, true); // sin origen
     let t = screen(&app, 100, 24);
     assert!(t.contains("sin origen · 0 servicios · sin escanear"), "{t}");
+}
+
+#[test]
+fn an_empty_optional_field_does_not_block_confirming_a_credential() {
+    let mut app = app_at(Screen::Credentials);
+    let c = creds(&mut app);
+    let n = c.items.len();
+    // una credencial completa salvo por dos campos opcionales vacíos
+    c.items.push(crate::credentials::CredItem::new(
+        "app-db",
+        CredStatus::NotFound,
+        "db.env",
+        vec![
+            crate::credentials::CredField::new("usuario", "app", false),
+            crate::credentials::CredField::new("contraseña", "s3cr3to", true),
+            crate::credentials::CredField::new("host", "", false).optional(true),
+            crate::credentials::CredField::new("contenedor", "", false).optional(true),
+        ],
+    ));
+    c.cursor = n;
+    press(&mut app, KeyCode::Enter);
+    let c = creds(&mut app);
+    assert_eq!(c.items[n].status, CredStatus::Confirmed, "{:?}", c.notice);
+    assert_eq!(c.notice, None);
+
+    // y uno obligatorio vacío sigue bloqueando, nombrando solo lo que falta
+    let mut app = app_at(Screen::Credentials);
+    let c = creds(&mut app);
+    let n = c.items.len();
+    c.items.push(crate::credentials::CredItem::new(
+        "otra-db",
+        CredStatus::NotFound,
+        "db.env",
+        vec![
+            crate::credentials::CredField::new("usuario", "", false),
+            crate::credentials::CredField::new("host", "", false).optional(true),
+        ],
+    ));
+    c.cursor = n;
+    press(&mut app, KeyCode::Enter);
+    let c = creds(&mut app);
+    assert_eq!(c.items[n].status, CredStatus::NotFound);
+    assert_eq!(c.notice.as_deref(), Some("falta completar: usuario"));
+    assert_eq!(c.editing, Some(0));
 }

@@ -658,7 +658,14 @@ fn full_flow_preview_run_failure_retry_summary() {
     assert!(t.contains("↻ Levantar servicios  1 reintento"), "{t}");
     assert!(t.contains("» Smoke tests"), "{t}");
     assert!(t.contains("✓ Gate: confirmar despliegue"), "{t}");
-    assert_eq!(app.handle_key(key(KeyCode::Enter)), Some(Effect::Quit));
+    // enter vuelve a la vista del plan (no cierra la app) y deja la franja con cómo terminó
+    assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
+    assert!(matches!(app.mode, Mode::Preview(_)), "{:?}", app.mode);
+    let back = text(&render(110, 30, |b, a| app.render(b, a)));
+    assert!(back.contains("Revisar plan"), "{back}");
+    assert!(back.contains("Última ejecución: completada"), "{back}");
+    // y desde ahí q sí sale
+    assert_eq!(app.handle_key(key(KeyCode::Char('q'))), Some(Effect::Quit));
 }
 
 #[test]

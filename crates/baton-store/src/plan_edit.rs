@@ -81,6 +81,9 @@ pub fn save_plan_steps(
     let errors: Vec<Issue> = validate_plan(&wanted, config)
         .into_iter()
         .filter(Issue::is_error)
+        // un plan sin pasos se puede guardar: es el estado de uno recién creado, o al que se le
+        // borraron todos mientras se rearma (no se podrá ejecutar, pero `validate` lo dice)
+        .filter(|i| !(steps.is_empty() && i.path_string() == "steps"))
         .collect();
     if has_errors(&errors) {
         return Err(SaveError::Invalid(errors));
@@ -576,6 +579,81 @@ service = "web"
 kind = "http"
 url = "http://{destino}:3000/health"
 "#;
+
+    #[test]
+    fn a_removed_step_disappears_and_the_comments_of_the_others_survive() {
+        let (_t, p) = project_with(PLAN);
+        let mut s = steps(&p);
+        s.remove(0); // se borra "pre"
+        let saved = save_plan_steps(&p, "instalar", &s, None).unwrap();
+        assert!(saved.changed);
+        let text = read(&p);
+        assert!(
+            !text.contains("pre-checks") && !text.contains("id = \"pre\""),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Revisa que la máquina sirva"),
+            "se va con su paso: {text}"
+        );
+        // lo demás queda intacto, con sus comentarios y su gate
+        assert!(text.contains("# El corazón del despliegue"), "{text}");
+        assert!(text.contains("# sin api no hay nada"), "{text}");
+        assert!(text.contains("# el interruptor general"), "{text}");
+        assert_eq!(steps(&p).len(), 1);
+        assert_eq!(steps(&p)[0].id, "svc");
+        assert_eq!(steps(&p)[0].gate.as_ref().unwrap().checks.len(), 2);
+    }
+
+    #[test]
+    fn a_removed_check_disappears_from_its_gate() {
+        let (_t, p) = project_with(PLAN);
+        let mut s = steps(&p);
+        s[1].gate.as_mut().unwrap().checks.remove(0); // se borra el de "api"
+        save_plan_steps(&p, "instalar", &s, None).unwrap();
+        let text = read(&p);
+        assert!(
+            !text.contains("service = \"api\"") && !text.contains("sin api"),
+            "{text}"
+        );
+        assert!(text.contains("service = \"web\""), "{text}");
+        assert_eq!(steps(&p)[1].gate.as_ref().unwrap().checks.len(), 1);
+    }
+
+    #[test]
+    fn every_step_can_be_removed_and_the_empty_plan_is_saved() {
+        let (_t, p) = project_with(PLAN);
+        let saved = save_plan_steps(&p, "instalar", &[], None).unwrap();
+        assert!(saved.changed);
+        let text = read(&p);
+        assert!(!text.contains("[[steps]]"), "{text}");
+        assert!(text.contains("name = \"instalar\""), "{text}");
+        assert!(Plan::parse(&text).unwrap().steps.is_empty());
+        // y vuelve a poder llenarse
+        let again = Plan::parse(PLAN).unwrap().steps;
+        save_plan_steps(&p, "instalar", &again, None).unwrap();
+        assert_eq!(steps(&p).len(), 2);
+    }
+
+    #[test]
+    fn removing_a_step_that_another_one_depends_on_is_still_rejected_by_the_store() {
+        let plan = format!(
+            "{PLAN}\n[[steps]]\nid = \"extra\"\nname = \"Extra\"\ntype = \"check\"\ncommand = \"true\"\ndepends_on = [\"pre\"]\n"
+        );
+        let (_t, p) = project_with(&plan);
+        let mut s = steps(&p);
+        s.remove(0); // "extra" sigue dependiendo de "pre"
+        match save_plan_steps(&p, "instalar", &s, None) {
+            Err(SaveError::Invalid(issues)) => {
+                assert!(
+                    issues.iter().any(|i| i.message.contains("pre")),
+                    "{issues:?}"
+                );
+            }
+            other => panic!("se esperaba Invalid, hay {other:?}"),
+        }
+        assert_eq!(read(&p), plan, "no se escribió nada");
+    }
 
     #[test]
     fn saving_without_changes_touches_nothing() {

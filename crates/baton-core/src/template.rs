@@ -4,7 +4,9 @@
 //! en comandos docker), `${var}` (shell) y cualquier otra cosa.
 
 /// Variables disponibles en comandos, rollbacks y URLs de un paso.
-pub const STEP_VARS: &[&str] = &["plan", "fecha", "destino", "file", "dir", "name"];
+pub const STEP_VARS: &[&str] = &[
+    "plan", "fecha", "destino", "file", "dir", "name", "script", "stem",
+];
 /// Variables disponibles en las rutas de log.
 pub const LOG_VARS: &[&str] = &["plan", "fecha", "destino"];
 

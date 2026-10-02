@@ -6,7 +6,7 @@ use std::str::FromStr;
 use serde::de::{self, Deserialize, Deserializer};
 
 use crate::config::{Config, Target};
-use crate::plan::{CredentialKind, Plan};
+use crate::plan::{CredentialKind, Plan, StepKind};
 
 /// `archivo.env#PREFIJO`: agrupa las variables `PREFIJO_*` de `.baton/credentials/archivo.env`.
 ///
@@ -127,7 +127,10 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
             optional: true,
         },
     ];
-    const DB: [FieldSpec; 2] = [
+    // Los campos de conexión son opcionales: `psql` usa sus valores por defecto (socket local,
+    // puerto 5432, base con el nombre del usuario). `contenedor` hace que un paso `sql` ejecute
+    // con `docker exec` en vez de un `psql` local.
+    const DB: [FieldSpec; 6] = [
         FieldSpec {
             key: "USER",
             label: "usuario",
@@ -139,6 +142,30 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
             label: "contraseña",
             secret: true,
             optional: false,
+        },
+        FieldSpec {
+            key: "HOST",
+            label: "host",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "PORT",
+            label: "puerto",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "DATABASE",
+            label: "base",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "CONTAINER",
+            label: "contenedor",
+            secret: false,
+            optional: true,
         },
     ];
     const OTRO: [FieldSpec; 1] = [FieldSpec {
@@ -172,9 +199,14 @@ pub struct Requirement {
 /// activos usan (sin repetir una misma referencia). El orden es estable: primero las declaradas,
 /// luego las de destinos, cada grupo en su propio orden.
 pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
+    // Una credencial de base de datos solo se exige si algo la usa: un paso `sql` activo o el
+    // respaldo de la base. Así un plan con sus pasos `sql` desactivados no pide una conexión.
+    let db_in_use = plan.backup.as_ref().is_some_and(|b| b.database)
+        || plan.active_steps().any(|s| s.kind == StepKind::Sql);
     let mut out: Vec<Requirement> = plan
         .credentials
         .iter()
+        .filter(|c| c.kind != CredentialKind::Db || db_in_use)
         .map(|c| Requirement {
             id: c.id.clone(),
             kind: c.kind,
@@ -244,7 +276,10 @@ mod tests {
         assert_eq!(keys(CredentialKind::Git), ["USER", "TOKEN"]);
         assert_eq!(keys(CredentialKind::Docker), ["REGISTRY", "USER", "TOKEN"]);
         assert_eq!(keys(CredentialKind::Ssh), ["KEY", "PASSPHRASE"]);
-        assert_eq!(keys(CredentialKind::Db), ["USER", "PASSWORD"]);
+        assert_eq!(
+            keys(CredentialKind::Db),
+            ["USER", "PASSWORD", "HOST", "PORT", "DATABASE", "CONTAINER"]
+        );
         assert_eq!(keys(CredentialKind::Otro), ["VALUE"]);
         // los secretos nunca son el único dato visible sin enmascarar
         for k in [
@@ -336,5 +371,39 @@ mod tests {
         let config =
             Config::parse("[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\n").unwrap();
         assert!(required_credentials(&plan, &config).is_empty());
+    }
+
+    fn plan_with_db(steps: &str, backup: &str) -> Plan {
+        Plan::parse(&format!(
+            "name = \"p\"\n{backup}[[credentials]]\nid = \"db\"\nkind = \"db\"\nref = \"db.env#DB\"\n\
+             [[credentials]]\nid = \"g\"\nkind = \"git\"\nref = \"git.env#G\"\n{steps}"
+        ))
+        .unwrap()
+    }
+
+    fn db_ids(plan: &Plan) -> Vec<String> {
+        required_credentials(plan, &Config::default())
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_db_credential_is_required_only_when_something_uses_it() {
+        let sql = |enabled: bool| {
+            format!(
+                "[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\nenabled = {enabled}\n"
+            )
+        };
+        let cmd = "[[steps]]\nid = \"c\"\nname = \"C\"\ntype = \"comando\"\ncommand = \"true\"\n";
+        // un paso sql activo la exige; desactivado o sin ninguno, no (las demás siguen igual)
+        assert_eq!(db_ids(&plan_with_db(&sql(true), "")), ["db", "g"]);
+        assert_eq!(db_ids(&plan_with_db(&sql(false), "")), ["g"]);
+        assert_eq!(db_ids(&plan_with_db(cmd, "")), ["g"]);
+        // el respaldo de la base también la usa
+        assert_eq!(
+            db_ids(&plan_with_db(cmd, "[backup]\ndatabase = true\n")),
+            ["db", "g"]
+        );
     }
 }

@@ -162,6 +162,45 @@ pub enum RunOutcome {
     Aborted,
 }
 
+/// Un paso de una ejecución pasada, con su nombre.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryStep {
+    pub name: String,
+    pub status: StepStatus,
+    pub duration: Option<Duration>,
+    pub retries: u32,
+}
+
+/// Una ejecución pasada de un plan, para el historial (pantalla 10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// Identificador de la ejecución (el mismo del log).
+    pub id: String,
+    /// Inicio, ya formateado: `2026-10-01 17:57`.
+    pub started: String,
+    /// Hace cuánto (`hace 3 min`).
+    pub ago: String,
+    pub outcome: RunOutcome,
+    pub duration: Option<Duration>,
+    pub steps: Vec<HistoryStep>,
+    /// ¿Se guardó un log de esta ejecución? (un dry-run no lo tiene).
+    pub has_log: bool,
+}
+
+/// Cómo terminó la última ejecución, para la franja de estado de la vista del plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastRunBanner {
+    pub outcome: RunOutcome,
+    /// Qué pasó, en una frase: `falló en «Build imágenes»`, `completada`.
+    pub detail: String,
+    /// Hace cuánto terminó (`hace 3 min`).
+    pub ago: String,
+    /// Id del paso en que falló o se detuvo, para dejar el cursor ahí.
+    pub failed_step: Option<String>,
+    /// ¿Hay pasos ya hechos que se pueden saltar al reanudar?
+    pub can_resume: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEvent {
     RunStarted {

@@ -1,6 +1,6 @@
 //! Pantalla 1: vista previa del plan. Permite activar, ordenar y editar pasos antes de ejecutar.
 
-use baton_core::events::StepInfo;
+use baton_core::events::{LastRunBanner, RunOutcome, StepInfo};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_core::step_run::{gate_info, step_info};
 use ratatui::buffer::Buffer;
@@ -46,11 +46,17 @@ pub struct RunRequest {
     pub backup: bool,
     pub rollback: bool,
     pub dry_run: bool,
+    /// Reanudar: saltar los pasos que terminaron bien en la última ejecución.
+    pub resume: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewAction {
     Run(RunRequest),
+    /// Ver el historial de ejecuciones del plan.
+    History,
+    /// Ver el log de la última ejecución.
+    LastLog,
     Edit(usize),
     AddGate(usize),
     /// Ver el pipeline del plan (pantalla 9).
@@ -75,6 +81,8 @@ pub struct PreviewState {
     pub plans: Vec<String>,
     /// Selector de planes abierto: posición del cursor.
     pub switcher: Option<usize>,
+    /// Cómo terminó la última ejecución (la franja de estado de arriba); `None` si nunca se ejecutó.
+    pub last_run: Option<LastRunBanner>,
 }
 
 /// Línea gris de un paso: su descripción o, si no la tiene, lo que hace.
@@ -84,7 +92,11 @@ fn step_meta(step: &Step) -> String {
     }
     let src: Vec<&str> = step.source.iter().collect();
     match step.kind {
-        StepKind::Compose | StepKind::Dockerfile if !src.is_empty() => src.join(", "),
+        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql
+            if !src.is_empty() =>
+        {
+            src.join(", ")
+        }
         StepKind::Gate => step
             .gate
             .as_ref()
@@ -163,6 +175,20 @@ impl PreviewState {
             notice: Vec::new(),
             plans: Vec::new(),
             switcher: None,
+            last_run: None,
+        }
+    }
+
+    /// Al volver de una ejecución: lo que se mostraba como aviso o selector ya no aplica.
+    pub fn refresh_after_run(&mut self) {
+        self.notice.clear();
+        self.switcher = None;
+    }
+
+    /// Deja el cursor en el paso con ese id (el que falló), si existe.
+    pub fn select_step(&mut self, id: &str) {
+        if let Some(pos) = self.steps.iter().position(|s| s.id == id) {
+            self.cursor = pos;
         }
     }
 
@@ -173,8 +199,19 @@ impl PreviewState {
     /// Teclas del pie: `p` solo aparece si hay otros planes.
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
         let mut items = SHORTCUTS.to_vec();
+        let at = items.len() - 1; // antes de "ejecutar"
         if self.can_switch() {
             items.insert(items.len() - 1, ("p", "cambiar de plan"));
+        }
+        // lo de la última ejecución solo aparece si hay una
+        if let Some(b) = &self.last_run {
+            let mut extra = vec![("h", "historial"), ("l", "último log")];
+            if b.can_resume {
+                extra.push(("u", "reanudar"));
+            }
+            for (n, e) in extra.into_iter().enumerate() {
+                items.insert(at + n, e);
+            }
         }
         items
     }
@@ -212,6 +249,7 @@ impl PreviewState {
             backup: self.backup,
             rollback: self.rollback,
             dry_run: self.dry_run,
+            resume: false,
         }
     }
 
@@ -275,6 +313,19 @@ impl PreviewState {
                 self.switcher = Some(at);
             }
             KeyCode::Char('v') => return Some(PreviewAction::Pipeline),
+            KeyCode::Char('h') => return Some(PreviewAction::History),
+            KeyCode::Char('l') if self.last_run.is_some() => {
+                return Some(PreviewAction::LastLog);
+            }
+            // reanudar: como enter, pero sin repetir lo que ya salió bien
+            KeyCode::Char('u')
+                if self.active_count() > 0
+                    && self.last_run.as_ref().is_some_and(|b| b.can_resume) =>
+            {
+                let mut req = self.request();
+                req.resume = true;
+                return Some(PreviewAction::Run(req));
+            }
             KeyCode::Char('q') | KeyCode::Esc => return Some(PreviewAction::Quit),
             _ => {}
         }
@@ -320,6 +371,7 @@ impl PreviewState {
             inner.width,
             sep_high.saturating_sub(inner.y + 1 + notice_h),
         );
+        self.render_banner(buf, Rect::new(inner.x, inner.y, inner.width, 1));
         self.render_list(buf, list);
         for (n, line) in self.notice.iter().take(notice_h as usize).enumerate() {
             Line::from(Span::styled(
@@ -343,6 +395,31 @@ impl PreviewState {
         if self.switcher.is_some() {
             self.render_switcher(buf, list);
         }
+    }
+
+    /// La franja de estado de arriba: cómo terminó la última ejecución, con ✓ o ✗.
+    fn render_banner(&self, buf: &mut Buffer, area: Rect) {
+        let Some(b) = &self.last_run else {
+            return;
+        };
+        let (symbol, color) = match b.outcome {
+            RunOutcome::Completed => ("✓", theme::OK),
+            RunOutcome::CompletedWithWarnings | RunOutcome::Aborted => ("!", theme::WARN),
+            RunOutcome::Failed => ("✗", theme::ERR),
+        };
+        let content = pad(area);
+        let when = if b.ago.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", b.ago)
+        };
+        Line::from(vec![
+            Span::styled(format!("{symbol} "), Style::new().fg(color)),
+            Span::styled("Última ejecución: ", theme::secondary()),
+            Span::styled(b.detail.clone(), Style::new().fg(color)),
+            Span::styled(when, theme::secondary()),
+        ])
+        .render(content, buf);
     }
 
     /// Lista de planes sobre la lista de pasos: `●` el actual, `›` el cursor.

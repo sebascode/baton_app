@@ -18,7 +18,8 @@ use baton_core::events::{
     Badge, BadgeTone, Failure, FailureKind, LogKind, LogLine, RunCommand, RunEvent, RunOutcome,
     RunSummary, StepStatus,
 };
-use baton_core::plan::{GateMode, Plan, StepKind};
+use baton_core::plan::{CredentialKind, GateMode, Plan, StepKind};
+use baton_core::sql::{PgConn, dump_label, pg_dump_command, pg_restore_command, psql_command};
 use baton_core::step_run::{StepVars, step_info};
 use baton_store::Project;
 use baton_store::clock;
@@ -29,7 +30,9 @@ use baton_store::state::{LastRun, RunStatus, State, StepRecord, StepState, crede
 use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounded_channel};
 
 use crate::gate::{GateResult, run_auto_gate};
-use crate::prepare::{Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run};
+use crate::prepare::{
+    Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run, sql_risks,
+};
 use crate::remote::{SshConn, build_transports};
 use crate::transport::{Command, Exit, Stream, Transport, sh_quote};
 
@@ -164,6 +167,24 @@ impl Ctx {
             .collect()
     }
 
+    /// La conexión de la credencial `db` del plan (la validación exige que sea una sola).
+    fn pg_conn(&self) -> PgConn {
+        self.plan
+            .credentials
+            .iter()
+            .find(|c| c.kind == CredentialKind::Db)
+            .map(|c| baton_core::sql::pg_conn(&c.reference, &self.secrets))
+            .unwrap_or_default()
+    }
+
+    /// Un comando que usa la conexión de la base (respaldo y restauración): lleva las variables de
+    /// `libpq` aunque su línea no las nombre.
+    fn db_command(&self, ps: &PStep, line: String) -> Command {
+        let mut cmd = self.command(ps, line, None);
+        cmd.secrets.extend(self.pg_conn().env);
+        cmd
+    }
+
     fn redact(&self, text: &str) -> String {
         baton_core::mask::redact(text, &self.redacted)
     }
@@ -230,10 +251,15 @@ impl Ctx {
             Some(dir) => self.project.root.join(dir),
             None => self.project.root.clone(),
         };
+        let mut secrets = self.secrets_for(&line, ps.step.kind.is_scanned());
+        if ps.step.kind == StepKind::Sql {
+            // las variables de `libpq` (PGUSER, PGPASSWORD...) que `psql` lee del entorno
+            secrets.extend(self.pg_conn().env);
+        }
         Command {
             cwd,
             env: self.opts.env.clone(),
-            secrets: self.secrets_for(&line, ps.step.kind.is_scanned()),
+            secrets,
             timeout: ps.step.timeout.map(|t| t.as_duration()),
             line,
         }
@@ -474,6 +500,97 @@ fn describe(exit: Exit, timeout: Option<Duration>) -> String {
     }
 }
 
+/// El id y la ruta del log de una ejecución. Si ya existe un log con ese nombre (otra ejecución
+/// del mismo minuto) se le agrega `-2`, `-3`... al id. Un dry-run o un rollback no crean log nuevo,
+/// así que no se comprueba.
+fn unique_run(
+    project: &Project,
+    template: &str,
+    plan: &str,
+    fecha: &str,
+    destino: &str,
+    skip_check: bool,
+) -> (String, PathBuf) {
+    let path_for = |id: &str| resolve_log_path(project, template, plan, id, destino);
+    if skip_check {
+        return (fecha.to_string(), path_for(fecha));
+    }
+    let mut id = fecha.to_string();
+    for n in 2..100 {
+        let path = path_for(&id);
+        if !path.exists() {
+            return (id, path);
+        }
+        id = format!("{fecha}-{n}");
+    }
+    (id.clone(), path_for(&id))
+}
+
+fn file_name(file: &Path) -> String {
+    file.file_name().map_or_else(
+        || file.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// Un paso sql con sentencias destructivas: las deja en el log y pide confirmación (con
+/// `--assume-yes` o en dry-run no se pregunta, pero queda escrito qué había).
+async fn confirm_destructive(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Answer {
+    let ps = &ctx.steps[i];
+    let found = sql_risks(&ctx.project.root, &ps.files);
+    if found.is_empty() {
+        return Answer::Yes;
+    }
+    for (file, risks) in &found {
+        for r in risks {
+            ctx.log(
+                i,
+                LogKind::Output,
+                format!(
+                    "atención: {} línea {}: {} ({})",
+                    file.display(),
+                    r.line,
+                    r.what,
+                    r.text
+                ),
+            );
+        }
+    }
+    // el detalle (archivo, línea, sentencia) ya quedó en el log: la pregunta cabe en una línea
+    let total: usize = found.iter().map(|(_, r)| r.len()).sum();
+    let mut kinds: Vec<&str> = Vec::new();
+    for (_, risks) in &found {
+        for r in risks {
+            if !kinds.contains(&r.what) {
+                kinds.push(r.what);
+            }
+        }
+    }
+    let message = format!(
+        "«{}» tiene {total} sentencia(s) destructiva(s): {}. ¿Continuar?",
+        ps.step.name,
+        kinds.join(", ")
+    );
+    ask_gate(ctx, cmds, i, &message).await
+}
+
+/// El comando de un script: su primera línea decide el intérprete (ver `script_command`). El
+/// comando corre dentro de la carpeta del archivo, así que se le pasa solo su nombre.
+fn script_line(root: &Path, file: &Path) -> String {
+    let first = fs::File::open(root.join(file)).ok().and_then(|f| {
+        use std::io::{BufRead, BufReader, Read};
+        let mut line = String::new();
+        // solo la primera línea (y acotada: un archivo binario no tiene saltos de línea)
+        BufReader::new(f.take(512)).read_line(&mut line).ok()?;
+        Some(line)
+    });
+    let name = file.file_name().map_or_else(
+        || file.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    baton_core::step_run::script_command(first.as_deref(), &name)
+}
+
 // ------------------------------------------------------------ credenciales
 
 /// Resuelve los campos de las credenciales que declara el plan (`[[credentials]]`): archivo
@@ -648,10 +765,7 @@ async fn backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(),
     let Some(spec) = ctx.plan.backup.as_ref() else {
         return Ok(());
     };
-    let dir = ctx
-        .project
-        .root
-        .join(spec.dir.as_deref().unwrap_or(".baton/backups"));
+    let dir = backup_dir(ctx);
     if !ctx.opts.dry_run
         && let Err(e) = fs::create_dir_all(&dir)
     {
@@ -677,6 +791,49 @@ async fn backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(),
         {
             b.push(dir.join(&file));
         }
+    }
+    if spec.database {
+        backup_database(ctx, cmds, step, &dir).await?;
+    }
+    Ok(())
+}
+
+fn backup_dir(ctx: &Ctx) -> PathBuf {
+    let spec_dir = ctx.plan.backup.as_ref().and_then(|b| b.dir.as_deref());
+    ctx.project.root.join(spec_dir.unwrap_or(".baton/backups"))
+}
+
+/// Vuelca la base de la credencial `db` del plan. Con varios pasos que piden respaldo en una misma
+/// ejecución, el volcado se hace una sola vez (el primero, el del estado de partida): es el que
+/// restaura un rollback.
+async fn backup_database(
+    ctx: &Ctx,
+    cmds: &mut Rx<RunCommand>,
+    step: usize,
+    dir: &Path,
+) -> Result<(), StepEnd> {
+    let conn = ctx.pg_conn();
+    let file = dir.join(format!(
+        "{}-{}-{}.dump",
+        ctx.plan.name,
+        ctx.fecha,
+        dump_label(&conn)
+    ));
+    if ctx.backups.lock().is_ok_and(|b| b.contains(&file)) {
+        ctx.log(
+            step,
+            LogKind::Output,
+            "respaldo de la base ya hecho en esta ejecución",
+        );
+        return Ok(());
+    }
+    let line = pg_dump_command(&conn, &file.to_string_lossy());
+    let cmd = ctx.db_command(&ctx.steps[step], line);
+    run_command(ctx, cmds, step, cmd, ctx.steps[step].step.retries).await?;
+    if !ctx.opts.dry_run
+        && let Ok(mut b) = ctx.backups.lock()
+    {
+        b.push(file);
     }
     Ok(())
 }
@@ -748,13 +905,30 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         }
     }
 
+    // Un script sin comando declarado se ejecuta con el intérprete de su shebang; los demás tipos
+    // usan su comando (declarado o el de su tipo).
+    let template = ps.step.command_template();
+    let is_script = ps.step.kind == StepKind::Script;
+    let is_sql = ps.step.kind == StepKind::Sql;
     if !skip_action
         && matches!(
             ps.step.kind,
-            StepKind::Compose | StepKind::Dockerfile | StepKind::Comando | StepKind::Check
+            StepKind::Compose
+                | StepKind::Dockerfile
+                | StepKind::Script
+                | StepKind::Sql
+                | StepKind::Comando
+                | StepKind::Check
         )
-        && let Some(template) = ps.step.command_template()
+        && (template.is_some() || is_script || is_sql)
     {
+        if is_sql {
+            match confirm_destructive(ctx, cmds, i).await {
+                Answer::Yes => {}
+                Answer::No => return StepEnd::Declined,
+                Answer::Interrupted(int) => return StepEnd::Interrupted(int),
+            }
+        }
         let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
             vec![None]
         } else {
@@ -762,7 +936,13 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         };
         for file in files {
             let vars = ctx.vars(ps, file.map(PathBuf::as_path));
-            let line = vars.render(template);
+            let line = match (template, file) {
+                (Some(t), _) => vars.render(t),
+                (None, Some(f)) if is_sql => psql_command(&ctx.pg_conn(), &file_name(f)),
+                (None, Some(f)) => script_line(&ctx.project.root, f),
+                // un script siempre trae archivo (`prepare_run` lo exige): no se llega aquí
+                (None, None) => continue,
+            };
             let cmd = ctx.command(ps, line, file.map(PathBuf::as_path));
             match run_command(ctx, cmds, i, cmd, ps.step.retries).await {
                 Ok(r) => retries_total += r,
@@ -802,6 +982,9 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
 /// Devuelve `false` si algún comando falló; el resto se intenta igual.
 async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
     let ps = &ctx.steps[i];
+    if ps.restore_db {
+        return restore_database(ctx, i).await;
+    }
     let Some(template) = ps.step.rollback.as_deref() else {
         return true;
     };
@@ -847,11 +1030,74 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
     ok
 }
 
+/// Rollback de un paso `backup` con `[backup] database = true`: restaura el último respaldo de la
+/// base de este plan (el de esta ejecución o, con `baton rollback`, el de la anterior).
+async fn restore_database(ctx: &Ctx, i: usize) -> bool {
+    let ps = &ctx.steps[i];
+    // No depende de `--backup`: restaurar usa el respaldo que ya exista (puede ser de otra ejecución).
+    if ctx.opts.dry_run {
+        ctx.log(
+            i,
+            LogKind::Command,
+            "rollback: restaurar el último respaldo de la base",
+        );
+        ctx.log(i, LogKind::Success, "dry-run: no se ejecutó");
+        return true;
+    }
+    if ctx.ensure_synced(i).await.is_err() {
+        return false;
+    }
+    let conn = ctx.pg_conn();
+    let dir = backup_dir(ctx);
+    let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &dump_label(&conn))
+    else {
+        ctx.log(
+            i,
+            LogKind::Error,
+            format!(
+                "no hay un respaldo de la base en {}: no se puede restaurar",
+                ctx.project.display_path(&dir)
+            ),
+        );
+        return false;
+    };
+    let cmd = ctx.db_command(ps, pg_restore_command(&conn, &file.to_string_lossy()));
+    ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
+    let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
+    let ok = match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
+        Ok(exit) if exit.success() => {
+            ctx.log(
+                i,
+                LogKind::Success,
+                format!("base restaurada desde {}", ctx.project.display_path(&file)),
+            );
+            true
+        }
+        Ok(exit) => {
+            ctx.log(i, LogKind::Error, describe(exit, cmd.timeout));
+            false
+        }
+        Err(e) => {
+            ctx.log(
+                i,
+                LogKind::Error,
+                format!("No se pudo restaurar la base: {e}"),
+            );
+            false
+        }
+    };
+    if ok {
+        let id = ps.step.id.clone();
+        ctx.record(&id, StepState::Pending, Duration::ZERO, 0);
+    }
+    ok
+}
+
 /// Deshace en orden inverso los pasos indicados (los índices vienen en orden de ejecución).
 async fn rollback_all(ctx: &Ctx, executed: &[usize]) -> bool {
     let mut ok = true;
     for &i in executed.iter().rev() {
-        if ctx.steps[i].step.rollback.is_some() && !rollback_one(ctx, i).await {
+        if ctx.steps[i].has_rollback() && !rollback_one(ctx, i).await {
             ok = false;
         }
     }
@@ -939,7 +1185,7 @@ fn state_of(status: StepStatus) -> StepState {
 async fn run(
     input: RunInput,
     steps: Vec<PStep>,
-    state: State,
+    mut state: State,
     tx: Tx<RunEvent>,
     mut cmds: Rx<RunCommand>,
 ) {
@@ -964,7 +1210,7 @@ async fn run(
             tone: BadgeTone::Info,
         });
     }
-    if steps.iter().any(|p| p.step.rollback.is_some()) {
+    if steps.iter().any(PStep::has_rollback) {
         badges.push(Badge {
             label: "rollback listo".into(),
             tone: BadgeTone::Info,
@@ -986,12 +1232,15 @@ async fn run(
     // Un dry-run no deja rastro: ni `.baton/`, ni `.gitignore`, ni log. Fuera de él, si no se
     // pueden crear se sigue con un aviso, porque el despliegue importa más.
     let mut warnings = Vec::new();
-    let log_path = resolve_log_path(
+    // Cada ejecución tiene su propio log (y su propio id): dos en el mismo minuto no pueden
+    // compartir archivo, o el historial las mezclaría.
+    let (run_id, log_path) = unique_run(
         &project,
         config.log_template(),
         &plan.name,
         &fecha,
         config.default_target(),
+        opts.dry_run || rollback_mode,
     );
     let mut sink = None;
     if !opts.dry_run {
@@ -1018,7 +1267,7 @@ async fn run(
     };
 
     let mut run_rec = LastRun {
-        id: fecha.clone(),
+        id: run_id,
         started_at: clock::iso(),
         finished_at: None,
         status: RunStatus::Running,
@@ -1045,6 +1294,9 @@ async fn run(
     // En un rollback se conserva el registro de la ejecución que se deshace.
     if rollback_mode && let Some(prev) = state.last_run(&plan.name) {
         run_rec = prev.clone();
+    } else if !opts.dry_run {
+        // una ejecución nueva: la anterior pasa al historial
+        state.archive_last_run(&plan.name);
     }
 
     let (transports, ssh_conns) =
@@ -1107,7 +1359,7 @@ async fn run(
                 .sum::<u64>()
         })
         .unwrap_or(0);
-    let has_rollback = ctx.steps.iter().any(|p| p.step.rollback.is_some());
+    let has_rollback = ctx.steps.iter().any(PStep::has_rollback);
     let summary = RunSummary {
         containers: None,
         images: None,
@@ -1273,7 +1525,7 @@ async fn run_plan(
                         .iter()
                         .copied()
                         .chain(std::iter::once(i))
-                        .filter(|k| ctx.steps[*k].step.rollback.is_some())
+                        .filter(|k| ctx.steps[*k].has_rollback())
                         .min();
                     ctx.record(&id, StepState::Failed, elapsed, manual_retries);
                     ctx.emit(RunEvent::StepFailed {

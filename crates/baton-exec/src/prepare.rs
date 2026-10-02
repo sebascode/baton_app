@@ -8,6 +8,7 @@ use std::time::Duration;
 use baton_core::compose::{Service, parse_services};
 use baton_core::config::{Config, Target};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
+use baton_core::sql::{Risk, destructive_statements};
 use baton_store::Project;
 use baton_store::secrets::Resolver;
 use baton_store::sources::expand_sources;
@@ -122,9 +123,23 @@ pub struct PStep {
     pub files: Vec<PathBuf>,
     /// Servicios de esos archivos (solo se leen si el paso tiene un gate automático).
     pub scan: Vec<ScannedService>,
+    /// Un paso `backup` sin `rollback` propio en un plan con `[backup] database = true`: su
+    /// rollback restaura el último respaldo de la base.
+    pub restore_db: bool,
+}
+
+fn restores_db(plan: &Plan, step: &Step) -> bool {
+    step.kind == StepKind::Backup
+        && step.rollback.is_none()
+        && plan.backup.as_ref().is_some_and(|b| b.database)
 }
 
 impl PStep {
+    /// Tiene algo que deshacer: su `rollback`, o restaurar la base.
+    pub fn has_rollback(&self) -> bool {
+        self.step.rollback.is_some() || self.restore_db
+    }
+
     pub fn has_manual_gate(&self) -> bool {
         self.step
             .gate
@@ -290,7 +305,9 @@ pub fn prepare_run(
         };
 
         // El gate automático de un paso con compose necesita saber qué servicios hay.
-        let scan = if s.gate.as_ref().is_some_and(|g| g.mode == GateMode::Auto) && !files.is_empty()
+        let scan = if s.gate.as_ref().is_some_and(|g| g.mode == GateMode::Auto)
+            && s.kind.has_services()
+            && !files.is_empty()
         {
             let scan = scan_compose(project, &files);
             errors.extend(scan.errors.iter().map(|e| format!("{}: {e}", label(s))));
@@ -299,6 +316,20 @@ pub fn prepare_run(
             Vec::new()
         };
 
+        // Un paso sql con sentencias destructivas pide confirmación. Sin nadie que responda solo
+        // pasa con --assume-yes (en dry-run no se ejecuta nada, así que no hace falta).
+        if s.kind == StepKind::Sql && !opts.interactive && !opts.assume_yes && !opts.dry_run {
+            for (file, risks) in sql_risks(&project.root, &files) {
+                errors.push(format!(
+                    "{} tiene sentencias destructivas en {}: {}. No hay terminal para confirmar: \
+                     ejecuta en una terminal o usa --assume-yes",
+                    label(s),
+                    file.display(),
+                    describe_risks(&risks)
+                ));
+            }
+        }
+
         if matches!(
             s.kind,
             StepKind::Comando | StepKind::Check | StepKind::Compose | StepKind::Dockerfile
@@ -306,15 +337,12 @@ pub fn prepare_run(
         {
             errors.push(format!("{}: no tiene comando", label(s)));
         }
-        if s.kind == StepKind::Script {
-            errors.push(format!("{}: el tipo script llega en v0.2", label(s)));
-        }
         if opts.backup
             && (s.kind == StepKind::Backup || s.backup_before)
-            && plan.backup.as_ref().is_none_or(|b| b.volumes.is_empty())
+            && plan.backup.as_ref().is_none_or(|b| b.is_empty())
         {
             errors.push(format!(
-                "{}: pide backup pero el plan no define [backup] volumes",
+                "{}: pide backup pero el plan no define [backup] volumes ni database",
                 label(s)
             ));
         }
@@ -326,6 +354,7 @@ pub fn prepare_run(
             host,
             files,
             scan,
+            restore_db: restores_db(plan, s),
         });
     }
 
@@ -360,7 +389,7 @@ pub fn prepare_rollback(
     let mut out: Vec<PStep> = plan
         .steps
         .iter()
-        .filter(|s| last.is_done(&s.id) && s.rollback.is_some())
+        .filter(|s| last.is_done(&s.id) && (s.rollback.is_some() || restores_db(plan, s)))
         .map(|s| PStep {
             step: s.clone(),
             target: s.target.clone().unwrap_or_else(|| "local".into()),
@@ -371,10 +400,38 @@ pub fn prepare_rollback(
                 Vec::new()
             },
             scan: Vec::new(),
+            restore_db: restores_db(plan, s),
         })
         .collect();
     out.reverse();
     Ok(out)
+}
+
+/// Sentencias destructivas de cada archivo `.sql` (los que no se pueden leer se ignoran aquí: el
+/// error aparece al ejecutar, con el motivo del sistema).
+pub(crate) fn sql_risks(root: &std::path::Path, files: &[PathBuf]) -> Vec<(PathBuf, Vec<Risk>)> {
+    files
+        .iter()
+        .filter_map(|f| {
+            let text = std::fs::read_to_string(root.join(f)).ok()?;
+            let risks = destructive_statements(&text);
+            (!risks.is_empty()).then(|| (f.clone(), risks))
+        })
+        .collect()
+}
+
+/// `línea 4 TRUNCATE usuarios; línea 9 DELETE sin WHERE: ...`, a lo más tres.
+pub(crate) fn describe_risks(risks: &[Risk]) -> String {
+    const SHOWN: usize = 3;
+    let mut parts: Vec<String> = risks
+        .iter()
+        .take(SHOWN)
+        .map(|r| format!("línea {} {} ({})", r.line, r.what, r.text))
+        .collect();
+    if risks.len() > SHOWN {
+        parts.push(format!("y {} más", risks.len() - SHOWN));
+    }
+    parts.join("; ")
 }
 
 #[cfg(test)]

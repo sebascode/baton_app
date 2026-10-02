@@ -204,6 +204,8 @@ pub struct GateState {
     pub removable: bool,
     /// Esperando la confirmación de quitar el gate.
     pub confirm_remove: bool,
+    /// Esperando la confirmación de borrar el check bajo el cursor.
+    pub confirm_row_removal: bool,
 }
 
 impl GateState {
@@ -238,6 +240,7 @@ impl GateState {
             notice: None,
             removable: true,
             confirm_remove: false,
+            confirm_row_removal: false,
         }
     }
 
@@ -401,6 +404,14 @@ impl GateState {
             return None;
         }
 
+        // borrar un check pide confirmación igual que quitar el gate
+        if self.confirm_row_removal {
+            self.confirm_row_removal = false;
+            if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('y')) {
+                self.remove_row();
+            }
+            return None;
+        }
         // quitar el gate pide confirmación: solo `s` o `y` lo confirman y cualquier otra tecla cancela
         if self.confirm_remove {
             self.confirm_remove = false;
@@ -506,6 +517,8 @@ impl GateState {
             KeyCode::Char('r') => return Some(GateAction::Rescan),
             KeyCode::Char(' ') | KeyCode::Enter => self.toggle_row(),
             KeyCode::Char('e') => self.edit_row(),
+            // `b` de borrar (`x` y `supr` quitan el gate entero)
+            KeyCode::Char('b') => self.ask_to_remove_row(),
             KeyCode::Char('c') => {
                 if let Some(r) = self.rows.get_mut(self.cursor) {
                     r.critical = !r.critical;
@@ -514,6 +527,38 @@ impl GateState {
             _ => {}
         }
         None
+    }
+
+    /// `b` sobre un check: lo borra, pidiendo confirmación salvo que sea un servicio detectado
+    /// que nunca se activó (no hay nada curado que perder).
+    fn ask_to_remove_row(&mut self) {
+        match self.rows.get(self.cursor) {
+            None => self.notice = Some("elige un check para borrarlo".into()),
+            Some(r) if r.is_new => self.remove_row(),
+            Some(_) => self.confirm_row_removal = true,
+        }
+    }
+
+    /// La pregunta de confirmar el borrado del check bajo el cursor.
+    fn row_removal_prompt(&self) -> String {
+        let name = self
+            .rows
+            .get(self.cursor)
+            .map_or("", |r| r.service.as_str());
+        format!("¿Borrar el check «{name}»?")
+    }
+
+    fn remove_row(&mut self) {
+        if self.cursor >= self.rows.len() {
+            return;
+        }
+        let removed = self.rows.remove(self.cursor);
+        // el cursor queda en el check que ocupa su lugar (o en la fila de "agregar")
+        self.cursor = self.cursor.min(self.rows.len());
+        self.notice = Some(format!(
+            "check «{}» borrado (guarda con ctrl s)",
+            removed.service
+        ));
     }
 
     fn toggle_row(&mut self) {
@@ -570,7 +615,7 @@ impl GateState {
     // ---------------------------------------------------------------- dibujo
 
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
-        if self.confirm_remove {
+        if self.confirm_remove || self.confirm_row_removal {
             return vec![("s", "sí"), ("n", "no")];
         }
         if self.editing {
@@ -581,6 +626,7 @@ impl GateState {
             ("espacio", "activar check"),
             ("e", "editar check"),
             ("c", "marcar crítico"),
+            ("b", "borrar check"),
             ("x", "quitar gate"),
             ("tab", "sección"),
             ("esc", "volver"),
@@ -608,7 +654,12 @@ impl GateState {
         let items = self.shortcut_items();
         let content_w = inner.width.saturating_sub(2);
         let notice_h = u16::from(self.notice.is_some());
-        let prompt = self.confirm_remove.then_some(REMOVE_PROMPT);
+        let row_prompt = self.confirm_row_removal.then(|| self.row_removal_prompt());
+        let prompt = if self.confirm_remove {
+            Some(REMOVE_PROMPT)
+        } else {
+            row_prompt.as_deref()
+        };
         let sc_h = widgets::prompt_bar_height(&items, content_w, prompt);
         let sc_y = inner.bottom().saturating_sub(sc_h);
         let notice_y = sc_y.saturating_sub(notice_h);

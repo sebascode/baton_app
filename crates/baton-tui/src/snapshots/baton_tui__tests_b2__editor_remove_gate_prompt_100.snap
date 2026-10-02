@@ -4,7 +4,7 @@ expression: "screen(&app, 100, 24)"
 ---
 ╭─ ✎ Editar paso · plan instalar ──────────────────────────────────────────────────── paso 6 de 7 ─╮
 │ 1 Pre-checks     │ nombre      [ Levantar servicios                                            ] │
-│ 2 Backup         │ tipo        [compose]  dockerfile  script  comando  check  backup  gate       │
+│ 2 Backup         │ tipo        [compose]  dockerfile  script  sql  comando  check  backup  gate  │
 │ 3 Build          │ origen      [ services/*/docker-compose.yml                      ] 4 archivos │
 │ 4 Levantar DB    │ destino     [ prod-app                                                    ▾ ] │
 │ 5 Gate health    │ comando     [ docker compose up -d --wait                                   ] │

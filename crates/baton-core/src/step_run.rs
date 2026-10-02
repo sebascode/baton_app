@@ -13,6 +13,7 @@ pub fn default_command(kind: StepKind) -> Option<&'static str> {
         StepKind::Compose => Some("docker compose up -d"),
         StepKind::Dockerfile => Some("docker build -t {name}:latest ."),
         StepKind::Script
+        | StepKind::Sql
         | StepKind::Comando
         | StepKind::Check
         | StepKind::Backup
@@ -30,6 +31,36 @@ impl Step {
     }
 }
 
+/// Comillas simples para pegar un texto dentro de un comando de shell.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// El comando que ejecuta un script (dentro de su carpeta): con el intérprete de su shebang
+/// (`#!/bin/bash` da `'/bin/bash' 'nombre.sh'`) o con `sh` si no tiene. No depende de que el
+/// archivo sea ejecutable. Como el kernel, toma del shebang el intérprete y a lo sumo un argumento.
+pub fn script_command(first_line: Option<&str>, script: &str) -> String {
+    let shebang = first_line
+        .and_then(|l| l.trim().strip_prefix("#!"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let mut parts: Vec<String> = Vec::new();
+    match shebang {
+        Some(rest) => {
+            let (interp, arg) = rest
+                .split_once(char::is_whitespace)
+                .map_or((rest, ""), |(i, a)| (i, a.trim()));
+            parts.push(sh_quote(interp));
+            if !arg.is_empty() {
+                parts.push(sh_quote(arg));
+            }
+        }
+        None => parts.push("sh".to_string()),
+    }
+    parts.push(sh_quote(script));
+    parts.join(" ")
+}
+
 /// Variables disponibles al renderizar un comando, rollback o URL.
 #[derive(Debug, Clone, Default)]
 pub struct StepVars {
@@ -43,6 +74,12 @@ pub struct StepVars {
     pub dir: Option<String>,
     /// Nombre de la carpeta del archivo (o del archivo, si está en la raíz).
     pub name: Option<String>,
+    /// Nombre del archivo con su extensión (`02-preparar.sh`): como cada comando corre dentro de
+    /// la carpeta del archivo, esto es lo que hay que pasarle a un script.
+    pub script: Option<String>,
+    /// Nombre del archivo sin su extensión (`02-preparar`): sirve para apuntar a un archivo
+    /// hermano, por ejemplo `rollback = "sh {stem}.rollback.sh"`.
+    pub stem: Option<String>,
 }
 
 impl StepVars {
@@ -52,6 +89,8 @@ impl StepVars {
         self.file = Some(file.to_string_lossy().into_owned());
         self.dir = Some(dir);
         self.name = Some(name);
+        self.script = file.file_name().map(|n| n.to_string_lossy().into_owned());
+        self.stem = file.file_stem().map(|n| n.to_string_lossy().into_owned());
         self
     }
 
@@ -64,6 +103,8 @@ impl StepVars {
             "file" => self.file.clone(),
             "dir" => self.dir.clone(),
             "name" => self.name.clone(),
+            "script" => self.script.clone(),
+            "stem" => self.stem.clone(),
             _ => None,
         })
     }
@@ -341,5 +382,56 @@ mod tests {
         assert_eq!(step_info(&s, "local").detail, "saluda");
         let s = step("type = \"comando\"\ncommand = \"echo hola\"");
         assert_eq!(step_info(&s, "local").detail, "echo hola");
+    }
+
+    #[test]
+    fn a_script_runs_with_the_interpreter_of_its_shebang_or_sh() {
+        let c = |l: Option<&str>| script_command(l, "02-preparar.sh");
+        assert_eq!(c(None), "sh '02-preparar.sh'");
+        assert_eq!(c(Some("# solo un comentario")), "sh '02-preparar.sh'");
+        assert_eq!(c(Some("#!/bin/bash")), "'/bin/bash' '02-preparar.sh'");
+        assert_eq!(
+            c(Some("#!/bin/sh\r")),
+            "'/bin/sh' '02-preparar.sh'",
+            "con CRLF"
+        );
+        assert_eq!(
+            c(Some("#! /usr/bin/env bash")),
+            "'/usr/bin/env' 'bash' '02-preparar.sh'"
+        );
+        // como el kernel: el resto de la línea es UN argumento
+        assert_eq!(
+            c(Some("#!/bin/bash -e -u")),
+            "'/bin/bash' '-e -u' '02-preparar.sh'"
+        );
+        assert_eq!(c(Some("#!")), "sh '02-preparar.sh'", "shebang vacío");
+        // nombres raros no rompen el comando
+        assert_eq!(
+            script_command(None, "it's mine.sh"),
+            "sh 'it'\\''s mine.sh'"
+        );
+    }
+
+    #[test]
+    fn the_script_placeholder_is_the_file_name_and_a_script_has_no_default_command() {
+        let v = StepVars::default().for_file(Path::new("scripts/02-preparar.sh"));
+        assert_eq!(
+            v.render("bash {script} en {dir}"),
+            "bash 02-preparar.sh en scripts"
+        );
+        assert_eq!(default_command(StepKind::Script), None);
+    }
+
+    #[test]
+    fn the_stem_placeholder_points_to_a_sibling_file() {
+        let v = StepVars::default().for_file(Path::new("scripts/02-preparar.sh"));
+        assert_eq!(
+            v.render("sh {stem}.rollback.sh"),
+            "sh 02-preparar.rollback.sh"
+        );
+        // un archivo sin extensión conserva su nombre; sin archivo el marcador queda tal cual
+        let bare = StepVars::default().for_file(Path::new("bin/deploy"));
+        assert_eq!(bare.render("{stem}"), "deploy");
+        assert_eq!(StepVars::default().render("{stem}"), "{stem}");
     }
 }

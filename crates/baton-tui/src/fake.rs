@@ -10,8 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use baton_core::events::{
-    Badge, BadgeTone, CheckInfo, CheckState, Failure, FailureKind, GateInfo, LogKind, LogLine,
-    RunCommand, RunEvent, RunOutcome, RunSummary, StepInfo, StepStatus,
+    Badge, BadgeTone, CheckInfo, CheckState, Failure, FailureKind, GateInfo, HistoryEntry,
+    HistoryStep, LogKind, LogLine, RunCommand, RunEvent, RunOutcome, RunSummary, StepInfo,
+    StepStatus,
 };
 
 use baton_core::config::Config;
@@ -36,6 +37,89 @@ fn pstep(id: &str, name: &str, meta: &str, tag: &str, enabled: bool) -> PreviewS
         tag: Tag::new(tag),
         enabled,
     }
+}
+
+/// Historial de la demo: una ejecución que falló, una completada y una abortada.
+pub fn history() -> Vec<HistoryEntry> {
+    let step = |name: &str, status, secs: u64, retries| HistoryStep {
+        name: name.to_string(),
+        status,
+        duration: (secs > 0).then(|| Duration::from_secs(secs)),
+        retries,
+    };
+    vec![
+        HistoryEntry {
+            id: "2026-10-01-1757".into(),
+            started: "2026-10-01 17:57".into(),
+            ago: "hace 3 min".into(),
+            outcome: RunOutcome::Failed,
+            duration: Some(Duration::from_secs(42)),
+            steps: vec![
+                step("Pre-checks", StepStatus::Done, 2, 0),
+                step("Build imágenes", StepStatus::Failed, 38, 2),
+                step("Levantar servicios", StepStatus::Pending, 0, 0),
+            ],
+            has_log: true,
+        },
+        HistoryEntry {
+            id: "2026-10-01-1750".into(),
+            started: "2026-10-01 17:50".into(),
+            ago: "hace 10 min".into(),
+            outcome: RunOutcome::Completed,
+            duration: Some(Duration::from_secs(63)),
+            steps: vec![
+                step("Pre-checks", StepStatus::Done, 2, 0),
+                step("Build imágenes", StepStatus::Done, 41, 0),
+                step("Levantar servicios", StepStatus::Done, 20, 0),
+            ],
+            has_log: true,
+        },
+        HistoryEntry {
+            id: "2026-09-30-1103".into(),
+            started: "2026-09-30 11:03".into(),
+            ago: "hace 1 día".into(),
+            outcome: RunOutcome::Aborted,
+            duration: Some(Duration::from_secs(9)),
+            steps: vec![
+                step("Pre-checks", StepStatus::Done, 2, 0),
+                step("Build imágenes", StepStatus::Skipped, 0, 0),
+            ],
+            has_log: true,
+        },
+    ]
+}
+
+/// El log de la demo para el visor de una ejecución pasada.
+pub fn log_file() -> Vec<LogLine> {
+    let line = |at: &str, kind, text: &str| LogLine {
+        at: at.into(),
+        kind,
+        text: text.into(),
+    };
+    vec![
+        line(
+            "17:57:00",
+            LogKind::Command,
+            "Pre-checks: $ ./scripts/01-requisitos.sh",
+        ),
+        line("17:57:01", LogKind::Output, "Pre-checks: ok: curl"),
+        line("17:57:02", LogKind::Success, "Pre-checks: ✓ ok"),
+        line(
+            "17:57:02",
+            LogKind::Command,
+            "Build imágenes: $ docker build -t api:latest .",
+        ),
+        line(
+            "17:57:03",
+            LogKind::Output,
+            "Build imágenes: sh: línea 1: docker: orden no encontrada",
+        ),
+        line(
+            "17:57:03",
+            LogKind::Error,
+            "Build imágenes: ✗ El comando terminó con código 127",
+        ),
+    ]
 }
 
 /// Vista previa de la pantalla 1: 7 pasos, 6 activos, cursor en "Build imágenes".
@@ -94,6 +178,7 @@ pub fn preview() -> PreviewState {
         notice: Vec::new(),
         plans: Vec::new(),
         switcher: None,
+        last_run: None,
     }
 }
 

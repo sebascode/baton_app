@@ -127,6 +127,7 @@ mod tests {
                 backup_before: false,
             },
             target: target.into(),
+            restore_db: false,
             host: target.into(),
             files: vec![],
             scan: vec![],

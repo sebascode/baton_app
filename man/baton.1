@@ -105,7 +105,7 @@ Ambiente del que se resuelven las credenciales.
 .SS baton create plan
 Crea el archivo de un plan vacío y nada más (no lo abre ni toca \fI.baton/\fR). No pisa un plan existente. El nombre se normaliza a minúsculas, números, \fB\-\fR y \fB_\fR, y se avisa si cambió.
 .SS baton init [plan]
-Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR y \fIDockerfile\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma como máximo dos pasos: \fIbuild\fR (los Dockerfile) y \fIservicios\fR (los compose). El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
+Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR, \fIDockerfile\fR y scripts \fI*.sh\fR y archivos \fI*.sql\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma los pasos: \fIbuild\fR (los Dockerfile), \fIservicios\fR (los compose) y un paso \fBscript\fR por cada script. Los scripts se ordenan por su nombre: los de preparación van antes de \fIbuild\fR, los de verificación (\fIsmoke\fR, \fIverif\fR, \fIhealth\fR...) después de \fIservicios\fR, y los que por su nombre parecen destructivos (\fIlimpiar\fR, \fIclean\fR, \fIdown\fR...) quedan al final y \fBdesactivados\fR. Los \fI.sql\fR se proponen como un paso \fBsql\fR por carpeta, \fBdesactivado\fR (suelen ser el \fIinit.sql\fR que el contenedor de la base ya carga al arrancar), junto con la credencial \fBdb\fR que ese paso necesita. Un script dentro de una carpeta con Dockerfile se ignora (es de la imagen), y con más de 12 scripts se agrupan por carpeta. El orden es una suposición: se ajusta en el plan. El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
 .TP
 .BI \-\-target " destino"
 Destino de los pasos encontrados.
@@ -121,7 +121,7 @@ Crea el proyecto en esta carpeta aunque una carpeta superior ya tenga uno. Sin e
 .SS baton import archivo
 Convierte un pipeline de otra plataforma en un plan. Es de mejor esfuerzo y con pérdida: nada se descarta en silencio. Lo que no tiene equivalente queda como un paso \fBdesactivado\fR (con el original como comentario) o como una nota del informe.
 .PP
-Se aceptan GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) y Azure Pipelines (\fIazure\-pipelines.yml\fR). Todo paso con una condición (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) se importa desactivado. Un \fBenvironment\fR o \fBwhen: manual\fR genera un gate manual antes del job (activo si el ambiente parece producción). Un \fBdocker compose up\fR suelto se convierte en un paso \fBcompose\fR. Las acciones que solo preparan el agente (checkout, cache, artifacts, setup) se omiten.
+Se aceptan GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) y Azure Pipelines (\fIazure\-pipelines.yml\fR). Todo paso con una condición (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) se importa desactivado. Un \fBenvironment\fR o \fBwhen: manual\fR genera un gate manual antes del job (activo si el ambiente parece producción). Un \fBdocker compose up\fR suelto se convierte en un paso \fBcompose\fR, y un script suelto (\fB./scripts/x.sh\fR, sin argumentos) en un paso \fBscript\fR. Las acciones que solo preparan el agente (checkout, cache, artifacts, setup) se omiten.
 .PP
 El informe lista lo desactivado, lo omitido y las variables que los comandos esperan en el entorno, y sugiere los bloques \fB[[credentials]]\fR cuando el nombre lo permite (por ejemplo \fBGHCR_TOKEN\fR). Esos bloques no se escriben en el plan: se pegan \fBal final\fR del archivo.
 .TP
@@ -252,13 +252,13 @@ Carpeta local de esta máquina. Se crea en la primera ejecución real y se agreg
 Destinos, logs y proveedores de secretos de esta máquina. \fBlocal\fR existe siempre aunque no se declare.
 .TP
 .I .baton/state.json
-Última ejecución de cada plan (estado por paso, para reanudar y para el pipeline) y los flags de "no volver a preguntar" por credencial.
+La última ejecución de cada plan (estado por paso, para reanudar y para el pipeline), las 20 ejecuciones anteriores (el historial) y los flags de "no volver a preguntar" por credencial.
 .TP
 .I .baton/credentials/[<ambiente>/]{git,docker,servers,db}.env
 Credenciales en formato \fBCLAVE=valor\fR, con permisos 600.
 .TP
 .I .baton/logs/
-Un log por ejecución (por defecto \fI{plan}\-{fecha}.log\fR).
+Un log por ejecución (por defecto \fI{plan}\-{fecha}.log\fR, con \fB\-2\fR, \fB\-3\fR... si hay varias en el mismo minuto). En el formato de texto, los comandos, éxitos, errores y reintentos llevan delante \fB▸\fR, \fB✓\fR, \fB✗\fR y \fB↻\fR, igual que en pantalla, de modo que se puede buscar con \fBgrep ✗\fR. Se pueden ver desde baton (historial) sin salir de la aplicación.
 .TP
 .I .baton/backups/
 Backups de volúmenes (un \fI.tgz\fR por volumen).
@@ -275,6 +275,7 @@ dry_run = false
 
 [backup]
 volumes = ["pg_data"]
+database = false          # true: vuelca también la base de la credencial db
 dir = ".baton/backups"
 
 [[credentials]]
@@ -302,9 +303,17 @@ url = "http://{destino}:8080/health"
 .RE
 .fi
 .PP
-Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
+Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
 .PP
-En \fBcompose\fR y \fBdockerfile\fR el comando corre una vez por archivo, dentro de su carpeta (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{file}\fR, \fB{dir}\fR y \fB{name}\fR; un marcador desconocido se deja tal cual y solo da una advertencia.
+En \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR y \fBsql\fR el comando corre una vez por archivo, dentro de la carpeta de ese archivo (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (el nombre del archivo con su extensión) y \fB{stem}\fR (sin ella, por ejemplo \fBrollback = "sh {stem}.rollback.sh"\fR); un marcador desconocido se deja tal cual y solo da una advertencia.
+.PP
+Un paso \fBscript\fR ejecuta archivos \fB.sh\fR (\fBsource\fR es obligatorio y puede ser un archivo, un glob o una lista), uno por uno y en orden por nombre, \fBdentro de la carpeta de cada script\fR: un script que asuma la raíz del proyecto debe volver a ella, por ejemplo con \fBcd "$(dirname "$0")/.." || exit 1\fR. Sin \fBcommand\fR, cada script corre con el intérprete de su \fBshebang\fR (\fB#!/bin/bash\fR corre con bash) o con \fBsh\fR si no tiene, y no hace falta que sea ejecutable. Con \fBcommand\fR se usa ese comando para cada archivo (por ejemplo \fBbash \-x {script}\fR). Un script recibe todas las credenciales declaradas en el plan como variables de entorno.
+.PP
+Un paso \fBsql\fR ejecuta archivos \fB.sql\fR contra PostgreSQL, uno por uno y en orden por nombre, dentro de la carpeta de cada archivo (\fBsource\fR es obligatorio). Se conecta con la credencial de tipo \fBdb\fR del plan, que debe ser una sola (y solo se pide al ejecutar si algún paso \fBsql\fR activo, o \fBdatabase = true\fR, la usa): baton la entrega a \fBpsql\fR por las variables de entorno de libpq (\fBPGUSER\fR, \fBPGPASSWORD\fR, \fBPGHOST\fR, \fBPGPORT\fR, \fBPGDATABASE\fR), así que la contraseña nunca va en un argumento. Sin \fBcommand\fR corre \fBpsql \-X \-v ON_ERROR_STOP=1 \-f archivo\fR: el primer error detiene el archivo y el plan. Si la credencial define \fBCONTAINER\fR, ejecuta con \fBdocker exec\fR dentro de ese contenedor en vez de usar un \fBpsql\fR local (y no usa HOST ni PORT). El paso corre en su destino como cualquier otro, así que \fBpsql\fR (o docker) debe existir ahí.
+.PP
+Antes de ejecutar un paso \fBsql\fR, baton revisa los archivos buscando sentencias destructivas (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR o \fBUPDATE\fR sin \fBWHERE\fR, \fBALTER ... DROP\fR; los comentarios y los textos entre comillas no cuentan, pero el cuerpo de un bloque \fB$$ ... $$\fR sí) y las deja en el log. En una terminal pide confirmar. Sin terminal la ejecución se rechaza antes de empezar salvo con \fB\-\-assume\-yes\fR, y con \fB\-\-dry\-run\fR solo se listan. Es una revisión por palabras, no un análisis completo: sirve de red de seguridad, no de garantía.
+.PP
+Con \fBdatabase = true\fR en \fB[backup]\fR, un paso \fBbackup\fR (o \fBbackup_before\fR) además vuelca la base con \fBpg_dump \-Fc\fR a \fI<plan>\-<fecha>\-<base>.dump\fR en la carpeta de backups (una sola vez por ejecución, aunque varios pasos lo pidan), y el rollback de un paso \fBbackup\fR sin \fBrollback\fR propio \fBrestaura el último volcado\fR con \fBpg_restore \-\-clean \-\-if\-exists\fR. Eso incluye \fBbaton rollback\fR, que usa el volcado de la ejecución anterior. Restaurar reemplaza el contenido actual de la base: es el rollback que tú eliges en la pantalla de fallo, o el que \fBauto_rollback\fR aplica al abortar. Un \fBrollback\fR declarado en el paso manda sobre la restauración.
 .PP
 Los checks de un gate son \fBhealthcheck\fR, \fBhttp\fR, \fBcommand\fR y \fBrunning\fR. Al escanear un origen, cada servicio infiere su check: el \fBhealthcheck\fR del compose si existe; si no, HTTP contra el primer puerto; si no, contenedor arriba durante un tiempo mínimo. Un servicio nuevo nunca se activa solo.
 .PP
@@ -350,7 +359,7 @@ Los valores secretos se enmascaran en pantalla (\fBghp_••••3kQ\fR) y se 
 .PP
 Los comandos reciben las credenciales declaradas como variables de entorno \fBPREFIJO_CAMPO\fR, \fBpero solo las que mencionan\fR (\fB$GHCR_TOKEN\fR, \fB${GHCR_TOKEN}\fR). Los pasos \fBcompose\fR y \fBdockerfile\fR reciben todas, porque sus archivos interpolan \fB${VAR}\fR. Los secretos nunca viajan en los argumentos de un proceso: en local van por el entorno y por ssh por la entrada estándar.
 .PP
-Campos por tipo: \fBgit\fR (USER, TOKEN), \fBdocker\fR (REGISTRY, USER, TOKEN), \fBssh\fR (KEY, PASSPHRASE), \fBdb\fR (USER, PASSWORD) y \fBotro\fR (VALUE).
+Campos por tipo: \fBgit\fR (USER, TOKEN), \fBdocker\fR (REGISTRY, USER, TOKEN), \fBssh\fR (KEY, PASSPHRASE), \fBdb\fR (USER, PASSWORD y, opcionales, HOST, PORT, DATABASE y CONTAINER) y \fBotro\fR (VALUE).
 .PP
 Sin terminal no se pregunta nada: cada campo debe resolverse desde el \fI.env\fR, la variable de entorno o el proveedor, o la ejecución falla antes de empezar diciendo qué credencial, qué campo y dónde se esperaba.
 .
@@ -399,6 +408,15 @@ Alternar backup, rollback automático y dry-run.
 .B v
 Ver el pipeline del plan.
 .TP
+.B h
+Historial de ejecuciones del plan: una lista con \fB✓\fR, \fB✗\fR o \fB!\fR, y el detalle por paso de la elegida. \fBenter\fR abre el log de esa ejecución.
+.TP
+.B l
+Log de la última ejecución (solo si el plan ya se ejecutó).
+.TP
+.B u
+Reanudar: ejecuta como \fBenter\fR, pero salta los pasos que terminaron bien en la última ejecución (solo si hay alguno hecho y otros pendientes).
+.TP
 .B p
 Cambiar de plan (solo si hay más de uno). Se niega si el editor tiene cambios sin guardar.
 .TP
@@ -421,8 +439,11 @@ Probar el paso (siempre en dry-run).
 .B ctrl + d
 Duplicar el paso.
 .TP
+.B ctrl + x
+Borrar el paso (pide confirmación; los pasos que dependían de él dejan de depender). Con el foco en la lista de pasos basta \fBb\fR o \fBsupr\fR. No toca el archivo hasta guardar.
+.TP
 .B ctrl + g
-Configurar el gate.
+Configurar el gate. En su tabla de checks, \fBb\fR borra el check elegido (pide confirmación) y \fBx\fR quita el gate entero.
 .TP
 .B esc
 Volver a la vista del plan.
@@ -437,7 +458,7 @@ Alternar el log y el pipeline.
 .BR q ", " ctrl + c
 Salir (pide confirmación).
 .PP
-Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer rollback o abortar.
+Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer rollback, \fBver el log completo\fR (\fBl\fR, dentro de la aplicación, parado en el paso que falló), \fBabrir un shell\fR en la carpeta del proyecto para investigar (al salir con \fBexit\fR se vuelve a la aplicación) o abortar. Al terminar o abortar, \fBenter\fR vuelve a la vista del plan, que muestra arriba cómo terminó la última ejecución y deja el cursor en el paso que falló; solo \fBq\fR cierra \fBbaton\fR. Para corregir un paso: \fBe\fR (editar), \fBctrl + s\fR (guardar) y \fBu\fR (reanudar).
 .
 .SH ENTORNO
 .TP
@@ -523,7 +544,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. \fB{ambiente}\fR no se reemplaza dentro de los comandos de un plan. El editor no borra pasos (solo los desactiva). "Abrir shell" en la pantalla de fallo todavía no está disponible. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. \fB{ambiente}\fR no se reemplaza dentro de los comandos de un plan. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. No hay un comando de texto para el historial: se ve desde la aplicación. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),

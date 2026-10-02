@@ -23,6 +23,6 @@ expression: "screen(&app, 100, 24)"
 │ al ejecutar (●) re-escanear antes de correr el gate                                              │
 │                                                                                                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [r] re-escanear  [espacio] activar check  [e] editar check  [c] marcar crítico  [x] quitar gate  │
-│ [tab] sección  [esc] volver                                                                      │
+│ [r] re-escanear  [espacio] activar check  [e] editar check  [c] marcar crítico  [b] borrar check │
+│ [x] quitar gate  [tab] sección  [esc] volver                                                     │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

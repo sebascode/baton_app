@@ -94,7 +94,7 @@ pub(crate) async fn run_auto_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: us
     }
 
     // Qué servicios hay ahora (si el gate pide re-escanear) o cuando no hay lista que respetar.
-    let scanned_step = ps.step.kind.is_scanned();
+    let scanned_step = ps.step.kind.has_services();
     let mut lookup: Vec<ScannedService> = ps.scan.clone();
     if scanned_step && gate.rescan {
         let files = expand_sources(&ctx.project.root, ps.step.source.iter());

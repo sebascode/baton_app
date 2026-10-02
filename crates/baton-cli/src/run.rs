@@ -159,6 +159,16 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
     let steps = baton_store::scaffold::starter_steps(&found, flags.target.as_deref());
 
     if !steps.is_empty() {
+        // un paso sql necesita la credencial db en el plan para validar
+        if steps
+            .iter()
+            .any(|s| s.kind == baton_core::plan::StepKind::Sql)
+            && let Err(e) = baton_store::scaffold::add_db_credential(project, &plan_name)
+        {
+            eprintln!("error: no se pudo agregar la credencial db: {e}");
+            let _ = std::fs::remove_file(project.plan_path(&plan_name));
+            return ExitCode::from(EXIT_INVALID);
+        }
         let config = check_config(project);
         for d in &config.diagnostics {
             eprintln!("{d}");
@@ -199,11 +209,30 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         project.display_path(&project.plan_path(&plan_name))
     );
     if steps.is_empty() {
-        println!("no encontré docker-compose ni Dockerfile en esta carpeta: el plan quedó vacío");
+        println!(
+            "no encontré docker-compose, Dockerfile, scripts .sh ni archivos .sql en esta carpeta: el plan quedó vacío"
+        );
     } else {
         println!("armado con lo que encontré en la carpeta:");
         for s in &steps {
-            println!("  paso '{}': {} archivo(s)", s.id, s.source.0.len());
+            let off = if s.enabled { "" } else { " (desactivado)" };
+            println!("  paso '{}': {} archivo(s){off}", s.id, s.source.0.len());
+        }
+        if steps
+            .iter()
+            .any(|s| s.kind == baton_core::plan::StepKind::Sql)
+        {
+            println!(
+                "los .sql quedaron desactivados y el plan declara una credencial db (id 'db'): actívalos si baton debe ejecutarlos y completa la conexión (host, base...) al ejecutar"
+            );
+        }
+        if steps
+            .iter()
+            .any(|s| s.kind == baton_core::plan::StepKind::Script)
+        {
+            println!(
+                "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
+            );
         }
     }
     if !ambientes.is_empty() {

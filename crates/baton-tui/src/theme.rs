@@ -71,6 +71,7 @@ pub fn tag_color(label: &str) -> Color {
         "dockerfile" => Color::Cyan,
         "compose" => Color::Blue,
         "script" => Color::LightMagenta,
+        "sql" => Color::LightYellow,
         l if l.starts_with("gate") => Color::Yellow,
         _ => Color::Gray,
     }

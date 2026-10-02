@@ -15,6 +15,7 @@ pub mod plan;
 pub mod secrets;
 pub mod shell;
 pub mod slug;
+pub mod sql;
 pub mod step_run;
 pub mod template;
 pub mod units;

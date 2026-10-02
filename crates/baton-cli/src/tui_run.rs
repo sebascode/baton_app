@@ -2,10 +2,12 @@
 //! y al pulsar enter el runner de `baton-exec` alimenta las pantallas de ejecución.
 
 use baton_core::compose::Service;
-use baton_core::events::{LogKind, RunEvent, RunOutcome};
+use baton_core::events::{LogKind, RunCommand, RunEvent, RunOutcome};
 use baton_core::plan::{CredentialKind, Plan, Step};
 use baton_core::{Config, Issue, Requirement};
 use baton_exec::{RunHandle, RunInput, RunOptions, scan_compose, spawn};
+use baton_store::history;
+use baton_store::logs::read_log;
 use baton_store::plan_edit::{SaveError, save_plan_steps};
 use baton_store::secrets::{Resolver, Source};
 use baton_store::sources::expand_sources;
@@ -15,6 +17,7 @@ use baton_tui::app::Mode;
 use baton_tui::credentials::{CredField, CredItem, CredStatus, CredentialsState};
 use baton_tui::demo::{Driver, Flow};
 use baton_tui::gate_view::ScannedService;
+use baton_tui::history_view::{HistoryState, LogFileState};
 use baton_tui::{App, EditorState, Effect, PreviewState, RunRequest, plan_step_infos};
 
 /// Lo que el usuario pidió por línea de comandos y la vista previa no decide.
@@ -95,6 +98,18 @@ impl RunDriver {
     pub fn app(&mut self, mut preview: PreviewState) -> App {
         // para poder cambiar de plan desde la vista previa (`p`)
         preview.plans = self.project.list_plans();
+        // cómo terminó la última ejecución (la franja de arriba)
+        if preview.last_run.is_none() {
+            let state = State::load(&self.project).unwrap_or_default();
+            preview.last_run = history::banner(&state, &self.plan, history::now());
+            if let Some(id) = preview
+                .last_run
+                .as_ref()
+                .and_then(|b| b.failed_step.clone())
+            {
+                preview.select_step(&id);
+            }
+        }
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_editor(self.editor())
@@ -234,7 +249,7 @@ impl RunDriver {
         options.backup = req.backup;
         options.dry_run = req.dry_run;
         options.auto_rollback = req.rollback;
-        options.resume = self.flags.resume;
+        options.resume = self.flags.resume || req.resume;
         options.interactive = true;
         options.ambiente = self.flags.ambiente.clone();
         let input = RunInput {
@@ -250,6 +265,34 @@ impl RunDriver {
             }
             // Los problemas se muestran en la vista previa y no se ejecuta nada.
             Err(e) => app.notify(&e.to_string()),
+        }
+    }
+
+    /// Muestra el historial de ejecuciones del plan (lo guardado en `state.json`).
+    fn open_history(&self, app: &mut App) {
+        let state = State::load(&self.project).unwrap_or_default();
+        let entries = history::entries(&state, &self.plan, history::now());
+        app.show_history(HistoryState::new(&self.plan.name, entries));
+    }
+
+    /// Lee el log de la ejecución `index` del historial (0 es la última) y lo muestra.
+    fn open_log(&self, app: &mut App, index: usize) {
+        let state = State::load(&self.project).unwrap_or_default();
+        let runs = state.runs(&self.plan.name);
+        let Some(run) = runs.get(index) else {
+            return app.notify("esa ejecución ya no está en el historial");
+        };
+        let Some(path) = &run.log_path else {
+            return app.notify("esa ejecución no guardó log (¿fue un dry-run?)");
+        };
+        let full = self.project.root.join(path);
+        match read_log(&full) {
+            Ok(log) => app.show_log_file(LogFileState::new(
+                &format!("{} · {}", self.plan.name, run.id),
+                log.lines,
+                log.note,
+            )),
+            Err(e) => app.notify(&format!("no se pudo leer {path}: {e}")),
         }
     }
 
@@ -292,9 +335,15 @@ impl RunDriver {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-        let files = expand_sources(&self.project.root, patterns);
+        let mut files = expand_sources(&self.project.root, patterns);
         if files.is_empty() {
             app.notify("el origen del paso no coincide con ningún archivo: no hay qué escanear");
+            return;
+        }
+        // solo un compose define servicios: un script (u otro archivo) no se lee como tal
+        files.retain(|f| f.extension().is_some_and(|e| e == "yml" || e == "yaml"));
+        if files.is_empty() {
+            app.notify("este origen no tiene archivos compose: no hay servicios que escanear");
             return;
         }
         let scan = scan_compose(&self.project, &files);
@@ -399,7 +448,7 @@ fn credential_item(
         if !spec.optional && value.is_empty() {
             present = false;
         }
-        fields.push(CredField::new(spec.label, &value, spec.secret));
+        fields.push(CredField::new(spec.label, &value, spec.secret).optional(spec.optional));
     }
     let silenced = state.is_silenced(&credential_key(ambiente, &req.reference));
     let status = match (present, silenced) {
@@ -524,6 +573,10 @@ impl Driver for RunDriver {
         match effect {
             Effect::Quit => return Flow::Quit,
             Effect::StartRun(req) => self.start(app, req),
+            // abrir un shell suspende la pantalla: no es cosa del runner, que sigue esperando
+            Effect::Command(RunCommand::OpenShell) => {
+                return Flow::Shell(self.project.root.clone());
+            }
             Effect::Command(cmd) => {
                 if let Some(h) = &self.handle {
                     // Si el runner ya terminó, no hay a quién enviarle el comando.
@@ -538,6 +591,8 @@ impl Driver for RunDriver {
             }
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
+            Effect::OpenHistory => self.open_history(app),
+            Effect::OpenLog(i) => self.open_log(app, i),
             Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}
         }
         Flow::Continue

@@ -732,3 +732,125 @@ fn a_missing_provider_binary_falls_back_to_the_env_file_and_says_why_when_nothin
         "t|u"
     );
 }
+
+// ------------------------------------------------------------------ scripts (v0.2)
+
+#[test]
+fn a_plan_of_scripts_runs_each_one_in_its_folder_with_its_shebang() {
+    let plan = "name = \"instalar\"\n\
+        [[steps]]\nid = \"uno\"\nname = \"Uno\"\ntype = \"script\"\nsource = \"scripts/01-uno.sh\"\n\n\
+        [[steps]]\nid = \"dos\"\nname = \"Dos\"\ntype = \"script\"\nsource = \"scripts/02-dos.sh\"\n";
+    let fx = Fx::new(plan);
+    let write = |rel: &str, body: &str| {
+        let p = fx.root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    };
+    write(
+        "scripts/01-uno.sh",
+        "#!/bin/bash\necho \"uno desde $(basename \"$PWD\")\" >> ../orden.txt\n",
+    );
+    write("scripts/02-dos.sh", "echo dos >> ../orden.txt\n");
+    let o = fx.baton(&["run", "instalar", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let stdout = out(&o);
+    assert!(stdout.contains("'/bin/bash' '01-uno.sh'"), "{stdout}");
+    assert!(stdout.contains("sh '02-dos.sh'"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(fx.root.join("orden.txt")).unwrap(),
+        "uno desde scripts\ndos\n"
+    );
+}
+
+#[test]
+fn a_script_step_needs_a_source_and_files_that_exist() {
+    let no_source =
+        Fx::new("name = \"instalar\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"script\"\n");
+    let o = no_source.baton(&["validate", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(format!("{}{}", out(&o), err(&o)).contains("un paso script necesita source"));
+
+    let missing = Fx::new(
+        "name = \"instalar\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"script\"\nsource = \"scripts/*.sh\"\n",
+    );
+    let o = missing.baton(&["run", "instalar", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("no coincide con ningún archivo"),
+        "{}",
+        err(&o)
+    );
+}
+
+// -------------------------------------------------------------------- sql (v0.3)
+
+const SQL_PLAN: &str = "name = \"instalar\"\n\
+    [[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP_DB\"\n\n\
+    [[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"migraciones/*.sql\"\n";
+
+fn sql_fx(sql: &str) -> Fx {
+    let fx = Fx::new(SQL_PLAN);
+    let write = |rel: &str, body: &str| {
+        let p = fx.root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    };
+    write("migraciones/01-esquema.sql", sql);
+    write(
+        "_bin/psql",
+        "#!/bin/sh\necho \"$PGUSER@$PGHOST/$PGDATABASE $*\" >> \"$BATON_PSQL_LOG\"\n",
+    );
+    fs::set_permissions(fx.root.join("_bin/psql"), fs::Permissions::from_mode(0o755)).unwrap();
+    fx
+}
+
+#[test]
+fn a_sql_plan_runs_in_ci_with_the_connection_taken_from_environment_variables() {
+    let fx = sql_fx("CREATE TABLE t (id int);\n");
+    let log = fx.root.join("_psql_log");
+    let path = format!(
+        "{}:{}",
+        fx.root.join("_bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&fx.root)
+        .args(["run", "instalar", "--no-tui"])
+        .env("PATH", path)
+        .env("BATON_PSQL_LOG", &log)
+        .env("APP_DB_USER", "ci")
+        .env("APP_DB_PASSWORD", "clave-de-ci")
+        .env("APP_DB_HOST", "db.ci")
+        .env("APP_DB_DATABASE", "tienda")
+        .env("CI", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        "ci@db.ci/tienda -X -v ON_ERROR_STOP=1 -f 01-esquema.sql\n"
+    );
+    assert!(!out(&o).contains("clave-de-ci") && !err(&o).contains("clave-de-ci"));
+}
+
+#[test]
+fn ci_names_the_missing_db_credential_field_and_refuses_destructive_sql() {
+    let fx = sql_fx("TRUNCATE usuarios;\n");
+    let o = fx.baton(&["run", "instalar", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    let e = err(&o);
+    assert!(e.contains("APP_DB_USER") || e.contains("usuario"), "{e}");
+    assert!(e.contains("sentencias destructivas"), "{e}");
+}
+
+#[test]
+fn validate_rejects_a_sql_step_without_a_db_credential() {
+    let fx = Fx::new(
+        "name = \"instalar\"\n[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"x/*.sql\"\n",
+    );
+    let o = fx.baton(&["validate", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(format!("{}{}", out(&o), err(&o)).contains("necesita una credencial de tipo db"));
+}

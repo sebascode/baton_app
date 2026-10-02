@@ -2,12 +2,12 @@
 //! La ruta sale de la plantilla de `[logs].local`.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use baton_core::config::{LogFormat, Retention};
-use baton_core::events::LogKind;
+use baton_core::events::{LogKind, LogLine};
 use baton_core::template::render;
 use serde::Serialize;
 
@@ -54,6 +54,17 @@ struct JsonLine<'a> {
     text: &'a str,
 }
 
+/// El símbolo con que la pantalla marca cada tipo de línea; las de salida normal no llevan.
+fn glyph(kind: LogKind) -> &'static str {
+    match kind {
+        LogKind::Command => "▸",
+        LogKind::Success => "✓",
+        LogKind::Error => "✗",
+        LogKind::Retry => "↻",
+        LogKind::Output => "",
+    }
+}
+
 fn kind_str(kind: LogKind) -> &'static str {
     match kind {
         LogKind::Command => "command",
@@ -62,6 +73,110 @@ fn kind_str(kind: LogKind) -> &'static str {
         LogKind::Retry => "retry",
         LogKind::Error => "error",
     }
+}
+
+/// Lo máximo que se lee de un log para mostrarlo: de uno más grande se toma el final.
+pub const MAX_VIEW_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Un log leído para mostrarlo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadLog {
+    pub lines: Vec<LogLine>,
+    /// Si el archivo era demasiado grande y solo se leyó el final.
+    pub note: Option<String>,
+}
+
+fn kind_of(s: &str) -> LogKind {
+    match s {
+        "command" => LogKind::Command,
+        "success" => LogKind::Success,
+        "retry" => LogKind::Retry,
+        "error" => LogKind::Error,
+        _ => LogKind::Output,
+    }
+}
+
+/// El tipo de una línea de un log de texto y su texto sin el símbolo (`paso: ✗ falló` es un
+/// error con texto `paso: falló`). Los logs anteriores a los símbolos se ven como salida normal.
+fn split_kind(text: &str) -> (LogKind, String) {
+    let Some((step, rest)) = text.split_once(": ") else {
+        return (LogKind::Output, text.to_string());
+    };
+    for (kind, g) in [
+        (LogKind::Command, "▸ "),
+        (LogKind::Success, "✓ "),
+        (LogKind::Error, "✗ "),
+        (LogKind::Retry, "↻ "),
+    ] {
+        if let Some(body) = rest.strip_prefix(g) {
+            return (kind, format!("{step}: {body}"));
+        }
+    }
+    (LogKind::Output, text.to_string())
+}
+
+/// Una línea de un log (texto `[HH:MM:SS] paso: texto` o JSON Lines) como línea para mostrar.
+pub fn parse_log_line(raw: &str) -> LogLine {
+    if raw.starts_with('{')
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+        && let Some(text) = v.get("text").and_then(|t| t.as_str())
+    {
+        let step = v.get("step").and_then(|s| s.as_str()).unwrap_or("");
+        return LogLine {
+            at: v
+                .get("at")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_string(),
+            kind: kind_of(v.get("kind").and_then(|k| k.as_str()).unwrap_or("output")),
+            text: if step.is_empty() {
+                text.to_string()
+            } else {
+                format!("{step}: {text}")
+            },
+        };
+    }
+    if let Some(rest) = raw.strip_prefix('[')
+        && let Some((at, text)) = rest.split_once("] ")
+    {
+        let (kind, text) = split_kind(text);
+        return LogLine {
+            at: at.to_string(),
+            kind,
+            text,
+        };
+    }
+    LogLine {
+        at: String::new(),
+        kind: LogKind::Output,
+        text: raw.to_string(),
+    }
+}
+
+/// Lee el log de una ejecución para el visor. Un archivo grande se recorta al final.
+pub fn read_log(path: &Path) -> io::Result<ReadLog> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    let mut note = None;
+    if size > MAX_VIEW_BYTES {
+        file.seek(SeekFrom::Start(size - MAX_VIEW_BYTES))?;
+        note = Some(format!(
+            "el log pesa {} MB: se muestran solo las últimas líneas (completo en {})",
+            size / (1024 * 1024),
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = text.lines();
+    if note.is_some() {
+        lines.next(); // la primera línea quedó cortada a la mitad
+    }
+    Ok(ReadLog {
+        lines: lines.map(parse_log_line).collect(),
+        note,
+    })
 }
 
 impl LogSink {
@@ -82,11 +197,16 @@ impl LogSink {
         &self.path
     }
 
-    /// Una línea. En texto: `[HH:MM:SS] paso: texto`; en JSON, un objeto por línea (JSON Lines).
-    /// Se vuelca al disco de inmediato: si el proceso muere, el log ya tiene todo lo que se mostró.
+    /// Una línea. En texto: `[HH:MM:SS] paso: texto`, con el símbolo de la pantalla (`▸ ✓ ✗ ↻`)
+    /// delante del texto de los comandos, éxitos, errores y reintentos; en JSON, un objeto por
+    /// línea (JSON Lines). Se vuelca al disco de inmediato: si el proceso muere, el log ya tiene
+    /// todo lo que se mostró.
     pub fn line(&mut self, at: &str, step: &str, kind: LogKind, text: &str) -> io::Result<()> {
         match self.format {
-            LogFormat::Text => writeln!(self.out, "[{at}] {step}: {text}")?,
+            LogFormat::Text => match glyph(kind) {
+                "" => writeln!(self.out, "[{at}] {step}: {text}")?,
+                g => writeln!(self.out, "[{at}] {step}: {g} {text}")?,
+            },
             LogFormat::Json => {
                 let line = JsonLine {
                     at,
@@ -199,7 +319,7 @@ mod tests {
         // sin cerrar: ya está en disco
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "[14:02:11] db: docker compose up -d\n"
+            "[14:02:11] db: ▸ docker compose up -d\n"
         );
         drop(sink);
         let mut again = LogSink::create(&path, LogFormat::Text).unwrap();
@@ -311,5 +431,84 @@ mod tests {
     fn set_mtime(path: &Path, time: SystemTime) {
         let file = File::options().write(true).open(path).unwrap();
         file.set_modified(time).unwrap();
+    }
+
+    #[test]
+    fn text_log_lines_are_parsed_with_their_kind() {
+        let l = parse_log_line("[17:57:03] build: ▸ docker build -t api .");
+        assert_eq!((l.at.as_str(), l.kind), ("17:57:03", LogKind::Command));
+        assert_eq!(
+            l.text, "build: docker build -t api .",
+            "el símbolo lo pone la pantalla"
+        );
+        assert_eq!(parse_log_line("[10:00:00] a: ✓ ok").kind, LogKind::Success);
+        let err = parse_log_line("[10:00:00] a: ✗ falló");
+        assert_eq!((err.kind, err.text.as_str()), (LogKind::Error, "a: falló"));
+        assert_eq!(
+            parse_log_line("[10:00:00] a: ↻ reintento 2").kind,
+            LogKind::Retry
+        );
+        assert_eq!(parse_log_line("[10:00:00] a: hola").kind, LogKind::Output);
+        // un log anterior a los símbolos (sin ellos) se ve como salida normal, sin romperse
+        assert_eq!(
+            parse_log_line("[10:00:00] a: $ echo x").kind,
+            LogKind::Output
+        );
+        // la salida de un comando que casualmente empieza con un símbolo no cambia de tipo
+        assert_eq!(
+            parse_log_line("[10:00:00] a: uno ✗ dos").kind,
+            LogKind::Output
+        );
+        let plain = parse_log_line("una línea suelta");
+        assert_eq!((plain.at.as_str(), plain.kind), ("", LogKind::Output));
+    }
+
+    #[test]
+    fn json_log_lines_keep_the_kind_the_runner_wrote() {
+        let l =
+            parse_log_line(r#"{"at":"10:00:01","step":"deploy","kind":"error","text":"código 3"}"#);
+        assert_eq!((l.at.as_str(), l.kind), ("10:00:01", LogKind::Error));
+        assert_eq!(l.text, "deploy: código 3");
+        // un JSON que no es de baton se muestra como texto
+        assert_eq!(parse_log_line("{\"otro\":1}").text, "{\"otro\":1}");
+    }
+
+    #[test]
+    fn a_log_is_read_back_in_both_formats_and_a_huge_one_is_cut_at_the_end() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a.log");
+        {
+            let mut s = LogSink::create(&path, LogFormat::Text).unwrap();
+            s.line("10:00:00", "a", LogKind::Command, "echo hola")
+                .unwrap();
+            s.line("10:00:01", "a", LogKind::Success, "ok").unwrap();
+        }
+        let r = read_log(&path).unwrap();
+        assert_eq!(r.lines.len(), 2);
+        assert_eq!(r.lines[0].kind, LogKind::Command);
+        assert_eq!(r.lines[1].kind, LogKind::Success);
+        assert_eq!(r.lines[0].text, "a: echo hola");
+        assert!(r.note.is_none());
+
+        let json = tmp.path().join("b.log");
+        {
+            let mut s = LogSink::create(&json, LogFormat::Json).unwrap();
+            s.line("10:00:00", "a", LogKind::Error, "mal").unwrap();
+        }
+        assert_eq!(read_log(&json).unwrap().lines[0].kind, LogKind::Error);
+
+        let big = tmp.path().join("c.log");
+        let line = "[10:00:00] a: relleno relleno relleno relleno\n";
+        let n = (MAX_VIEW_BYTES as usize / line.len()) + 10;
+        std::fs::write(&big, line.repeat(n)).unwrap();
+        let r = read_log(&big).unwrap();
+        assert!(r.note.as_deref().unwrap().contains("últimas líneas"));
+        assert!(r.lines.len() < n, "se recortó");
+        assert!(
+            r.lines.iter().all(|l| l.at == "10:00:00"),
+            "la línea cortada se descartó"
+        );
+
+        assert!(read_log(&tmp.path().join("no-existe.log")).is_err());
     }
 }

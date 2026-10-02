@@ -1,5 +1,5 @@
-//! Escaneo de una carpeta nueva en busca de `docker-compose.yml` y `Dockerfile`, para que
-//! `baton init` pueda proponer pasos de arranque en vez de un plan vacío.
+//! Escaneo de una carpeta nueva en busca de `docker-compose.yml`, `Dockerfile`, scripts `.sh` y `.sql`,
+//! para que `baton init` pueda proponer pasos de arranque en vez de un plan vacío.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,11 +22,18 @@ pub struct Discovered {
     /// Rutas relativas a la raíz, ordenadas.
     pub composes: Vec<PathBuf>,
     pub dockerfiles: Vec<PathBuf>,
+    /// Scripts `.sh`.
+    pub scripts: Vec<PathBuf>,
+    /// Archivos `.sql`.
+    pub sql: Vec<PathBuf>,
 }
 
 impl Discovered {
     pub fn is_empty(&self) -> bool {
-        self.composes.is_empty() && self.dockerfiles.is_empty()
+        self.composes.is_empty()
+            && self.dockerfiles.is_empty()
+            && self.scripts.is_empty()
+            && self.sql.is_empty()
     }
 }
 
@@ -44,6 +51,8 @@ pub fn scan_project(root: &Path) -> Discovered {
     walk(root, root, 0, &mut out);
     out.composes.sort();
     out.dockerfiles.sort();
+    out.scripts.sort();
+    out.sql.sort();
     out
 }
 
@@ -74,6 +83,10 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Discovered) {
                 out.composes.push(rel.to_path_buf());
             } else if name == "Dockerfile" {
                 out.dockerfiles.push(rel.to_path_buf());
+            } else if name.ends_with(".sh") {
+                out.scripts.push(rel.to_path_buf());
+            } else if name.ends_with(".sql") {
+                out.sql.push(rel.to_path_buf());
             }
         }
     }
@@ -141,5 +154,57 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert!(scan_project(tmp.path()).is_empty());
         assert!(scan_project(&tmp.path().join("no-existe")).is_empty());
+    }
+
+    #[test]
+    fn finds_shell_scripts_and_skips_the_same_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in [
+            "scripts/01-a.sh",
+            "scripts/02-b.sh",
+            "deploy.sh",
+            "app/run.sh",
+            "scripts/notas.txt",
+            "node_modules/x/y.sh",
+            ".git/hooks/pre.sh",
+            ".baton/z.sh",
+        ] {
+            touch(tmp.path(), f);
+        }
+        let found = scan_project(tmp.path());
+        assert_eq!(
+            found.scripts,
+            [
+                PathBuf::from("app/run.sh"),
+                PathBuf::from("deploy.sh"),
+                PathBuf::from("scripts/01-a.sh"),
+                PathBuf::from("scripts/02-b.sh"),
+            ]
+        );
+        assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn finds_sql_files_and_skips_the_same_noise() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in [
+            "db/02.sql",
+            "db/01.sql",
+            "seed.sql",
+            "node_modules/x.sql",
+            ".git/y.sql",
+            "db/notas.txt",
+        ] {
+            touch(tmp.path(), f);
+        }
+        let found = scan_project(tmp.path());
+        assert_eq!(
+            found.sql,
+            [
+                PathBuf::from("db/01.sql"),
+                PathBuf::from("db/02.sql"),
+                PathBuf::from("seed.sql")
+            ]
+        );
     }
 }

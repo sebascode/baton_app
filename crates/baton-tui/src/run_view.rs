@@ -138,6 +138,19 @@ fn shortcut_items(s: &RunState) -> Vec<(&'static str, &'static str)> {
     if s.ask.is_some() {
         return vec![("enter", "continuar"), ("n", "detener")];
     }
+    // el visor de log tras un fallo o al terminar: se sale con esc (el `l` alterna el log completo)
+    if s.log_view && !matches!(s.phase, Phase::Running) {
+        return if s.full_log {
+            vec![("↑↓", "desplazar"), ("l", "ver pasos"), ("esc", "volver")]
+        } else {
+            vec![
+                ("↑↓", "paso"),
+                ("l", "log completo"),
+                ("PgUp PgDn", "desplazar"),
+                ("esc", "volver"),
+            ]
+        };
+    }
     if s.full_log {
         return vec![("l", "volver"), ("↑↓", "desplazar"), ("f", "seguir")];
     }
@@ -263,17 +276,21 @@ fn render_log(s: &RunState, buf: &mut Buffer, area: Rect, full: bool) {
     }
     let viewed = s.viewed_step().and_then(|i| s.rows.get(i));
 
+    let live = matches!(s.phase, Phase::Running);
+    let word = if live { "log en vivo" } else { "log" };
     let head = match (viewed, full) {
         (Some(r), true) => format!("log completo · {}", r.info.name),
-        (Some(r), false) => format!("log en vivo · {}", r.info.detail),
-        (None, _) => "log en vivo".to_string(),
+        (Some(r), false) => format!("{word} · {}", r.info.detail),
+        (None, _) => word.to_string(),
     };
     let scrolled = s.log_scroll > 0;
     let right = if scrolled {
-        vec![Span::styled(
-            "autoscroll en pausa [f] seguir",
-            Style::new().fg(theme::WARN),
-        )]
+        let hint = if live {
+            "autoscroll en pausa [f] seguir"
+        } else {
+            "[f] ir al final"
+        };
+        vec![Span::styled(hint, Style::new().fg(theme::WARN))]
     } else {
         vec![]
     };

@@ -17,12 +17,12 @@ expression: "screen(&app, w, h)"
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ por check   timeout [ 60s   ]   intentos [ 6   ]   (●) en paralelo           │
 │ al ejecutar (●) re-escanear antes de correr el gate                          │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ [r] re-escanear  [espacio] activar check  [e] editar check                   │
-│ [c] marcar crítico  [x] quitar gate  [tab] sección  [esc] volver             │
+│ [c] marcar crítico  [b] borrar check  [x] quitar gate  [tab] sección         │
+│ [esc] volver                                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯

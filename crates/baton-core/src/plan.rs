@@ -64,6 +64,17 @@ pub struct BackupSpec {
     pub volumes: Vec<String>,
     /// Por defecto `.baton/backups`.
     pub dir: Option<String>,
+    /// Además de los volúmenes, vuelca la base de la credencial `db` del plan (`pg_dump`), y el
+    /// rollback de un paso `backup` la restaura (v0.3).
+    #[serde(default)]
+    pub database: bool,
+}
+
+impl BackupSpec {
+    /// Sin volúmenes ni base: no hay nada que respaldar.
+    pub fn is_empty(&self) -> bool {
+        self.volumes.is_empty() && !self.database
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,8 +139,9 @@ fn yes() -> bool {
 pub enum StepKind {
     Compose,
     Dockerfile,
-    /// Reservado para v0.2: se parsea para dar un error claro.
     Script,
+    /// Archivos `.sql` contra la base de la credencial `db` del plan (v0.3).
+    Sql,
     Comando,
     Check,
     Backup,
@@ -144,6 +156,7 @@ impl StepKind {
             StepKind::Compose => "compose",
             StepKind::Dockerfile => "dockerfile",
             StepKind::Script => "script",
+            StepKind::Sql => "sql",
             StepKind::Comando => "comando",
             StepKind::Check => "check",
             StepKind::Backup => "backup",
@@ -151,8 +164,18 @@ impl StepKind {
         }
     }
 
-    /// Los orígenes de estos tipos se escanean (glob) y su comando corre una vez por archivo.
+    /// Los orígenes de estos tipos se escanean (glob) y su comando corre una vez por archivo,
+    /// dentro de la carpeta de ese archivo.
     pub fn is_scanned(self) -> bool {
+        matches!(
+            self,
+            StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql
+        )
+    }
+
+    /// Tipos cuyos archivos definen servicios (de ahí salen los checks de un gate automático).
+    /// Un script o un archivo sql no define ninguno.
+    pub fn has_services(self) -> bool {
         matches!(self, StepKind::Compose | StepKind::Dockerfile)
     }
 }

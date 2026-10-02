@@ -594,3 +594,25 @@ fn services_rescanned_from_a_real_compose_convert_to_gate_rows() {
     assert_eq!(found[1].target, "http://{destino}:3000/health");
     assert_eq!(found[2].target, "sin puertos · contenedor arriba 30s");
 }
+
+#[test]
+fn a_script_step_survives_a_round_trip_through_the_editor() {
+    let plan = Plan::parse(
+        "name = \"p\"\n\
+         [[steps]]\nid = \"prep\"\nname = \"Preparar\"\ntype = \"script\"\nsource = [\"scripts/01-a.sh\", \"scripts/02-b.sh\"]\n\
+         timeout = \"2m\"\nretries = 1\nrollback = \"sh {script} --undo\"\n\
+         [[steps]]\nid = \"con-comando\"\nname = \"Con comando\"\ntype = \"script\"\nsource = \"scripts/x.sh\"\ncommand = \"bash -x {script}\"\n",
+    )
+    .unwrap();
+    let editor = editor_for(&plan);
+    assert_eq!(editor.steps[0].kind(), "script");
+    let back = editor.to_steps().unwrap();
+    assert_eq!(
+        back, plan.steps,
+        "no se pierde nada: ni el origen, ni el rollback, ni el comando"
+    );
+    assert!(
+        back[0].command.is_none(),
+        "sin comando declarado queda sin comando"
+    );
+}

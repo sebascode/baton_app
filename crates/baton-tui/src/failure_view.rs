@@ -10,7 +10,12 @@ use crate::run::{Phase, RunState};
 use crate::theme;
 use crate::widgets::{self, fmt_clock, frame, hsep, truncate};
 
-const SHORTCUTS: [(&str, &str); 2] = [("↑↓", "elegir"), ("enter", "confirmar")];
+const SHORTCUTS: [(&str, &str); 4] = [
+    ("↑↓", "elegir"),
+    ("enter", "confirmar"),
+    ("l", "ver log"),
+    ("v", "pipeline"),
+];
 
 pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     let Phase::Failed(failure) = &s.phase else {

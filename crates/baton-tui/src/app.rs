@@ -29,6 +29,7 @@ use baton_core::events::StepInfo;
 use baton_core::plan::{Plan, Step};
 
 use crate::gate_view::ScannedService;
+use crate::history_view::{HistoryAction, HistoryState, LogFileAction, LogFileState};
 use crate::preview::{PreviewAction, PreviewState, RunRequest};
 use crate::run::{Phase, RunAction, RunState};
 use crate::{failure_view, pipeline_view, run_view, summary_view, theme};
@@ -59,6 +60,10 @@ pub enum Mode {
     /// Pipeline de solo lectura, antes de ejecutar.
     Pipeline(Box<RunState>),
     Run(Box<RunState>),
+    /// Historial de ejecuciones del plan.
+    History(Box<HistoryState>),
+    /// El log de una ejecución pasada.
+    LogFile(Box<LogFileState>),
 }
 
 /// Lo que la pantalla le pide a quien la maneja (runner real o de demostración).
@@ -80,6 +85,11 @@ pub enum Effect {
     Rescan,
     /// Abrir un plan desde la pestaña Planes.
     OpenPlan(String),
+    /// Mostrar el historial de ejecuciones del plan. Quien atiende responde con `show_history`.
+    OpenHistory,
+    /// Mostrar el log de la ejecución en esa posición del historial (0 es la última). Quien
+    /// atiende responde con `show_log_file` o `notify`.
+    OpenLog(usize),
     /// Pasar a otro plan del proyecto (selector de la vista previa). Quien atiende reemplaza la
     /// aplicación entera con la del plan elegido, o responde con `notify` si no puede.
     SwitchPlan(String),
@@ -99,6 +109,7 @@ struct Stash {
     editor: Option<Box<EditorState>>,
     credentials: Option<Box<CredentialsState>>,
     config: Option<Box<ConfigState>>,
+    history: Option<Box<HistoryState>>,
     pipeline: Option<Box<RunState>>,
     /// Origen del pipeline en vivo: (plan, raíz, todos los pasos con sus gates).
     pipeline_source: Option<(String, String, Vec<StepInfo>)>,
@@ -172,8 +183,21 @@ impl App {
             Mode::Config(c) => self.stash.config = Some(c),
             Mode::Editor(e) => self.stash.editor = Some(e),
             Mode::Pipeline(p) => self.stash.pipeline = Some(p),
-            Mode::Run(_) => {}
+            Mode::History(h) => self.stash.history = Some(h),
+            Mode::Run(_) | Mode::LogFile(_) => {}
         }
+    }
+
+    /// Muestra el historial (lo arma quien atiende `Effect::OpenHistory`).
+    pub fn show_history(&mut self, history: HistoryState) {
+        self.stash.history = None;
+        self.switch(Mode::History(Box::new(history)));
+    }
+
+    /// Muestra el log de una ejecución pasada; `esc` vuelve a donde se estaba (el historial o la
+    /// vista del plan).
+    pub fn show_log_file(&mut self, log: LogFileState) {
+        self.switch(Mode::LogFile(Box::new(log)));
     }
 
     /// Vuelve a la vista previa; si no hay una guardada (arranque directo), pide salir.
@@ -362,7 +386,8 @@ impl App {
             Mode::Config(c) => c.notice = Some(message.into()),
             Mode::Editor(e) => e.notice = Some(message.into()),
             Mode::Preview(p) => p.notice = message.lines().map(String::from).collect(),
-            Mode::Pipeline(_) | Mode::Run(_) => {}
+            Mode::History(h) => h.notice = Some(message.into()),
+            Mode::LogFile(_) | Mode::Pipeline(_) | Mode::Run(_) => {}
         }
     }
 
@@ -401,13 +426,33 @@ impl App {
                     }
                     None
                 }
+                PreviewAction::History => Some(Effect::OpenHistory),
+                PreviewAction::LastLog => Some(Effect::OpenLog(0)),
                 PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
                 PreviewAction::Quit => Some(Effect::Quit),
             },
             Mode::Pipeline(r) => match r.handle_key(key)? {
                 // en la vista previa, "salir" solo cierra el pipeline
-                RunAction::Quit => self.back_to_preview(),
+                RunAction::Quit | RunAction::BackToPlan => self.back_to_preview(),
                 RunAction::Command(_) => None,
+            },
+            Mode::History(h) => match h.handle_key(key)? {
+                HistoryAction::OpenLog(i) => Some(Effect::OpenLog(i)),
+                HistoryAction::Back => {
+                    let out = self.back_to_preview();
+                    // el historial que quedó guardado ya no sirve
+                    self.stash.history = None;
+                    out
+                }
+            },
+            Mode::LogFile(l) => match l.handle_key(key)? {
+                LogFileAction::Back => match self.stash.history.take() {
+                    Some(h) => {
+                        self.switch(Mode::History(h));
+                        None
+                    }
+                    None => self.back_to_preview(),
+                },
             },
             Mode::Credentials(c) => match c.handle_key(key)? {
                 CredAction::Continue => self.stash.pending.take().map(Effect::StartRun),
@@ -445,6 +490,24 @@ impl App {
             Mode::Run(r) => match r.handle_key(key)? {
                 RunAction::Command(c) => Some(Effect::Command(c)),
                 RunAction::Quit => Some(Effect::Quit),
+                // la ejecución terminó: se vuelve al plan (con su franja de estado), no se cierra
+                RunAction::BackToPlan => {
+                    let banner = r.banner();
+                    let stopped = r.failed_step_id().map(str::to_string);
+                    match self.stash.preview.take() {
+                        Some(mut p) => {
+                            p.last_run = banner;
+                            if let Some(id) = stopped.as_deref() {
+                                p.select_step(id);
+                            }
+                            p.refresh_after_run();
+                            self.switch(Mode::Preview(p));
+                            None
+                        }
+                        // arranque directo sin vista del plan: no hay a dónde volver
+                        None => Some(Effect::Quit),
+                    }
+                }
             },
         }
     }
@@ -512,7 +575,11 @@ impl App {
             Mode::Config(c) => c.render(buf, area),
             Mode::Editor(e) => e.render(buf, area),
             Mode::Pipeline(r) => pipeline_view::render(r, buf, area),
+            Mode::History(h) => h.render(buf, area),
+            Mode::LogFile(l) => l.render(buf, area),
             Mode::Run(r) if r.view_pipeline => pipeline_view::render(r, buf, area),
+            // el visor de log (con sus pasos) también sirve tras un fallo o al terminar
+            Mode::Run(r) if r.log_view => run_view::render(r, buf, area),
             Mode::Run(r) => match r.phase {
                 Phase::Running => run_view::render(r, buf, area),
                 Phase::Failed(_) => failure_view::render(r, buf, area),

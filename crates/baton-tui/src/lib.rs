@@ -13,6 +13,7 @@ pub mod failure_view;
 pub mod fake;
 pub mod forms;
 pub mod gate_view;
+pub mod history_view;
 pub mod pipeline_view;
 pub mod preview;
 pub mod run;
@@ -26,7 +27,11 @@ mod tests;
 #[cfg(test)]
 mod tests_b2;
 #[cfg(test)]
+mod tests_delete;
+#[cfg(test)]
 mod tests_edit;
+#[cfg(test)]
+mod tests_history;
 #[cfg(test)]
 mod tests_pipeline;
 #[cfg(test)]

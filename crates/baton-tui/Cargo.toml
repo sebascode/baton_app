@@ -12,6 +12,7 @@ workspace = true
 baton-core = { version = "0.1.0", path = "../baton-core" }
 indexmap = "2.14.2"
 ratatui = "0.30.2"
+signal-hook = "0.4.4"
 unicode-width = "0.2.2"
 
 [dev-dependencies]

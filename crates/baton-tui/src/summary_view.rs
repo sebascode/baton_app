@@ -12,7 +12,12 @@ use crate::run::{Phase, RunState, StepRow};
 use crate::theme;
 use crate::widgets::{self, fmt_clock, fmt_duration, frame, hsep, justify};
 
-const SHORTCUTS: [(&str, &str); 1] = [("enter", "salir")];
+const SHORTCUTS: [(&str, &str); 4] = [
+    ("enter", "volver al plan"),
+    ("l", "ver log"),
+    ("v", "pipeline"),
+    ("q", "salir"),
+];
 const CARD_W: u16 = 18;
 
 pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {

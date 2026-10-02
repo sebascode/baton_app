@@ -5,8 +5,8 @@ use std::cell::Cell;
 use std::time::Duration;
 
 use baton_core::events::{
-    Badge, Failure, FailureKind, LogLine, RunCommand, RunEvent, RunOutcome, RunSummary, StepInfo,
-    StepStatus,
+    Badge, Failure, FailureKind, LastRunBanner, LogLine, RunCommand, RunEvent, RunOutcome,
+    RunSummary, StepInfo, StepStatus,
 };
 
 use crate::pipeline_view::PipeUi;
@@ -39,6 +39,8 @@ pub enum FailureOption {
     UpdateCredentialAndRetry,
     Retry,
     Rollback(usize),
+    /// Ver el log completo de la ejecución (sin salir de la app).
+    ViewLog,
     OpenShell,
     Abort,
 }
@@ -49,6 +51,7 @@ impl FailureOption {
             FailureOption::UpdateCredentialAndRetry => "Actualizar credencial y reintentar".into(),
             FailureOption::Retry => "Reintentar sin cambios".into(),
             FailureOption::Rollback(to) => format!("Rollback a antes del paso {}", to + 1),
+            FailureOption::ViewLog => "Ver el log completo".into(),
             FailureOption::OpenShell => "Abrir shell para investigar".into(),
             FailureOption::Abort => "Abortar y guardar estado".into(),
         }
@@ -61,6 +64,8 @@ pub enum RunAction {
     Command(RunCommand),
     /// Cerrar la TUI (la ejecución ya terminó o se confirmó abortarla).
     Quit,
+    /// Terminada la ejecución: volver a la vista del plan en vez de cerrar la app.
+    BackToPlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +93,8 @@ pub struct RunState {
     pub failure_cursor: usize,
     /// Mostrar el pipeline (pantalla 9) en lugar de la pantalla de la fase actual.
     pub view_pipeline: bool,
+    /// Viendo el log de la ejecución (con sus pasos) después de un fallo o al terminar.
+    pub log_view: bool,
     pub pipe: PipeUi,
     /// Solo lectura, antes de ejecutar: no hay runner al que enviar comandos.
     pub preview: bool,
@@ -114,6 +121,7 @@ impl Default for RunState {
             quit_confirm: false,
             failure_cursor: 0,
             view_pipeline: false,
+            log_view: false,
             pipe: PipeUi::default(),
             preview: false,
             log_view_height: Cell::new(0),
@@ -297,9 +305,83 @@ impl RunState {
         if let Some(to) = f.rollback_to {
             out.push(FailureOption::Rollback(to));
         }
+        out.push(FailureOption::ViewLog);
         out.push(FailureOption::OpenShell);
         out.push(FailureOption::Abort);
         out
+    }
+
+    /// Abre el visor de log (el mismo de la ejecución en vivo) parado en el paso que falló o, si
+    /// no hubo fallo, en el último. Sirve después de un fallo y en el resumen.
+    pub fn open_log_view(&mut self) {
+        self.log_view = true;
+        self.view_pipeline = false;
+        self.full_log = false;
+        self.log_scroll = 0;
+        self.selected = self
+            .rows
+            .iter()
+            .position(|r| r.info.status == StepStatus::Failed)
+            .or_else(|| self.rows.len().checked_sub(1));
+    }
+
+    /// La franja de estado de la vista del plan, a partir de esta ejecución ya terminada.
+    pub fn banner(&self) -> Option<LastRunBanner> {
+        let Phase::Finished { outcome, .. } = &self.phase else {
+            return None;
+        };
+        let completed = matches!(
+            outcome,
+            RunOutcome::Completed | RunOutcome::CompletedWithWarnings
+        );
+        // el paso en que se detuvo: el que falló o, si se abortó, el primero que no se hizo
+        let stopped = self
+            .rows
+            .iter()
+            .find(|r| r.info.status == StepStatus::Failed)
+            .or_else(|| {
+                (!completed)
+                    .then(|| {
+                        self.rows.iter().find(|r| {
+                            !matches!(r.info.status, StepStatus::Done | StepStatus::Skipped)
+                        })
+                    })
+                    .flatten()
+            });
+        let name = stopped.map(|r| r.info.name.as_str());
+        let detail = match (outcome, name) {
+            (RunOutcome::Completed, _) => "completada".to_string(),
+            (RunOutcome::CompletedWithWarnings, _) => "completada con advertencias".to_string(),
+            (RunOutcome::Failed, Some(n)) => format!("falló en «{n}»"),
+            (RunOutcome::Failed, None) => "falló".to_string(),
+            (RunOutcome::Aborted, Some(n)) => format!("abortada en «{n}»"),
+            (RunOutcome::Aborted, None) => "abortada".to_string(),
+        };
+        let done = self
+            .rows
+            .iter()
+            .filter(|r| r.info.status == StepStatus::Done)
+            .count();
+        let left = self
+            .rows
+            .iter()
+            .filter(|r| !matches!(r.info.status, StepStatus::Done | StepStatus::Skipped))
+            .count();
+        Some(LastRunBanner {
+            outcome: *outcome,
+            detail,
+            ago: "ahora".to_string(),
+            failed_step: stopped.map(|r| r.info.id.clone()),
+            can_resume: done > 0 && left > 0,
+        })
+    }
+
+    /// Id del paso que falló, si alguno.
+    pub fn failed_step_id(&self) -> Option<&str> {
+        self.rows
+            .iter()
+            .find(|r| r.info.status == StepStatus::Failed)
+            .map(|r| r.info.id.as_str())
     }
 
     fn select_relative(&mut self, delta: isize) {
@@ -346,14 +428,44 @@ impl RunState {
             self.view_pipeline = !self.view_pipeline;
             return None;
         }
+        // el visor de log tras la ejecución tiene sus propias teclas
+        if self.log_view && !matches!(self.phase, Phase::Running) {
+            return self.handle_log_view_key(key);
+        }
         match &self.phase {
             Phase::Finished { .. } => match key.code {
-                KeyCode::Enter | KeyCode::Char('q') | KeyCode::Esc => Some(RunAction::Quit),
+                // volver al plan, no cerrar la app: desde ahí se corrige y se reintenta
+                KeyCode::Enter | KeyCode::Esc => Some(RunAction::BackToPlan),
+                KeyCode::Char('q') => Some(RunAction::Quit),
+                KeyCode::Char('l') => {
+                    self.open_log_view();
+                    None
+                }
                 _ => None,
             },
             Phase::Failed(_) => self.handle_failure_key(key),
             Phase::Running => self.handle_running_key(key),
         }
+    }
+
+    /// Teclas del visor de log una vez terminada la ejecución (o tras un fallo).
+    fn handle_log_view_key(&mut self, key: KeyEvent) -> Option<RunAction> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if self.full_log => self.scroll_log(true, 1),
+            KeyCode::Down | KeyCode::Char('j') if self.full_log => self.scroll_log(false, 1),
+            KeyCode::Up | KeyCode::Char('k') => self.select_relative(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.select_relative(1),
+            KeyCode::PageUp => self.scroll_log(true, self.log_view_height.get().max(1)),
+            KeyCode::PageDown => self.scroll_log(false, self.log_view_height.get().max(1)),
+            KeyCode::End | KeyCode::Char('f') => self.log_scroll = 0,
+            KeyCode::Char('l') => {
+                self.full_log = !self.full_log;
+                self.log_scroll = 0;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.log_view = false,
+            _ => {}
+        }
+        None
     }
 
     /// Teclas propias de la vista de pipeline. Devuelve `true` si la consumió.
@@ -368,6 +480,8 @@ impl RunState {
                 self.view_pipeline = false;
                 self.full_log = true;
                 self.log_scroll = 0;
+                // tras un fallo o al terminar, el log se ve en su propio visor
+                self.log_view = !matches!(self.phase, Phase::Running);
             }
             _ => return false,
         }
@@ -400,6 +514,7 @@ impl RunState {
         let options = self.failure_options();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit_confirm = true,
+            KeyCode::Char('l') => self.open_log_view(),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.failure_cursor = self.failure_cursor.saturating_sub(1);
             }
@@ -415,6 +530,10 @@ impl RunState {
                         update_credentials: false,
                     },
                     FailureOption::Rollback(_) => RunCommand::Rollback,
+                    FailureOption::ViewLog => {
+                        self.open_log_view();
+                        return None;
+                    }
                     FailureOption::OpenShell => RunCommand::OpenShell,
                     FailureOption::Abort => RunCommand::Abort,
                 };
@@ -618,6 +737,7 @@ mod tests {
                 "Actualizar credencial y reintentar",
                 "Reintentar sin cambios",
                 "Rollback a antes del paso 1",
+                "Ver el log completo",
                 "Abrir shell para investigar",
                 "Abortar y guardar estado"
             ]
@@ -629,7 +749,7 @@ mod tests {
         });
         let labels: Vec<_> = s.failure_options().iter().map(|o| o.label()).collect();
         assert_eq!(labels[0], "Reintentar sin cambios");
-        assert_eq!(labels.len(), 3); // sin credenciales y sin rollback
+        assert_eq!(labels.len(), 4); // sin credenciales y sin rollback
     }
 
     #[test]
@@ -804,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn finished_run_quits_on_enter() {
+    fn finished_run_goes_back_to_the_plan_on_enter_and_quits_only_on_q() {
         let mut s = started(1);
         s.apply(RunEvent::RunFinished {
             outcome: RunOutcome::Completed,
@@ -812,6 +932,118 @@ mod tests {
             summary: RunSummary::default(),
         });
         assert_eq!(s.elapsed, Duration::from_secs(9));
-        assert_eq!(s.handle_key(key(KeyCode::Enter)), Some(RunAction::Quit));
+        assert_eq!(
+            s.handle_key(key(KeyCode::Enter)),
+            Some(RunAction::BackToPlan)
+        );
+        assert_eq!(s.handle_key(key(KeyCode::Esc)), Some(RunAction::BackToPlan));
+        assert_eq!(s.handle_key(key(KeyCode::Char('q'))), Some(RunAction::Quit));
+    }
+
+    fn failed_run() -> RunState {
+        let mut s = started(3);
+        s.apply(RunEvent::StepStarted { step: 0 });
+        s.apply(RunEvent::Log {
+            step: 0,
+            line: line("ok del primero"),
+        });
+        s.apply(RunEvent::StepFinished {
+            step: 0,
+            status: StepStatus::Done,
+            elapsed: Duration::from_secs(1),
+            retries: 0,
+        });
+        s.apply(RunEvent::StepStarted { step: 1 });
+        s.apply(RunEvent::Log {
+            step: 1,
+            line: line("docker: orden no encontrada"),
+        });
+        s.apply(RunEvent::StepFailed {
+            step: 1,
+            failure: failure(FailureKind::Other, None),
+        });
+        s
+    }
+
+    #[test]
+    fn the_log_can_be_opened_from_the_failure_screen_on_the_failed_step() {
+        let mut s = failed_run();
+        assert!(!s.log_view);
+        // por la tecla l
+        assert_eq!(s.handle_key(key(KeyCode::Char('l'))), None);
+        assert!(s.log_view);
+        assert_eq!(
+            s.viewed_step(),
+            Some(1),
+            "se abre parado en el paso que falló"
+        );
+        // las flechas cambian de paso, esc cierra el visor y vuelve al menú de fallo
+        s.handle_key(key(KeyCode::Up));
+        assert_eq!(s.viewed_step(), Some(0));
+        assert_eq!(s.handle_key(key(KeyCode::Esc)), None);
+        assert!(!s.log_view && matches!(s.phase, Phase::Failed(_)));
+
+        // y por la opción del menú
+        let options = s.failure_options();
+        let at = options
+            .iter()
+            .position(|o| *o == FailureOption::ViewLog)
+            .unwrap();
+        s.failure_cursor = at;
+        assert_eq!(
+            s.handle_key(key(KeyCode::Enter)),
+            None,
+            "no pide nada al runner"
+        );
+        assert!(s.log_view);
+    }
+
+    #[test]
+    fn the_failure_menu_is_not_left_while_viewing_the_log() {
+        let mut s = failed_run();
+        s.open_log_view();
+        // q cierra solo el visor (no pide confirmar la salida) y enter no ejecuta una opción
+        assert_eq!(s.handle_key(key(KeyCode::Enter)), None);
+        assert!(s.log_view);
+        assert_eq!(s.handle_key(key(KeyCode::Char('q'))), None);
+        assert!(!s.log_view && !s.quit_confirm);
+    }
+
+    #[test]
+    fn the_summary_can_open_the_log_too() {
+        let mut s = failed_run();
+        s.apply(RunEvent::RunFinished {
+            outcome: RunOutcome::Failed,
+            elapsed: Duration::from_secs(5),
+            summary: RunSummary::default(),
+        });
+        assert_eq!(s.handle_key(key(KeyCode::Char('l'))), None);
+        assert!(s.log_view);
+        assert_eq!(s.viewed_step(), Some(1));
+        s.handle_key(key(KeyCode::Esc));
+        assert_eq!(
+            s.handle_key(key(KeyCode::Enter)),
+            Some(RunAction::BackToPlan)
+        );
+    }
+
+    #[test]
+    fn the_banner_names_where_it_failed_and_whether_it_can_resume() {
+        let mut s = failed_run();
+        assert!(
+            s.banner().is_none(),
+            "solo una ejecución terminada tiene franja"
+        );
+        s.apply(RunEvent::RunFinished {
+            outcome: RunOutcome::Failed,
+            elapsed: Duration::from_secs(5),
+            summary: RunSummary::default(),
+        });
+        let b = s.banner().unwrap();
+        assert_eq!(b.outcome, RunOutcome::Failed);
+        assert_eq!(b.detail, "falló en «P2»");
+        assert_eq!(b.failed_step.as_deref(), Some("p2"));
+        assert!(b.can_resume, "el primero salió bien y quedan pasos");
+        assert_eq!(s.failed_step_id(), Some("p2"));
     }
 }

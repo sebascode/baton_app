@@ -346,7 +346,7 @@ fn output_is_streamed_as_log_events_in_order_and_written_to_the_log_file() {
     assert!(path.starts_with(".baton/logs/instalar-"), "{path}");
     let text = fs::read_to_string(fx.root().join(&path)).unwrap();
     assert!(
-        text.contains("] a: echo uno; echo dos >&2; echo tres"),
+        text.contains("] a: ▸ echo uno; echo dos >&2; echo tres"),
         "{text}"
     );
     assert!(
@@ -1777,4 +1777,703 @@ fn values_from_a_provider_are_injected_and_redacted_like_any_other_secret() {
         "los campos no secretos se ven: {shown}"
     );
     assert!(!fx.root().join(".baton/credentials").exists());
+}
+
+// ------------------------------------------------------------------ historial (hito de logs)
+
+#[test]
+fn each_run_keeps_its_own_log_and_the_previous_one_goes_to_the_history() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"echo hola-$$\"\n",
+    );
+    // dos ejecuciones seguidas (casi seguro en el mismo minuto)
+    let first = run(&fx, &p, fx.options(&p));
+    let second = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&first), RunOutcome::Completed);
+    assert_eq!(outcome(&second), RunOutcome::Completed);
+
+    let state = fx.state();
+    let runs = state.runs("instalar");
+    assert_eq!(runs.len(), 2, "la primera quedó en el historial");
+    assert_ne!(
+        runs[0].id, runs[1].id,
+        "ids distintos aunque sea el mismo minuto"
+    );
+    let (a, b) = (
+        runs[0].log_path.clone().unwrap(),
+        runs[1].log_path.clone().unwrap(),
+    );
+    assert_ne!(a, b, "cada ejecución tiene su propio archivo de log");
+    for path in [&a, &b] {
+        let text = fs::read_to_string(fx.root().join(path)).unwrap();
+        assert_eq!(
+            text.matches("hola-").count() / 2,
+            1,
+            "{path}: un solo despliegue por log\n{text}"
+        );
+    }
+}
+
+#[test]
+fn a_dry_run_does_not_touch_the_history() {
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n");
+    run(&fx, &p, fx.options(&p));
+    let mut o = fx.options(&p);
+    o.dry_run = true;
+    run(&fx, &p, o);
+    assert_eq!(fx.state().runs("instalar").len(), 1);
+}
+
+// ------------------------------------------------------------------- scripts (v0.2)
+
+fn write_script(fx: &Fx, rel: &str, body: &str) {
+    let p = fx.root().join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, body).unwrap(); // sin permiso de ejecución, a propósito
+}
+
+fn script_plan(extra: &str) -> Plan {
+    plan(&format!(
+        "[[steps]]\nid = \"s\"\nname = \"Scripts\"\ntype = \"script\"\nsource = \"scripts/*.sh\"\n{extra}"
+    ))
+}
+
+#[test]
+fn scripts_run_one_per_file_in_name_order_inside_their_own_folder() {
+    let fx = Fx::new(&[]);
+    write_script(
+        &fx,
+        "scripts/02-segundo.sh",
+        "echo \"dos:$(basename \"$PWD\")\" >> ../trace.txt\n",
+    );
+    write_script(
+        &fx,
+        "scripts/01-primero.sh",
+        "echo \"uno:$(basename \"$PWD\")\" >> ../trace.txt\n",
+    );
+    let p = script_plan("");
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // en orden por nombre y desde la carpeta del script (`scripts`), no desde la raíz
+    assert_eq!(
+        fs::read_to_string(fx.root().join("trace.txt")).unwrap(),
+        "uno:scripts\ndos:scripts\n"
+    );
+}
+
+#[test]
+fn a_script_uses_the_interpreter_of_its_shebang_or_sh_and_needs_no_exec_permission() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/01-bash.sh", "#!/bin/bash\necho hola\n");
+    write_script(&fx, "scripts/02-env.sh", "#!/usr/bin/env sh\necho hola\n");
+    write_script(&fx, "scripts/03-sin.sh", "echo hola\n");
+    let p = script_plan("");
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let shown = all_logs(&events);
+    assert!(shown.contains("'/bin/bash' '01-bash.sh'"), "{shown}");
+    assert!(shown.contains("'/usr/bin/env' 'sh' '02-env.sh'"), "{shown}");
+    assert!(shown.contains("sh '03-sin.sh'"), "{shown}");
+}
+
+#[test]
+fn an_explicit_command_replaces_the_default_and_can_use_the_script_placeholder() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/a.sh", "contenido-a\n");
+    let p = script_plan("command = \"cp {script} ../copia-{name}.txt\"\n");
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("copia-scripts.txt")).unwrap(),
+        "contenido-a\n"
+    );
+}
+
+#[test]
+fn a_script_gets_the_declared_credentials_even_though_its_command_does_not_name_them() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    write_script(
+        &fx,
+        "scripts/a.sh",
+        "printf %s \"$GHCR_TOKEN\" > ../tok.txt\n",
+    );
+    let p = plan(&format!(
+        "{GHCR_PLAN}[[steps]]\nid = \"s\"\nname = \"S\"\ntype = \"script\"\nsource = \"scripts/a.sh\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("tok.txt")).unwrap(),
+        "ghp_secreto_12345"
+    );
+}
+
+#[test]
+fn a_failing_script_stops_the_plan_and_names_the_script() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/01-ok.sh", "echo bien\n");
+    write_script(&fx, "scripts/02-mal.sh", "echo roto >&2\nexit 7\n");
+    write_script(&fx, "scripts/03-nunca.sh", "echo no >> ../no.txt\n");
+    let p = script_plan("");
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(f.command.contains("02-mal.sh"), "{}", f.command);
+    assert!(f.message.contains("código 7"), "{}", f.message);
+    assert!(
+        f.output_tail.iter().any(|l| l.contains("roto")),
+        "{:?}",
+        f.output_tail
+    );
+    assert!(!fx.root().join("no.txt").exists(), "el tercero no corrió");
+}
+
+#[test]
+fn rollback_of_a_script_step_runs_once_per_file_in_reverse() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/01-a.sh", "true\n");
+    write_script(&fx, "scripts/02-b.sh", "exit 1\n");
+    let p = plan(
+        "[[steps]]\nid = \"s\"\nname = \"S\"\ntype = \"script\"\nsource = \"scripts/*.sh\"\n\
+         rollback = \"echo deshacer-{script} >> ../undo.txt\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("undo.txt")).unwrap(),
+        "deshacer-02-b.sh\ndeshacer-01-a.sh\n",
+        "en orden inverso"
+    );
+}
+
+#[test]
+fn a_script_step_with_a_command_gate_does_not_try_to_read_the_scripts_as_compose_files() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/a.sh", "echo hola\n");
+    let p = script_plan(
+        "[steps.gate]\nmode = \"auto\"\ntimeout = \"2s\"\nattempts = 1\n\
+         [[steps.gate.checks]]\nname = \"ok\"\nkind = \"command\"\nrun = \"true\"\n",
+    );
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn a_script_step_whose_source_matches_nothing_is_rejected_before_running() {
+    let fx = Fx::new(&[]);
+    let p = script_plan("");
+    let err = spawn(fx.input(&p, fx.options(&p)))
+        .err()
+        .expect("debía rechazarse");
+    assert!(
+        err.0
+            .iter()
+            .any(|m| m.contains("no coincide con ningún archivo")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_script_rolls_back_with_its_sibling_file_through_the_stem_placeholder() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "scripts/01-a.sh", "echo hecho-a >> ../trace.txt\n");
+    write_script(
+        &fx,
+        "scripts/01-a.rollback.sh",
+        "echo deshecho-a >> ../trace.txt\n",
+    );
+    write_script(&fx, "scripts/02-b.sh", "exit 1\n");
+    write_script(
+        &fx,
+        "scripts/02-b.rollback.sh",
+        "echo deshecho-b >> ../trace.txt\n",
+    );
+    let p = plan(
+        "[[steps]]\nid = \"s\"\nname = \"S\"\ntype = \"script\"\nsource = [\"scripts/01-a.sh\", \"scripts/02-b.sh\"]\n\
+         rollback = \"sh {stem}.rollback.sh\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("trace.txt")).unwrap(),
+        "hecho-a\ndeshecho-b\ndeshecho-a\n"
+    );
+}
+
+// ------------------------------------------------------------------- sql (v0.3)
+
+/// `psql` de mentira: registra `cwd|PGUSER|PGHOST|PGDATABASE|argumentos` en `_psql`, imprime la
+/// contraseña que recibió (para comprobar que el log no la muestra) y falla si el archivo que se
+/// le pasa contiene `ERROR`.
+const FAKE_PSQL: &str = r#"#!/bin/sh
+echo "$PWD|$PGUSER|$PGHOST|$PGDATABASE|$*" >> "$BATON_PSQL"
+echo "contraseña recibida: $PGPASSWORD"
+file=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-f" ]; then file="$a"; fi
+  prev="$a"
+done
+if [ -n "$file" ] && grep -q ERROR "$file"; then echo "ERROR: simulado" >&2; exit 3; fi
+exit 0
+"#;
+
+const DB_PLAN: &str = "[[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP_DB\"\n\n";
+
+fn sql_fx(files: &[(&str, &str)], container: Option<&str>) -> Fx {
+    let fx = Fx::new(&[]);
+    let psql = fx.root().join("_bin/psql");
+    fs::write(&psql, FAKE_PSQL).unwrap();
+    fs::set_permissions(&psql, fs::Permissions::from_mode(0o755)).unwrap();
+    for (name, body) in files {
+        write_script(&fx, name, body);
+    }
+    let mut fields = vec![
+        ("user", "app".to_string()),
+        ("password", "s3cr3to-db".to_string()),
+        ("host", "db.interno".to_string()),
+        ("database", "tienda".to_string()),
+    ];
+    if let Some(c) = container {
+        fields.push(("container", c.to_string()));
+    }
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#APP_DB".parse().unwrap(),
+        &fields,
+    )
+    .unwrap();
+    fx
+}
+
+fn sql_plan(extra: &str) -> Plan {
+    plan(&format!(
+        "{DB_PLAN}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n{extra}"
+    ))
+}
+
+fn sql_options(fx: &Fx, p: &Plan) -> RunOptions {
+    let mut o = fx.options(p);
+    o.env.push((
+        "BATON_PSQL".into(),
+        fx.root().join("_psql").display().to_string(),
+    ));
+    o
+}
+
+fn psql_calls(fx: &Fx) -> Vec<String> {
+    fs::read_to_string(fx.root().join("_psql"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.replace(&fx.root().display().to_string(), ""))
+        .collect()
+}
+
+#[test]
+fn sql_files_run_with_psql_in_order_inside_their_folder_with_the_connection_in_the_environment() {
+    let fx = sql_fx(
+        &[
+            ("db/02-datos.sql", "INSERT INTO t VALUES (1);\n"),
+            ("db/01-esquema.sql", "CREATE TABLE t (id int);\n"),
+        ],
+        None,
+    );
+    let p = sql_plan("");
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert_eq!(
+        psql_calls(&fx),
+        [
+            "/db|app|db.interno|tienda|-X -v ON_ERROR_STOP=1 -f 01-esquema.sql",
+            "/db|app|db.interno|tienda|-X -v ON_ERROR_STOP=1 -f 02-datos.sql",
+        ]
+    );
+    let logs = all_logs(&events);
+    assert!(logs.contains("contraseña recibida:"), "{logs}");
+    assert!(
+        !logs.contains("s3cr3to-db"),
+        "la contraseña no debe verse: {logs}"
+    );
+}
+
+#[test]
+fn a_failing_sql_file_stops_the_plan_and_the_next_file_never_runs() {
+    let fx = sql_fx(
+        &[
+            ("db/01-mal.sql", "SELECT ERROR;\n"),
+            ("db/02-nunca.sql", "SELECT 1;\n"),
+        ],
+        None,
+    );
+    let p = sql_plan("");
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(psql_calls(&fx).len(), 1);
+    let f = failure(&events);
+    assert!(f.command.contains("01-mal.sql"), "{}", f.command);
+    assert!(f.message.contains("código 3"), "{}", f.message);
+    assert!(!f.message.contains("s3cr3to-db"));
+}
+
+#[test]
+fn with_a_container_sql_runs_through_docker_exec_without_the_password_in_the_arguments() {
+    let fx = sql_fx(&[("db/01.sql", "SELECT 1;\n")], Some("mi-postgres"));
+    let p = sql_plan("");
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert!(psql_calls(&fx).is_empty(), "no usa el psql local");
+    let args = fx.call_args();
+    assert_eq!(
+        args,
+        ["exec -i -e PGUSER -e PGPASSWORD -e PGDATABASE mi-postgres psql -X -v ON_ERROR_STOP=1"]
+    );
+    assert!(!all_logs(&events).contains("s3cr3to-db"));
+}
+
+#[test]
+fn an_explicit_command_replaces_the_default_psql_line() {
+    let fx = sql_fx(&[("db/01.sql", "SELECT 1;\n")], None);
+    let p = sql_plan("command = \"psql -X --single-transaction -f {script}\"\n");
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert_eq!(
+        psql_calls(&fx),
+        ["/db|app|db.interno|tienda|-X --single-transaction -f 01.sql"]
+    );
+}
+
+#[test]
+fn destructive_statements_are_refused_without_a_terminal_unless_assume_yes() {
+    let fx = sql_fx(
+        &[("db/01-limpiar.sql", "SELECT 1;\nTRUNCATE usuarios;\n")],
+        None,
+    );
+    let p = sql_plan("");
+    let err = spawn(fx.input(&p, sql_options(&fx, &p)))
+        .err()
+        .expect("debía rechazarse");
+    let all = err.0.join("\n");
+    assert!(
+        all.contains("sentencias destructivas en db/01-limpiar.sql"),
+        "{all}"
+    );
+    assert!(all.contains("línea 2 TRUNCATE"), "{all}");
+    assert!(all.contains("--assume-yes"), "{all}");
+    assert!(psql_calls(&fx).is_empty());
+
+    let mut o = sql_options(&fx, &p);
+    o.assume_yes = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("atención: db/01-limpiar.sql línea 2: TRUNCATE (TRUNCATE usuarios)"),
+        "{logs}"
+    );
+    assert_eq!(psql_calls(&fx).len(), 1);
+}
+
+#[test]
+fn interactively_a_destructive_sql_step_asks_and_declining_runs_nothing() {
+    let fx = sql_fx(&[("db/01.sql", "DROP TABLE viejo;\n")], None);
+    let p = sql_plan("");
+    let mut o = sql_options(&fx, &p);
+    o.interactive = true;
+    let mut asked = None;
+    let events = drive(spawn(fx.input(&p, o)).unwrap(), |ev, tx| {
+        if let RunEvent::GateAsk { message, .. } = ev {
+            asked = Some(message.clone());
+            tx.send(RunCommand::ConfirmGate(false)).unwrap();
+        }
+    });
+    let message = asked.expect("debía preguntar");
+    assert!(
+        message.contains("«Migrar»") && message.contains("1 sentencia(s) destructiva(s)"),
+        "{message}"
+    );
+    assert!(message.contains(": DROP. ¿Continuar?"), "{message}");
+    assert_eq!(outcome(&events), RunOutcome::Aborted);
+    assert!(psql_calls(&fx).is_empty(), "rechazar no ejecuta nada");
+
+    // y aceptando, corre
+    let mut o = sql_options(&fx, &p);
+    o.interactive = true;
+    let events = drive(spawn(fx.input(&p, o)).unwrap(), |ev, tx| {
+        if let RunEvent::GateAsk { .. } = ev {
+            tx.send(RunCommand::ConfirmGate(true)).unwrap();
+        }
+    });
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(psql_calls(&fx).len(), 1);
+}
+
+#[test]
+fn a_safe_sql_step_never_asks() {
+    let fx = sql_fx(&[("db/01.sql", "UPDATE t SET a = 1 WHERE id = 2;\n")], None);
+    let p = sql_plan("");
+    let mut o = sql_options(&fx, &p);
+    o.interactive = true;
+    let events = drive(spawn(fx.input(&p, o)).unwrap(), |ev, _| {
+        assert!(
+            !matches!(ev, RunEvent::GateAsk { .. }),
+            "no debía preguntar"
+        );
+    });
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+}
+
+#[test]
+fn dry_run_lists_the_destructive_statements_and_runs_nothing() {
+    let fx = sql_fx(&[("db/01.sql", "DELETE FROM sesiones;\n")], None);
+    let p = sql_plan("");
+    let mut o = sql_options(&fx, &p);
+    o.dry_run = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert!(all_logs(&events).contains("DELETE sin WHERE"));
+    assert!(psql_calls(&fx).is_empty());
+    assert!(!fx.root().join(".baton/state.json").exists());
+}
+
+// ------------------------------------------------------- respaldo de la base (v0.3)
+
+/// `pg_dump` y `pg_restore` de mentira: registran `PGUSER|PGDATABASE|argumentos` en `_pg` y el de
+/// volcado escribe el archivo que se le pide con `-f`.
+const FAKE_PG_DUMP: &str = r#"#!/bin/sh
+echo "dump|$PGUSER|$PGDATABASE|$*" >> "$BATON_PG"
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-f" ]; then echo "VOLCADO" > "$a"; fi
+  prev="$a"
+done
+"#;
+const FAKE_PG_RESTORE: &str = r#"#!/bin/sh
+echo "restore|$PGUSER|$PGDATABASE|$*" >> "$BATON_PG"
+"#;
+
+fn db_backup_fx(container: Option<&str>) -> Fx {
+    let fx = sql_fx(&[], container);
+    for (name, body) in [("pg_dump", FAKE_PG_DUMP), ("pg_restore", FAKE_PG_RESTORE)] {
+        let p = fx.root().join("_bin").join(name);
+        fs::write(&p, body).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fx
+}
+
+fn db_backup_plan(steps: &str) -> Plan {
+    plan(&format!("{DB_PLAN}[backup]\ndatabase = true\n{steps}"))
+}
+
+fn db_backup_options(fx: &Fx, p: &Plan) -> RunOptions {
+    let mut o = fx.options(p);
+    o.backup = true;
+    o.env.push((
+        "BATON_PG".into(),
+        fx.root().join("_pg").display().to_string(),
+    ));
+    o
+}
+
+fn pg_calls(fx: &Fx) -> Vec<String> {
+    fs::read_to_string(fx.root().join("_pg"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.replace(&fx.root().display().to_string(), ""))
+        .collect()
+}
+
+const BACKUP_THEN_FAIL: &str = "[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n\
+     [[steps]]\nid = \"boom\"\nname = \"Boom\"\ntype = \"comando\"\ncommand = \"exit 1\"\n";
+
+#[test]
+fn a_backup_step_dumps_the_database_and_reports_the_file() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan("[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n");
+    let events = run(&fx, &p, db_backup_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let calls = pg_calls(&fx);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(
+        calls[0].starts_with("dump|app|tienda|-Fc -f /.baton/backups/instalar-")
+            && calls[0].ends_with("-tienda.dump"),
+        "{calls:?}"
+    );
+    let dumps: Vec<_> = fs::read_dir(fx.root().join(".baton/backups"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(dumps.len(), 1, "{dumps:?}");
+    assert!(!all_logs(&events).contains("s3cr3to-db"));
+}
+
+#[test]
+fn rolling_back_a_backup_step_restores_the_last_dump() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(BACKUP_THEN_FAIL);
+    let mut o = db_backup_options(&fx, &p);
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let calls = pg_calls(&fx);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls[0].starts_with("dump|"), "{calls:?}");
+    assert!(
+        calls[1].starts_with(
+            "restore|app|tienda|--clean --if-exists --no-owner -d tienda /.baton/backups/instalar-"
+        ),
+        "{calls:?}"
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("base restaurada desde .baton/backups/instalar-"),
+        "{logs}"
+    );
+    assert!(!logs.contains("s3cr3to-db"));
+}
+
+#[test]
+fn an_explicit_rollback_on_the_backup_step_wins_over_the_restore() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(
+        "[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\nrollback = \"docker aviso\"\n\
+         [[steps]]\nid = \"boom\"\nname = \"Boom\"\ntype = \"comando\"\ncommand = \"exit 1\"\n",
+    );
+    let mut o = db_backup_options(&fx, &p);
+    o.auto_rollback = true;
+    run(&fx, &p, o);
+    assert_eq!(pg_calls(&fx).len(), 1, "solo el volcado: no restaura");
+    assert!(fx.call_args().contains(&"aviso".to_string()));
+}
+
+#[test]
+fn with_backup_disabled_nothing_is_dumped_and_the_rollback_has_nothing_to_restore() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(BACKUP_THEN_FAIL);
+    let mut o = db_backup_options(&fx, &p);
+    o.backup = false;
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(pg_calls(&fx).is_empty());
+    let logs = all_logs(&events);
+    assert!(logs.contains("backup desactivado"), "{logs}");
+    assert!(!logs.contains("restaurada"), "{logs}");
+}
+
+#[test]
+fn a_rollback_without_any_dump_fails_and_says_where_it_looked() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(BACKUP_THEN_FAIL);
+    // el volcado "falla" en silencio: el fake no escribe nada si no se le pasa -f (se lo quitamos)
+    fs::write(fx.root().join("_bin/pg_dump"), "#!/bin/sh\nexit 0\n").unwrap();
+    let mut o = db_backup_options(&fx, &p);
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("no hay un respaldo de la base en .baton/backups"),
+        "{logs}"
+    );
+    assert!(pg_calls(&fx).is_empty());
+}
+
+#[test]
+fn the_database_is_dumped_once_per_run_even_with_several_backup_requests() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\nbackup_before = true\n\
+         [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"comando\"\ncommand = \"true\"\nbackup_before = true\n",
+    );
+    let events = run(&fx, &p, db_backup_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert_eq!(pg_calls(&fx).len(), 1);
+    assert!(all_logs(&events).contains("respaldo de la base ya hecho en esta ejecución"));
+}
+
+#[test]
+fn with_a_container_the_dump_and_the_restore_go_through_docker_exec() {
+    let fx = db_backup_fx(Some("mi-postgres"));
+    let p = db_backup_plan(BACKUP_THEN_FAIL);
+    let mut o = db_backup_options(&fx, &p);
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(pg_calls(&fx).is_empty(), "no usa los binarios locales");
+    let args = fx.call_args();
+    assert_eq!(args.len(), 2, "{args:?}");
+    assert!(
+        args[0].starts_with("exec -e PGUSER -e PGPASSWORD -e PGDATABASE mi-postgres pg_dump -Fc"),
+        "{args:?}"
+    );
+    assert!(
+        args[1].starts_with(
+            "exec -i -e PGUSER -e PGPASSWORD -e PGDATABASE mi-postgres pg_restore --clean"
+        ),
+        "{args:?}"
+    );
+    assert!(!all_logs(&events).contains("s3cr3to-db"));
+}
+
+#[test]
+fn dry_run_lists_the_dump_and_the_restore_without_running_them() {
+    let fx = db_backup_fx(None);
+    let p = db_backup_plan(BACKUP_THEN_FAIL);
+    let mut o = db_backup_options(&fx, &p);
+    o.dry_run = true;
+    o.auto_rollback = true;
+    let events = run(&fx, &p, o);
+    assert!(pg_calls(&fx).is_empty());
+    assert!(!fx.root().join(".baton/backups").exists(), "no deja rastro");
+    assert!(!fx.root().join(".baton/state.json").exists());
+    let logs = all_logs(&events);
+    assert!(logs.contains("pg_dump -Fc -f"), "{logs}");
 }

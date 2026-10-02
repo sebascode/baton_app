@@ -75,10 +75,16 @@ impl LastRun {
     }
 }
 
+/// Cuántas ejecuciones anteriores se recuerdan por plan (además de la última).
+pub const HISTORY_LIMIT: usize = 20;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanState {
     #[serde(default)]
     pub last_run: Option<LastRun>,
+    /// Ejecuciones anteriores a `last_run`, de la más reciente a la más antigua.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<LastRun>,
 }
 
 /// "No volver a preguntar" de una credencial: el flag vive aquí, nunca en su `.env`.
@@ -172,6 +178,28 @@ impl State {
 
     pub fn set_last_run(&mut self, plan: &str, run: LastRun) {
         self.plans.entry(plan.to_string()).or_default().last_run = Some(run);
+    }
+
+    /// Al empezar una ejecución nueva: la última pasa al historial (y se olvidan las más viejas
+    /// que el límite). Una que quedó en `Running` (el proceso murió) se anota como abortada.
+    pub fn archive_last_run(&mut self, plan: &str) {
+        let state = self.plans.entry(plan.to_string()).or_default();
+        let Some(mut prev) = state.last_run.take() else {
+            return;
+        };
+        if prev.status == RunStatus::Running {
+            prev.status = RunStatus::Aborted;
+        }
+        state.history.insert(0, prev);
+        state.history.truncate(HISTORY_LIMIT);
+    }
+
+    /// Todas las ejecuciones recordadas de un plan, de la más reciente a la más antigua.
+    pub fn runs(&self, plan: &str) -> Vec<&LastRun> {
+        let Some(p) = self.plans.get(plan) else {
+            return Vec::new();
+        };
+        p.last_run.iter().chain(p.history.iter()).collect()
     }
 
     pub fn is_silenced(&self, key: &str) -> bool {
@@ -343,5 +371,63 @@ mod tests {
         let r: baton_core::CredentialRef = "servers.env#PROD".parse().unwrap();
         assert_eq!(credential_key(None, &r), "servers.env#PROD");
         assert_eq!(credential_key(Some("prod"), &r), "prod/servers.env#PROD");
+    }
+
+    fn run_with_id(id: &str, status: RunStatus) -> LastRun {
+        LastRun {
+            id: id.into(),
+            started_at: "2026-10-01T10:00:00".into(),
+            finished_at: None,
+            status,
+            steps: BTreeMap::new(),
+            log_path: Some(format!(".baton/logs/{id}.log")),
+        }
+    }
+
+    #[test]
+    fn archiving_moves_the_last_run_to_the_history_newest_first() {
+        let mut s = State::default();
+        assert!(s.runs("p").is_empty());
+        s.set_last_run("p", run_with_id("a", RunStatus::Completed));
+        s.archive_last_run("p");
+        s.set_last_run("p", run_with_id("b", RunStatus::Failed));
+        s.archive_last_run("p");
+        s.set_last_run("p", run_with_id("c", RunStatus::Completed));
+        let ids: Vec<&str> = s.runs("p").iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["c", "b", "a"]);
+        assert_eq!(s.last_run("p").unwrap().id, "c");
+    }
+
+    #[test]
+    fn a_run_that_never_finished_is_archived_as_aborted() {
+        let mut s = State::default();
+        s.set_last_run("p", run_with_id("a", RunStatus::Running));
+        s.archive_last_run("p");
+        assert_eq!(s.runs("p")[0].status, RunStatus::Aborted);
+    }
+
+    #[test]
+    fn the_history_keeps_only_the_most_recent_runs() {
+        let mut s = State::default();
+        for i in 0..(HISTORY_LIMIT + 5) {
+            s.set_last_run("p", run_with_id(&format!("r{i}"), RunStatus::Completed));
+            s.archive_last_run("p");
+        }
+        let all = s.runs("p");
+        assert_eq!(all.len(), HISTORY_LIMIT, "sin last_run: solo el historial");
+        assert_eq!(all[0].id, format!("r{}", HISTORY_LIMIT + 4));
+    }
+
+    #[test]
+    fn archiving_with_nothing_to_archive_does_nothing_and_old_files_still_load() {
+        let mut s = State::default();
+        s.archive_last_run("p");
+        assert!(s.plans["p"].last_run.is_none());
+        // un state.json de antes del historial (sin el campo) se sigue leyendo
+        let old = r#"{"version":1,"plans":{"p":{"last_run":{"id":"a","started_at":"x","status":"completed"}}}}"#;
+        let loaded: State = serde_json::from_str(old).unwrap();
+        assert_eq!(loaded.runs("p").len(), 1);
+        // y sin historial no se escribe el campo
+        assert!(!serde_json::to_string(&loaded).unwrap().contains("history"));
     }
 }

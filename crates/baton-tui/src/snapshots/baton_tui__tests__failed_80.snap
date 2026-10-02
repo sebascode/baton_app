@@ -15,6 +15,7 @@ expression: text(&buf)
 │  › Actualizar credencial y reintentar                                        │
 │    Reintentar sin cambios                                                    │
 │    Rollback a antes del paso 4                                               │
+│    Ver el log completo                                                       │
 │    Abrir shell para investigar                                               │
 │    Abortar y guardar estado                                                  │
 │                                                                              │
@@ -22,7 +23,6 @@ expression: text(&buf)
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ [↑↓] elegir  [enter] confirmar                                               │
+│ [↑↓] elegir  [enter] confirmar  [l] ver log  [v] pipeline                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯

@@ -182,3 +182,122 @@ fn works_from_a_subdirectory_of_an_existing_project() {
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert!(tmp.path().join("baton/plans/dos.toml").exists());
 }
+
+#[test]
+fn scripts_become_one_step_each_ordered_by_name_with_destructive_ones_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for f in [
+        "docker-compose.yml",
+        "api/Dockerfile",
+        "scripts/01-requisitos.sh",
+        "scripts/02-preparar.sh",
+        "scripts/03-smoke.sh",
+        "scripts/limpiar.sh",
+    ] {
+        touch(root, f);
+    }
+    let o = baton(root, &["init", "demo"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let stdout = out(&o);
+    assert!(
+        stdout.contains("paso '01-requisitos': 1 archivo(s)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("paso 'limpiar': 1 archivo(s) (desactivado)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("los scripts se ordenaron por su nombre"),
+        "{stdout}"
+    );
+
+    let text = plan_text(root, "demo");
+    let order: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("id = \""))
+        .map(|l| l.trim_end_matches('"'))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "01-requisitos",
+            "02-preparar",
+            "build",
+            "servicios",
+            "03-smoke",
+            "limpiar"
+        ]
+    );
+    assert!(text.contains("type = \"script\""), "{text}");
+    assert!(text.contains("enabled = false"), "{text}");
+
+    // y el plan que arma valida
+    let v = baton(root, &["validate", "demo"]);
+    assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
+}
+
+#[test]
+fn a_folder_with_only_scripts_is_no_longer_an_empty_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    touch(tmp.path(), "deploy.sh");
+    let o = baton(tmp.path(), &["init", "solo"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(
+        out(&o).contains("paso 'deploy': 1 archivo(s)"),
+        "{}",
+        out(&o)
+    );
+    assert!(!out(&o).contains("quedó vacío"), "{}", out(&o));
+}
+
+#[test]
+fn sql_files_become_disabled_steps_with_a_db_credential_and_the_plan_validates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for f in ["docker-compose.yml", "db/01-esquema.sql", "db/02-datos.sql"] {
+        touch(root, f);
+    }
+    let o = baton(root, &["init", "demo"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let stdout = out(&o);
+    assert!(
+        stdout.contains("paso 'sql-db': 1 archivo(s) (desactivado)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("los .sql quedaron desactivados"),
+        "{stdout}"
+    );
+
+    let text = plan_text(root, "demo");
+    assert!(text.starts_with("name = \"demo\""), "{text}");
+    assert!(
+        text.contains("kind = \"db\"") && text.contains("ref = \"db.env#DB\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("type = \"sql\"") && text.contains("source = \"db/*.sql\""),
+        "{text}"
+    );
+
+    let v = baton(root, &["validate", "demo"]);
+    assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
+
+    // el paso sql está desactivado: en CI no pide la conexión de la base
+    let mut run = std::process::Command::new(env!("CARGO_BIN_EXE_baton"));
+    run.arg("-C")
+        .arg(root)
+        .args(["run", "demo", "--dry-run", "--no-tui"]);
+    let r = run.env("CI", "1").output().unwrap();
+    assert_eq!(r.status.code(), Some(0), "{}\n{}", out(&r), err(&r));
+}
+
+#[test]
+fn a_folder_without_sql_files_gets_no_db_credential() {
+    let tmp = tempfile::tempdir().unwrap();
+    touch(tmp.path(), "docker-compose.yml");
+    baton(tmp.path(), &["init", "demo"]);
+    assert!(!plan_text(tmp.path(), "demo").contains("[[credentials]]"));
+}

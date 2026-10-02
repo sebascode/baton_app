@@ -19,11 +19,12 @@ use crate::widgets::{self, frame, hsep_range, justify, pad, truncate, vline_to_s
 
 const LIST_W: u16 = 18;
 
-/// Tipos de paso en el orden de la maqueta. `script` llega en v0.2: se ve pero no se elige.
-const KINDS: [(&str, bool); 7] = [
+/// Tipos de paso en el orden de la maqueta (el segundo valor marca una opción deshabilitada).
+const KINDS: [(&str, bool); 8] = [
     ("compose", false),
     ("dockerfile", false),
-    ("script", true),
+    ("script", false),
+    ("sql", false),
     ("comando", false),
     ("check", false),
     ("backup", false),
@@ -150,6 +151,8 @@ pub struct EditorState {
     pub notice: Option<String>,
     /// Esperando confirmar que se quita el gate del paso seleccionado.
     pub(crate) confirm_gate_removal: bool,
+    /// Esperando confirmar que se borra el paso seleccionado.
+    pub(crate) confirm_step_removal: bool,
     /// Resultado de la última prueba del paso.
     pub test: Option<(bool, String)>,
     /// Los cambios se pueden guardar en un plan real (con datos de demostración, no).
@@ -184,6 +187,7 @@ impl EditorState {
             gate_open: false,
             notice: None,
             confirm_gate_removal: false,
+            confirm_step_removal: false,
             test: None,
             can_save: false,
             default_target: "local".into(),
@@ -406,6 +410,7 @@ impl EditorState {
         self.notice = None;
         self.gate_open = false;
         self.confirm_gate_removal = false;
+        self.confirm_step_removal = false;
         if gate {
             self.open_gate();
         }
@@ -488,6 +493,14 @@ impl EditorState {
             return self.handle_gate_key(key);
         }
         self.notice = None;
+        // borrar un paso pide confirmación: solo `s` o `y` lo confirman y cualquier otra tecla cancela
+        if self.confirm_step_removal {
+            self.confirm_step_removal = false;
+            if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('y')) {
+                self.remove_step();
+            }
+            return None;
+        }
         if self.confirm_gate_removal {
             self.confirm_gate_removal = false;
             if matches!(key.code, KeyCode::Char('s') | KeyCode::Char('y')) {
@@ -508,6 +521,10 @@ impl EditorState {
                 }
                 KeyCode::Char('d') => {
                     self.duplicate();
+                    return None;
+                }
+                KeyCode::Char('x') => {
+                    self.ask_to_remove_step();
                     return None;
                 }
                 _ => {}
@@ -564,6 +581,77 @@ impl EditorState {
         }
     }
 
+    /// Deja el foco en la lista de pasos.
+    pub fn focus_list(&mut self) {
+        self.focus = Focus::List;
+    }
+
+    /// Pide confirmar el borrado del paso seleccionado.
+    fn ask_to_remove_step(&mut self) {
+        if self.selected < self.steps.len() {
+            self.confirm_step_removal = true;
+        } else {
+            self.notice = Some("elige un paso para borrarlo".into());
+        }
+    }
+
+    /// Los nombres de los pasos que dependen del seleccionado.
+    fn dependents_of_selected(&self) -> Vec<String> {
+        let Some(id) = self.current().map(|s| s.id) else {
+            return Vec::new();
+        };
+        self.steps
+            .iter()
+            .filter(|s| s.depends.contains(&id))
+            .map(|s| s.form.fields[F_NAME].value())
+            .collect()
+    }
+
+    /// La pregunta de confirmar el borrado: dice qué pasos dejarán de depender del borrado.
+    fn step_removal_prompt(&self) -> String {
+        let name = self
+            .current()
+            .map_or(String::new(), |s| s.form.fields[F_NAME].value());
+        let deps = self.dependents_of_selected();
+        if deps.is_empty() {
+            format!("¿Borrar el paso «{name}»?")
+        } else {
+            format!(
+                "¿Borrar el paso «{name}»? {} dejará de depender de él.",
+                deps.join(", ")
+            )
+        }
+    }
+
+    /// Borra el paso seleccionado y quita las dependencias que otros tenían de él.
+    fn remove_step(&mut self) {
+        if self.selected >= self.steps.len() {
+            return;
+        }
+        let removed = self.steps.remove(self.selected);
+        let name = removed.form.fields[F_NAME].value();
+        let mut released = 0;
+        for s in &mut self.steps {
+            let before = s.depends.len();
+            s.depends.retain(|d| *d != removed.id);
+            if s.depends.len() != before {
+                released += 1;
+                s.dep_cursor = 0;
+            }
+        }
+        // el cursor queda en el paso que ocupa el lugar del borrado (o el último)
+        self.selected = self.selected.min(self.steps.len().saturating_sub(1));
+        self.focus = Focus::List;
+        self.gate_open = false;
+        self.test = None;
+        self.notice = Some(match released {
+            0 => format!("paso «{name}» borrado (guarda con ctrl s)"),
+            n => format!(
+                "paso «{name}» borrado; {n} paso(s) ya no dependen de él (guarda con ctrl s)"
+            ),
+        });
+    }
+
     /// `x` o `supr` sobre la tarjeta del gate: pide confirmación si hay algo que quitar.
     fn ask_to_remove_gate(&mut self) {
         let Some(step) = self.current() else { return };
@@ -615,6 +703,8 @@ impl EditorState {
                     self.focus = Focus::Field(F_NAME);
                 }
             }
+            // `b` de borrar (en la tarjeta del gate, `x` quita el gate; son cosas distintas)
+            KeyCode::Char('b') | KeyCode::Delete => self.ask_to_remove_step(),
             KeyCode::Esc | KeyCode::Char('q') => return Some(EditorAction::Back),
             _ => {}
         }
@@ -692,7 +782,7 @@ impl EditorState {
     // ---------------------------------------------------------------- dibujo
 
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
-        if self.confirm_gate_removal {
+        if self.confirm_gate_removal || self.confirm_step_removal {
             return vec![("s", "sí"), ("n", "no")];
         }
         let mut items = vec![
@@ -700,9 +790,14 @@ impl EditorState {
             ("ctrl g", "configurar gate"),
             ("ctrl t", "probar paso"),
             ("ctrl d", "duplicar"),
+            ("ctrl x", "borrar paso"),
             ("ctrl s", "guardar"),
             ("esc", "volver"),
         ];
+        // con el foco en la lista basta una letra
+        if self.focus == Focus::List && self.selected < self.steps.len() {
+            items.insert(0, ("b", "borrar paso"));
+        }
         // con el foco en la tarjeta de un gate existente se ofrece quitarlo
         let on_card =
             self.focus == Focus::Field(F_GATE) && self.current().is_some_and(|s| s.gate.is_some());
@@ -740,9 +835,14 @@ impl EditorState {
         let items = self.shortcut_items();
         let content_w = inner.width.saturating_sub(2);
         let notice_h = u16::from(self.notice.is_some());
-        let prompt = self
-            .confirm_gate_removal
-            .then_some(crate::gate_view::REMOVE_PROMPT);
+        let step_prompt = self
+            .confirm_step_removal
+            .then(|| self.step_removal_prompt());
+        let prompt = if self.confirm_gate_removal {
+            Some(crate::gate_view::REMOVE_PROMPT)
+        } else {
+            step_prompt.as_deref()
+        };
         let sc_h = widgets::prompt_bar_height(&items, content_w, prompt);
         let sc_y = inner.bottom().saturating_sub(sc_h);
         let notice_y = sc_y.saturating_sub(notice_h);
@@ -1029,6 +1129,7 @@ fn kind_of(label: &str) -> StepKind {
         "compose" => StepKind::Compose,
         "dockerfile" => StepKind::Dockerfile,
         "script" => StepKind::Script,
+        "sql" => StepKind::Sql,
         "check" => StepKind::Check,
         "backup" => StepKind::Backup,
         "gate" => StepKind::Gate,

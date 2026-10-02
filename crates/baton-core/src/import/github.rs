@@ -432,3 +432,45 @@ jobs:
         assert!(convert(Platform::Github, "name: x\n").is_err());
     }
 }
+
+#[cfg(test)]
+mod script_tests {
+    use crate::import::{Platform, convert};
+    use crate::plan::StepKind;
+
+    #[test]
+    fn a_bare_script_run_becomes_a_script_step_unless_it_needs_env_or_arguments() {
+        let yaml = r#"
+jobs:
+  build:
+    steps:
+      - name: Requisitos
+        run: ./scripts/01-requisitos.sh
+      - name: Con bash
+        run: bash scripts/02-preparar.sh
+      - name: Con argumentos
+        run: ./scripts/03-smoke.sh --rapido
+      - name: Con entorno
+        run: ./scripts/04-envio.sh
+        env:
+          MODO: produccion
+"#;
+        let r = convert(Platform::Github, yaml).unwrap();
+        assert_eq!(r.steps[0].kind, StepKind::Script);
+        assert_eq!(r.steps[0].source.0, ["scripts/01-requisitos.sh"]);
+        assert!(r.steps[0].command.is_none(), "usa el shebang del archivo");
+        assert_eq!(r.steps[1].kind, StepKind::Script);
+        assert_eq!(r.steps[1].command.as_deref(), Some("bash {script}"));
+        assert_eq!(r.steps[2].kind, StepKind::Comando, "tiene argumentos");
+        assert_eq!(
+            r.steps[3].kind,
+            StepKind::Comando,
+            "necesita su variable de entorno"
+        );
+        assert!(
+            r.notes.iter().any(|n| n.text.contains("script detectado")),
+            "{:?}",
+            r.notes
+        );
+    }
+}

@@ -222,13 +222,22 @@ impl Builder {
         } else {
             None
         };
-        let (kind, source, command) = match compose {
-            Some((source, rewritten)) => (
+        // un script suelto (`./scripts/x.sh`) también tiene tipo propio, si no hay nada más que
+        // llevarle (un paso `script` no tiene variables de entorno propias)
+        let script =
+            if compose.is_none() && spec.disabled.is_none() && one_line && spec.env.is_empty() {
+                detect_script(&spec.script, spec.workdir.as_deref())
+            } else {
+                None
+            };
+        let (kind, source, command) = match (compose, script) {
+            (Some((source, rewritten)), _) => (
                 StepKind::Compose,
                 Sources(vec![source]),
-                build_command(&spec.env, None, &rewritten),
+                Some(build_command(&spec.env, None, &rewritten)),
             ),
-            None => {
+            (None, Some((source, command))) => (StepKind::Script, Sources(vec![source]), command),
+            (None, None) => {
                 // Un guion que son solo comentarios (paso pendiente de migrar) no necesita nada más.
                 let inert = spec.script.lines().all(|l| l.starts_with('#'));
                 let command = if inert {
@@ -236,9 +245,19 @@ impl Builder {
                 } else {
                     build_command(&spec.env, spec.workdir.as_deref(), &spec.script)
                 };
-                (StepKind::Comando, Sources::default(), command)
+                (StepKind::Comando, Sources::default(), Some(command))
             }
         };
+        if kind == StepKind::Script {
+            self.note(
+                NoteLevel::Info,
+                &spec.at,
+                format!(
+                    "script detectado: paso script con origen {} (revisa el origen)",
+                    source.0[0]
+                ),
+            );
+        }
         if kind == StepKind::Compose {
             self.note(
                 NoteLevel::Info,
@@ -256,7 +275,7 @@ impl Builder {
                 format!("{} ({reason})", spec.name),
             );
         }
-        self.scan_predefined(&command);
+        self.scan_predefined(command.as_deref().unwrap_or(""));
         let description = match &spec.disabled {
             Some(r) => format!("Desactivado: {r} (origen: {})", spec.at),
             None => format!("Origen: {}", spec.at),
@@ -269,7 +288,7 @@ impl Builder {
             enabled: spec.disabled.is_none(),
             source,
             target: None,
-            command: Some(command),
+            command,
             depends_on: Vec::new(),
             timeout: spec.timeout.filter(|t| !t.as_duration().is_zero()),
             retries: spec.retries,
@@ -562,6 +581,41 @@ pub(crate) fn is_prod_like(name: &str) -> bool {
     n.contains("prod") || n == "prd" || n == "live"
 }
 
+/// Un script suelto en una línea (`./scripts/x.sh`, `sh x.sh`, `bash scripts/x.sh`), sin argumentos
+/// ni nada más: devuelve su ruta (relativa al proyecto) y, si se pidió un intérprete explícito, el
+/// comando que lo conserva (`bash {script}`). Sin intérprete se usa el del shebang del archivo.
+fn detect_script(command: &str, workdir: Option<&str>) -> Option<(String, Option<String>)> {
+    let line = command.trim();
+    if line.contains([
+        '&', '|', ';', '>', '<', '$', '`', '\'', '"', '*', '?', '(', ')',
+    ]) {
+        return None;
+    }
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let (interp, path) = match tokens.as_slice() {
+        [path] => (None, *path),
+        [i @ ("sh" | "bash"), path] => (Some(*i), *path),
+        _ => return None,
+    };
+    let safe = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
+    if !path.ends_with(".sh") || !safe {
+        return None;
+    }
+    let mut rel = path.trim_start_matches("./").to_string();
+    if let Some(wd) = workdir.filter(|d| !d.is_empty() && *d != ".") {
+        rel = format!(
+            "{}/{rel}",
+            wd.trim_start_matches("./").trim_end_matches('/')
+        );
+    }
+    if rel.starts_with('/') || rel.split('/').any(|p| p == "..") {
+        return None;
+    }
+    Some((rel, interp.map(|i| format!("{i} {{script}}"))))
+}
+
 /// `docker compose [-f archivo] ... up ...` suelto en una línea: devuelve el origen y el comando
 /// reescrito para correr dentro de la carpeta del archivo (`-f` queda con solo el nombre).
 fn detect_compose(command: &str, workdir: Option<&str>) -> Option<(String, String)> {
@@ -714,6 +768,44 @@ mod tests {
         assert_eq!(
             build_command(&env, Some("app"), "make"),
             "set -e\nexport K='v'\ncd 'app' || exit 1\nmake"
+        );
+    }
+
+    #[test]
+    fn detects_a_bare_script_and_keeps_an_explicit_interpreter() {
+        let d = |c: &str, wd: Option<&str>| detect_script(c, wd);
+        assert_eq!(
+            d("./scripts/x.sh", None),
+            Some(("scripts/x.sh".into(), None))
+        );
+        assert_eq!(d("scripts/x.sh", None), Some(("scripts/x.sh".into(), None)));
+        assert_eq!(
+            d("bash scripts/x.sh", None),
+            Some(("scripts/x.sh".into(), Some("bash {script}".into())))
+        );
+        assert_eq!(
+            d("sh x.sh", Some("deploy")),
+            Some(("deploy/x.sh".into(), Some("sh {script}".into())))
+        );
+        // con argumentos, otro intérprete, rutas peligrosas o más comandos: sigue siendo un comando
+        for no in [
+            "./x.sh --rapido",
+            "python x.sh",
+            "./../x.sh",
+            "/abs/x.sh",
+            "./x.sh && echo ok",
+            "./x.sh > log",
+            "echo hola",
+            "./x.py",
+            "./con espacio.sh",
+            "$HOME/x.sh",
+        ] {
+            assert_eq!(d(no, None), None, "{no}");
+        }
+        assert_eq!(
+            d("./x.sh", Some("../fuera")),
+            None,
+            "el directorio de trabajo no puede salir"
         );
     }
 

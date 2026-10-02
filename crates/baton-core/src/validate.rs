@@ -12,7 +12,9 @@ use petgraph::graph::DiGraph;
 use crate::config::{Config, FILE_PROVIDER, LOCAL_TARGET, SecretProvider, Target};
 use crate::issue::{Issue, Seg};
 use crate::path;
-use crate::plan::{Check, CheckKind, Condition, Gate, GateMode, Plan, Step, StepKind};
+use crate::plan::{
+    Check, CheckKind, Condition, CredentialKind, Gate, GateMode, Plan, Step, StepKind,
+};
 use crate::secrets::SECRET_VARS;
 use crate::template::{LOG_VARS, STEP_VARS, unknown_placeholders};
 
@@ -220,10 +222,21 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
 
 fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
     if let Some(b) = &plan.backup {
-        if b.volumes.is_empty() {
+        if b.is_empty() {
             out.push(Issue::error(
                 path!["backup", "volumes"],
-                "la lista de volúmenes está vacía",
+                "la lista de volúmenes está vacía (o activa database = true para respaldar la base)",
+            ));
+        }
+        if b.database
+            && !plan
+                .credentials
+                .iter()
+                .any(|c| c.kind == CredentialKind::Db)
+        {
+            out.push(Issue::error(
+                path!["backup", "database"],
+                "database = true necesita una credencial de tipo db en [[credentials]]",
             ));
         }
         if b.volumes.iter().any(|v| v.trim().is_empty()) {
@@ -349,6 +362,28 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
             ));
         }
     }
+
+    // un paso sql se conecta con la credencial `db` del plan: tiene que haber una y solo una
+    let dbs = plan
+        .credentials
+        .iter()
+        .filter(|c| c.kind == CredentialKind::Db)
+        .count();
+    for (i, s) in plan.steps.iter().enumerate() {
+        if s.kind != StepKind::Sql {
+            continue;
+        }
+        let problem = match dbs {
+            0 => {
+                "un paso sql necesita una credencial de tipo db en [[credentials]] (con la conexión a la base)"
+            }
+            1 => continue,
+            _ => {
+                "el plan declara varias credenciales db y un paso sql todavía no puede elegir entre ellas: deja solo una"
+            }
+        };
+        out.push(Issue::error(path!["steps", i, "type"], problem));
+    }
 }
 
 fn validate_ids_and_dependencies(plan: &Plan, out: &mut Vec<Issue>) {
@@ -470,11 +505,7 @@ fn validate_step(
     }
 
     match step.kind {
-        StepKind::Script => out.push(Issue::error(
-            p("type"),
-            "el tipo script llega en v0.2 (por ahora usa comando)",
-        )),
-        StepKind::Compose | StepKind::Dockerfile => {
+        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql => {
             if step.source.is_empty() {
                 out.push(Issue::error(
                     p("source"),
@@ -494,7 +525,7 @@ fn validate_step(
             }
         }
         StepKind::Backup => {
-            if plan.backup.as_ref().is_none_or(|b| b.volumes.is_empty()) {
+            if plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
                 out.push(Issue::error(
                     p("type"),
                     "un paso backup necesita la sección [backup] con volumes",
@@ -523,7 +554,7 @@ fn validate_step(
         }
     }
 
-    if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.volumes.is_empty()) {
+    if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
         out.push(Issue::error(
             p("backup_before"),
             "backup_before necesita la sección [backup] con volumes",
@@ -550,7 +581,7 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
     let g = |field: &str| path!["steps", i, "gate", field];
     let active: Vec<&Check> = gate.checks.iter().filter(|c| c.enabled).collect();
     // En compose/dockerfile los checks se infieren al escanear, así que la lista puede estar incompleta.
-    let scanned = step.kind.is_scanned();
+    let scanned = step.kind.has_services();
 
     match (gate.condition, gate.at_least) {
         (Condition::AtLeast, None) => out.push(Issue::error(
@@ -865,7 +896,7 @@ mod tests {
         assert_error(&issues, "steps[0].source", "necesita source");
         assert_error(&issues, "steps[1].command", "necesita command");
         assert_error(&issues, "steps[2].type", "[backup]");
-        assert_error(&issues, "steps[3].type", "v0.2");
+        assert_error(&issues, "steps[3].source", "un paso script necesita source");
         assert_error(&issues, "steps[4].gate", "necesita");
         assert_error(&issues, "steps[4].command", "no ejecuta acciones");
     }
@@ -1161,6 +1192,66 @@ mod tests {
             all.contains("placeholder desconocido {desconocido}"),
             "{all}"
         );
+    }
+
+    #[test]
+    fn database_backup_needs_a_db_credential_and_makes_volumes_optional() {
+        let plan = |text: &str| Plan::parse(&format!("name = \"p\"\n{text}")).unwrap();
+        let step = "[[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"backup\"\n";
+        let cred = "[[credentials]]\nid = \"a\"\nkind = \"db\"\nref = \"db.env#A\"\n";
+
+        let empty = validate_plan(&plan(&format!("[backup]\n{step}")), None);
+        assert_error(&empty, "backup.volumes", "database = true");
+        let no_cred = validate_plan(&plan(&format!("[backup]\ndatabase = true\n{step}")), None);
+        assert_error(&no_cred, "backup.database", "credencial de tipo db");
+        let ok = validate_plan(
+            &plan(&format!("{cred}[backup]\ndatabase = true\n{step}")),
+            None,
+        );
+        assert!(errors(&ok).is_empty(), "{:?}", errors(&ok));
+        // backup_before también se conforma con la base
+        let before = "[[steps]]\nid = \"c\"\nname = \"C\"\ntype = \"comando\"\ncommand = \"true\"\nbackup_before = true\n";
+        let ok = validate_plan(
+            &plan(&format!("{cred}[backup]\ndatabase = true\n{before}")),
+            None,
+        );
+        assert!(errors(&ok).is_empty(), "{:?}", errors(&ok));
+    }
+
+    #[test]
+    fn a_sql_step_needs_exactly_one_db_credential() {
+        let step = "[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n";
+        let cred = |id: &str, kind: &str| {
+            format!(
+                "[[credentials]]\nid = \"{id}\"\nkind = \"{kind}\"\nref = \"db.env#{}\"\n",
+                id.to_uppercase()
+            )
+        };
+        let plan = |text: String| Plan::parse(&format!("name = \"p\"\n{text}")).unwrap();
+
+        let none = validate_plan(&plan(step.to_string()), None);
+        assert_error(&none, "steps[0].type", "necesita una credencial de tipo db");
+        let wrong = validate_plan(&plan(format!("{}{step}", cred("a", "docker"))), None);
+        assert_error(
+            &wrong,
+            "steps[0].type",
+            "necesita una credencial de tipo db",
+        );
+        let two = validate_plan(
+            &plan(format!("{}{}{step}", cred("a", "db"), cred("b", "db"))),
+            None,
+        );
+        assert_error(&two, "steps[0].type", "varias credenciales db");
+        let one = validate_plan(&plan(format!("{}{step}", cred("a", "db"))), None);
+        assert!(errors(&one).is_empty(), "{:?}", errors(&one));
+        // sin pasos sql, tener varias db no molesta
+        let unused =
+            "[[steps]]\nid = \"c\"\nname = \"C\"\ntype = \"comando\"\ncommand = \"true\"\n";
+        let many = validate_plan(
+            &plan(format!("{}{}{unused}", cred("a", "db"), cred("b", "db"))),
+            None,
+        );
+        assert!(errors(&many).is_empty(), "{:?}", errors(&many));
     }
 
     #[test]

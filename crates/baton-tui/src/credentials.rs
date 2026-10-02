@@ -63,14 +63,24 @@ pub struct CredField {
     pub label: String,
     pub value: TextField,
     pub secret: bool,
+    /// Un campo opcional vacío no impide confirmar la credencial (la frase secreta de una llave
+    /// ssh, el host o el contenedor de una base de datos).
+    pub optional: bool,
 }
 
 impl CredField {
+    /// Marca el campo como opcional.
+    pub fn optional(mut self, optional: bool) -> CredField {
+        self.optional = optional;
+        self
+    }
+
     pub fn new(label: &str, value: &str, secret: bool) -> CredField {
         CredField {
             label: label.into(),
             value: TextField::new(value),
             secret,
+            optional: false,
         }
     }
 }
@@ -116,7 +126,7 @@ impl CredItem {
     fn missing(&self) -> Vec<&str> {
         self.fields
             .iter()
-            .filter(|f| f.value.is_empty())
+            .filter(|f| !f.optional && f.value.is_empty())
             .map(|f| f.label.as_str())
             .collect()
     }
@@ -180,7 +190,10 @@ impl CredentialsState {
         let missing = item.missing();
         if !missing.is_empty() {
             self.notice = Some(format!("falta completar: {}", missing.join(", ")));
-            self.editing = item.fields.iter().position(|f| f.value.is_empty());
+            self.editing = item
+                .fields
+                .iter()
+                .position(|f| !f.optional && f.value.is_empty());
             return false;
         }
         item.status = CredStatus::Confirmed;
