@@ -247,7 +247,7 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
             DatabaseBackup::All if plan.db_credentials().next().is_none() => {
                 out.push(Issue::error(
                     path!["backup", "database"],
-                    "database = true necesita una credencial de tipo db en [[credentials]]",
+                    "database = true necesita una credencial de tipo db o sqlite en [[credentials]]",
                 ));
             }
             DatabaseBackup::Only(ids) if ids.is_empty() => out.push(Issue::error(
@@ -259,7 +259,7 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
                     if !plan.db_credentials().any(|c| c.id == *id) {
                         out.push(Issue::error(
                             path!["backup", "database"],
-                            format!("'{id}' no es una credencial de tipo db declarada en [[credentials]]"),
+                            format!("'{id}' no es una credencial de tipo db o sqlite declarada en [[credentials]]"),
                         ));
                     }
                 }
@@ -407,7 +407,7 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
             (Some(id), _) if ids.contains(&id.as_str()) => continue,
             (Some(id), _) => {
                 let why = if plan.credentials.iter().any(|c| c.id == *id) {
-                    format!("'{id}' no es una credencial de tipo db")
+                    format!("'{id}' no es una credencial de tipo db o sqlite")
                 } else {
                     format!("no existe una credencial con id '{id}' en [[credentials]]")
                 };
@@ -415,12 +415,12 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
                 continue;
             }
             (None, 0) => {
-                "un paso sql necesita una credencial de tipo db en [[credentials]] (con la conexión a la base)"
+                "un paso sql necesita una credencial de tipo db o sqlite en [[credentials]] (con la conexión a la base)"
                     .to_string()
             }
             (None, 1) => continue,
             (None, _) => format!(
-                "el plan declara varias credenciales db: elige la de este paso con database = \"<id>\" ({})",
+                "el plan declara varias credenciales de base de datos: elige la de este paso con database = \"<id>\" ({})",
                 ids.join(", ")
             ),
         };
@@ -1326,7 +1326,11 @@ mod tests {
             &plan(format!("{}{}{step}", cred("a", "db"), cred("b", "db"))),
             None,
         );
-        assert_error(&two, "steps[0].type", "varias credenciales db");
+        assert_error(
+            &two,
+            "steps[0].type",
+            "varias credenciales de base de datos",
+        );
         let one = validate_plan(&plan(format!("{}{step}", cred("a", "db"))), None);
         assert!(errors(&one).is_empty(), "{:?}", errors(&one));
         // sin pasos sql, tener varias db no molesta
@@ -1383,7 +1387,7 @@ mod tests {
         assert_error(
             &wrong,
             "steps[0].database",
-            "'reg' no es una credencial de tipo db",
+            "'reg' no es una credencial de tipo db o sqlite",
         );
         // con una sola, nombrarla también vale
         let one = validate_plan(
@@ -1399,6 +1403,48 @@ mod tests {
         let cmd = "[[steps]]\nid = \"c\"\nname = \"C\"\ntype = \"comando\"\ncommand = \"true\"\ndatabase = \"app\"\n";
         let bad = validate_plan(&plan(format!("{two}{cmd}")), None);
         assert_error(&bad, "steps[0].database", "solo vale en pasos sql");
+    }
+
+    #[test]
+    fn a_sqlite_credential_counts_as_a_database_for_sql_steps_and_backups() {
+        let sqlite = "[[credentials]]\nid = \"local\"\nkind = \"sqlite\"\nref = \"db.env#LOCAL\"\n";
+        let pg = "[[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n";
+        let step = |extra: &str| {
+            format!(
+                "[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n{extra}"
+            )
+        };
+        let check = |text: String| {
+            validate_plan(
+                &Plan::parse(&format!("name = \"p\"\n{text}")).unwrap(),
+                None,
+            )
+        };
+        // sola: la usa sin más
+        assert!(errors(&check(format!("{sqlite}{}", step("")))).is_empty());
+        // junto a una de PostgreSQL hay que elegir, y se puede elegir cualquiera
+        assert_error(
+            &check(format!("{sqlite}{pg}{}", step(""))),
+            "steps[0].type",
+            "(local, app)",
+        );
+        for id in ["local", "app"] {
+            let issues = check(format!(
+                "{sqlite}{pg}{}",
+                step(&format!("database = \"{id}\"\n"))
+            ));
+            assert!(errors(&issues).is_empty(), "{id}: {:?}", errors(&issues));
+        }
+        // el respaldo de la base también la acepta
+        let backup = "[backup]\ndatabase = [\"local\"]\n[[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"backup\"\n";
+        assert!(errors(&check(format!("{backup}{sqlite}"))).is_empty());
+        // pero una docker no es una base
+        let docker = "[[credentials]]\nid = \"reg\"\nkind = \"docker\"\nref = \"docker.env#REG\"\n";
+        assert_error(
+            &check(format!("{docker}{}", step("database = \"reg\"\n"))),
+            "steps[0].database",
+            "no es una credencial de tipo db o sqlite",
+        );
     }
 
     #[test]
@@ -1427,12 +1473,12 @@ mod tests {
         assert_error(
             &with("[backup]\ndatabase = [\"nope\"]\n"),
             "backup.database",
-            "'nope' no es una credencial de tipo db",
+            "'nope' no es una credencial de tipo db o sqlite",
         );
         assert_error(
             &with("[backup]\ndatabase = [\"reg\"]\n"),
             "backup.database",
-            "'reg' no es una credencial de tipo db",
+            "'reg' no es una credencial de tipo db o sqlite",
         );
         assert_error(
             &with("[backup]\ndatabase = []\n"),

@@ -148,7 +148,12 @@ pub fn dump_label(conn: &PgConn) -> String {
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
     };
-    let raw = get("PGDATABASE").or_else(|| get("PGUSER")).unwrap_or("db");
+    sanitize_label(get("PGDATABASE").or_else(|| get("PGUSER")).unwrap_or("db"))
+}
+
+/// `raw` reducido a letras, números y `._-` para usarlo dentro del nombre de un archivo de
+/// respaldo; si no queda nada, `db`.
+pub fn sanitize_label(raw: &str) -> String {
     let clean: String = raw
         .chars()
         .map(|c| {
@@ -159,11 +164,101 @@ pub fn dump_label(conn: &PgConn) -> String {
             }
         })
         .collect();
-    if clean.trim_matches('-').is_empty() {
+    if clean.trim_matches(['-', '.']).is_empty() {
         "db".to_string()
     } else {
         clean
     }
+}
+
+// ------------------------------------------------------------------- SQLite
+
+/// Un archivo SQLite al que se conecta un paso `sql` (credencial de tipo `sqlite`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqliteConn {
+    /// Ruta tal como la dio la credencial: relativa a la raíz del proyecto, o absoluta.
+    pub file: String,
+}
+
+/// Arma la conexión de una credencial `sqlite` con los valores ya resueltos (`PREFIJO_CAMPO`);
+/// `None` si falta el archivo.
+pub fn sqlite_conn(reference: &CredentialRef, resolved: &[(String, String)]) -> Option<SqliteConn> {
+    let name = reference.variable("FILE");
+    resolved
+        .iter()
+        .find(|(n, v)| *n == name && !v.is_empty())
+        .map(|(_, v)| SqliteConn { file: v.clone() })
+}
+
+/// La ruta `file` (relativa a la raíz del proyecto, o absoluta) vista desde la carpeta `dir`
+/// (relativa a la raíz): los comandos de un paso `sql` corren dentro de la carpeta de su archivo.
+pub fn path_from(dir: &str, file: &str) -> String {
+    if file.starts_with('/') || file.starts_with('~') {
+        return file.to_string();
+    }
+    let up = dir
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .count();
+    format!("{}{}", "../".repeat(up), file.trim_start_matches("./"))
+}
+
+/// El comando que corre un archivo `.sql` contra la base SQLite (dentro de la carpeta `dir` del
+/// archivo): `-bail` detiene el archivo en el primer error, como `ON_ERROR_STOP` en `psql`.
+pub fn sqlite_run_command(conn: &SqliteConn, dir: &str, sql_file: &str) -> String {
+    format!(
+        "sqlite3 -bail {} < {}",
+        sh_quote(&path_from(dir, &conn.file)),
+        sh_quote(sql_file)
+    )
+}
+
+/// El argumento de un comando de punto de `sqlite3` (`.backup 'ruta'`): entre comillas simples o,
+/// si la ruta ya lleva una, dobles.
+fn dot_arg(path: &str) -> String {
+    if path.contains('\'') && !path.contains('"') {
+        format!("\"{path}\"")
+    } else {
+        format!("'{path}'")
+    }
+}
+
+/// Copia consistente de la base (aunque esté en uso) a `file`, con `.backup` de `sqlite3`. Corre
+/// en la raíz del proyecto.
+pub fn sqlite_backup_command(conn: &SqliteConn, file: &str) -> String {
+    format!(
+        "sqlite3 {} {}",
+        sh_quote(&conn.file),
+        sh_quote(&format!(".backup {}", dot_arg(file)))
+    )
+}
+
+/// Reemplaza el contenido de la base con el respaldo `file` (`.restore`): lo que se creó después
+/// del respaldo desaparece, a diferencia de `pg_restore --clean`.
+pub fn sqlite_restore_command(conn: &SqliteConn, file: &str) -> String {
+    format!(
+        "sqlite3 {} {}",
+        sh_quote(&conn.file),
+        sh_quote(&format!(".restore {}", dot_arg(file)))
+    )
+}
+
+/// Nombre de la base para el archivo de respaldo: el del archivo SQLite sin extensión.
+pub fn sqlite_label(conn: &SqliteConn) -> String {
+    let name = conn.file.rsplit('/').next().unwrap_or(&conn.file);
+    sanitize_label(name.rsplit_once('.').map_or(name, |(stem, _)| stem))
+}
+
+/// La prueba de conexión de un archivo SQLite: solo lectura, sin crearlo. Programa y argumentos.
+pub fn sqlite_ping_command(file: &str) -> (String, Vec<String>) {
+    (
+        "sqlite3".to_string(),
+        vec![
+            "-readonly".to_string(),
+            file.to_string(),
+            "select count(*), sqlite_version() from sqlite_master".to_string(),
+        ],
+    )
 }
 
 // --------------------------------------------------------------- destructivas
@@ -585,5 +680,62 @@ mod tests {
         );
         assert_eq!(pg_ping_summary(""), None);
         assert_eq!(pg_ping_summary("sin separadores"), None);
+    }
+
+    #[test]
+    fn a_sqlite_credential_gives_the_file_and_nothing_else() {
+        let r: CredentialRef = "db.env#LOCAL".parse().unwrap();
+        let conn = sqlite_conn(&r, &[("LOCAL_FILE".into(), "data/app.db".into())]).unwrap();
+        assert_eq!(conn.file, "data/app.db");
+        assert_eq!(sqlite_conn(&r, &[]), None);
+        assert_eq!(
+            sqlite_conn(&r, &[("LOCAL_FILE".into(), String::new())]),
+            None
+        );
+        assert_eq!(sqlite_conn(&r, &[("OTRA_FILE".into(), "x".into())]), None);
+    }
+
+    #[test]
+    fn the_database_path_is_seen_from_the_folder_the_command_runs_in() {
+        assert_eq!(path_from(".", "app.db"), "app.db");
+        assert_eq!(path_from("db", "app.db"), "../app.db");
+        assert_eq!(path_from("a/b", "data/app.db"), "../../data/app.db");
+        assert_eq!(path_from("db", "./app.db"), "../app.db");
+        assert_eq!(path_from("db", "/var/lib/app.db"), "/var/lib/app.db");
+        assert_eq!(path_from("db", "~/app.db"), "~/app.db");
+    }
+
+    #[test]
+    fn sqlite_commands_use_bail_and_the_dot_commands_backup_and_restore() {
+        let c = SqliteConn {
+            file: "data/mi app.db".into(),
+        };
+        assert_eq!(
+            sqlite_run_command(&c, "db", "01 esquema.sql"),
+            "sqlite3 -bail '../data/mi app.db' < '01 esquema.sql'"
+        );
+        assert_eq!(
+            sqlite_backup_command(&c, "/b/app.sqlite3"),
+            r#"sqlite3 'data/mi app.db' '.backup '\''/b/app.sqlite3'\'''"#
+        );
+        assert_eq!(
+            sqlite_restore_command(&c, "/b/app.sqlite3"),
+            r#"sqlite3 'data/mi app.db' '.restore '\''/b/app.sqlite3'\'''"#
+        );
+        // una ruta con comilla simple pasa a comillas dobles
+        let q = sqlite_backup_command(&c, "/b/it's.sqlite3");
+        assert!(
+            q.contains(r#".backup "/b/it"#) && q.contains("s.sqlite3"),
+            "{q}"
+        );
+    }
+
+    #[test]
+    fn the_sqlite_label_is_the_file_name_without_extension() {
+        let l = |f: &str| sqlite_label(&SqliteConn { file: f.into() });
+        assert_eq!(l("data/app.db"), "app");
+        assert_eq!(l("/var/lib/mi app.sqlite3"), "mi-app");
+        assert_eq!(l("sin_extension"), "sin_extension");
+        assert_eq!(l("..db"), "db");
     }
 }

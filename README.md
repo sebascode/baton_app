@@ -15,7 +15,7 @@ Un plan es una lista ordenada de pasos. Cada paso apunta a archivos de tu proyec
 | `compose` | levanta un `docker-compose.yml` |
 | `dockerfile` | construye una imagen |
 | `script` | corre archivos `.sh` |
-| `sql` | ejecuta archivos `.sql` contra PostgreSQL |
+| `sql` | ejecuta archivos `.sql` contra PostgreSQL o un archivo SQLite |
 | `comando`, `check`, `backup`, `gate` | un comando suelto, una verificación, un respaldo, o una pausa |
 
 Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un docker context.

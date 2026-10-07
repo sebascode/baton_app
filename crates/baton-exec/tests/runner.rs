@@ -2665,3 +2665,238 @@ fn one_missing_dump_fails_the_restore_but_the_others_are_still_restored() {
         1
     );
 }
+
+// ------------------------------------------------------------------ SQLite (sqlite3 real)
+
+fn have_sqlite() -> bool {
+    std::process::Command::new("sqlite3")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// Corre `sql` contra el archivo `db` con el `sqlite3` real y devuelve su salida.
+fn sqlite_query(db: &std::path::Path, sql: &str) -> String {
+    let out = std::process::Command::new("sqlite3")
+        .arg(db)
+        .arg(sql)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Un proyecto con una credencial `sqlite` (`local`, archivo `data/app.db`) y los `.sql` dados.
+fn sqlite_fx(files: &[(&str, &str)]) -> Fx {
+    let fx = Fx::new(&[]);
+    for (name, body) in files {
+        write_script(&fx, name, body);
+    }
+    fs::create_dir_all(fx.root().join("data")).unwrap();
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#LOCAL".parse().unwrap(),
+        &[("file", "data/app.db".to_string())],
+    )
+    .unwrap();
+    fx
+}
+
+const SQLITE_CRED: &str =
+    "[[credentials]]\nid = \"local\"\nkind = \"sqlite\"\nref = \"db.env#LOCAL\"\n\n";
+
+#[test]
+fn a_sql_step_runs_its_files_against_the_sqlite_file_from_inside_their_folder() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = sqlite_fx(&[
+        ("db/02-datos.sql", "INSERT INTO t VALUES (1), (2);\n"),
+        ("db/01-esquema.sql", "CREATE TABLE t (id integer);\n"),
+    ]);
+    let p = plan(&format!(
+        "{SQLITE_CRED}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("sqlite3 -bail '../data/app.db' < '01-esquema.sql'"),
+        "la ruta se ve desde la carpeta del archivo: {logs}"
+    );
+    assert_eq!(
+        sqlite_query(&fx.root().join("data/app.db"), "select count(*) from t"),
+        "2"
+    );
+}
+
+#[test]
+fn the_first_error_in_a_sqlite_file_stops_the_plan_and_later_files_never_run() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = sqlite_fx(&[
+        (
+            "db/01-mal.sql",
+            "CREATE TABLE a (id integer);\nSELECT * FROM no_existe;\nCREATE TABLE despues (id integer);\n",
+        ),
+        ("db/02-nunca.sql", "CREATE TABLE nunca (id integer);\n"),
+    ]);
+    let p = plan(&format!(
+        "{SQLITE_CRED}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let events = run(&fx, &p, fx.options(&p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(f.command.contains("01-mal.sql"), "{}", f.command);
+    let tables = sqlite_query(
+        &fx.root().join("data/app.db"),
+        "select group_concat(name) from sqlite_master where type = 'table'",
+    );
+    assert_eq!(
+        tables, "a",
+        "-bail detiene el archivo en el error y el siguiente no corre"
+    );
+}
+
+#[test]
+fn a_sqlite_backup_is_taken_before_the_plan_and_the_rollback_restores_it_dropping_later_changes() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = sqlite_fx(&[(
+        "db/01.sql",
+        "CREATE TABLE nueva (id integer); DELETE FROM clientes;\n",
+    )]);
+    let db = fx.root().join("data/app.db");
+    sqlite_query(
+        &db,
+        "create table clientes (id integer); insert into clientes values (1), (2), (3);",
+    );
+    let p = plan(&format!(
+        "{SQLITE_CRED}[backup]\ndatabase = true\n\
+         [[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n\
+         [[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n\
+         [[steps]]\nid = \"boom\"\nname = \"Boom\"\ntype = \"comando\"\ncommand = \"exit 1\"\n"
+    ));
+    let mut o = fx.options(&p);
+    o.backup = true;
+    o.auto_rollback = true;
+    o.interactive = false;
+    o.assume_yes = true; // el DELETE sin WHERE pide confirmación
+    let events = run(&fx, &p, o);
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Failed,
+        "{}",
+        all_logs(&events)
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("base 'local' restaurada desde .baton/backups/"),
+        "{logs}"
+    );
+
+    // volvió a como estaba al respaldar: los datos están y la tabla nueva ya no existe
+    assert_eq!(sqlite_query(&db, "select count(*) from clientes"), "3");
+    assert_eq!(
+        sqlite_query(
+            &db,
+            "select count(*) from sqlite_master where name = 'nueva'"
+        ),
+        "0",
+        "a diferencia de pg_restore, lo creado después también se deshace"
+    );
+    let backups: Vec<String> = fs::read_dir(fx.root().join(".baton/backups"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert!(backups[0].ends_with("-app.sqlite3"), "{backups:?}");
+}
+
+#[test]
+fn postgres_and_sqlite_can_live_in_the_same_plan_each_step_with_its_own_database() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = sqlite_fx(&[
+        ("lite/01.sql", "CREATE TABLE x (id integer);\n"),
+        ("pg/01.sql", "SELECT 1;\n"),
+    ]);
+    // la credencial `app` de PostgreSQL de siempre (con psql de mentira)
+    let psql = fx.root().join("_bin/psql");
+    fs::write(&psql, FAKE_PSQL).unwrap();
+    fs::set_permissions(&psql, fs::Permissions::from_mode(0o755)).unwrap();
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#APP_DB".parse().unwrap(),
+        &[
+            ("user", "app".to_string()),
+            ("password", "s3cr3to-db".to_string()),
+            ("database", "tienda".to_string()),
+        ],
+    )
+    .unwrap();
+    let p = plan(&format!(
+        "{DB_PLAN}{SQLITE_CRED}\
+         [[steps]]\nid = \"pg\"\nname = \"Pg\"\ntype = \"sql\"\nsource = \"pg/*.sql\"\ndatabase = \"app\"\n\
+         [[steps]]\nid = \"lite\"\nname = \"Lite\"\ntype = \"sql\"\nsource = \"lite/*.sql\"\ndatabase = \"local\"\n"
+    ));
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert_eq!(
+        psql_calls(&fx).len(),
+        1,
+        "solo el paso de PostgreSQL usa psql"
+    );
+    assert_eq!(
+        sqlite_query(
+            &fx.root().join("data/app.db"),
+            "select count(*) from sqlite_master"
+        ),
+        "1"
+    );
+    let logs = all_logs(&events);
+    assert!(!logs.contains("s3cr3to-db"), "{logs}");
+}
+
+#[test]
+fn a_missing_sqlite_file_setting_is_named_in_ci_before_anything_runs() {
+    let fx = Fx::new(&[]);
+    write_script(&fx, "db/01.sql", "SELECT 1;\n");
+    let p = plan(&format!(
+        "{SQLITE_CRED}[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let mut o = fx.options(&p);
+    o.interactive = false;
+    let err = baton_exec::spawn(baton_exec::RunInput {
+        project: fx.project.clone(),
+        config: baton_core::Config::default(),
+        plan: p,
+        options: o,
+    })
+    .err()
+    .expect("falta el archivo");
+    let text = err.0.join("\n");
+    assert!(
+        text.contains("falta archivo") && text.contains("LOCAL_FILE"),
+        "{text}"
+    );
+}

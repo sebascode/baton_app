@@ -40,6 +40,7 @@ fn kind_name(kind: CredentialKind) -> &'static str {
         CredentialKind::Docker => "docker",
         CredentialKind::Ssh => "ssh",
         CredentialKind::Db => "db",
+        CredentialKind::Sqlite => "sqlite",
         CredentialKind::Otro => "otro",
     }
 }
@@ -50,6 +51,7 @@ fn file_for(kind: CredentialKind) -> &'static str {
         CredentialKind::Docker => "docker.env",
         CredentialKind::Ssh => "servers.env",
         CredentialKind::Db => "db.env",
+        CredentialKind::Sqlite => "db.env",
         CredentialKind::Otro => "otro.env",
     }
 }

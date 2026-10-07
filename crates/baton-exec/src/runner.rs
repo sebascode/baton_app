@@ -19,7 +19,10 @@ use baton_core::events::{
     RunSummary, StepStatus,
 };
 use baton_core::plan::{CredentialKind, GateMode, Plan, StepKind};
-use baton_core::sql::{PgConn, dump_label, pg_dump_command, pg_restore_command, psql_command};
+use baton_core::sql::{
+    PgConn, SqliteConn, dump_label, pg_dump_command, pg_restore_command, psql_command,
+    sqlite_backup_command, sqlite_label, sqlite_restore_command, sqlite_run_command,
+};
 use baton_core::step_run::{StepVars, step_info};
 use baton_store::Project;
 use baton_store::clock;
@@ -171,22 +174,31 @@ impl Ctx {
             .collect()
     }
 
-    /// La conexión de una credencial `db`.
-    fn conn_of(&self, cred: &baton_core::plan::CredentialReq) -> PgConn {
-        baton_core::sql::pg_conn(&cred.reference, &self.secrets)
+    /// La conexión de una credencial de base de datos (`db` o `sqlite`).
+    fn conn_of(&self, cred: &baton_core::plan::CredentialReq) -> DbConn {
+        match cred.kind {
+            CredentialKind::Sqlite => DbConn::Sqlite(
+                baton_core::sql::sqlite_conn(&cred.reference, &self.secrets).unwrap_or(
+                    SqliteConn {
+                        file: String::new(),
+                    },
+                ),
+            ),
+            _ => DbConn::Pg(baton_core::sql::pg_conn(&cred.reference, &self.secrets)),
+        }
     }
 
     /// La conexión de un paso `sql`: la de su `database` o la única del plan (la validación
     /// asegura que haya una y solo una posible).
-    fn step_conn(&self, ps: &PStep) -> PgConn {
+    fn step_conn(&self, ps: &PStep) -> DbConn {
         self.plan
             .db_for_step(&ps.step)
             .map(|c| self.conn_of(c))
-            .unwrap_or_default()
+            .unwrap_or_else(|| DbConn::Pg(PgConn::default()))
     }
 
     /// Las bases que respalda `[backup]` (y restaura un rollback), con el id de su credencial.
-    fn backup_conns(&self) -> Vec<(String, PgConn)> {
+    fn backup_conns(&self) -> Vec<(String, DbConn)> {
         self.plan
             .backup_dbs()
             .into_iter()
@@ -196,20 +208,23 @@ impl Ctx {
 
     /// Un comando que usa la conexión de una base (respaldo y restauración): lleva las variables
     /// de `libpq` aunque su línea no las nombre.
-    fn db_command(&self, ps: &PStep, line: String, conn: &PgConn) -> Command {
+    fn db_command(&self, ps: &PStep, line: String, conn: &DbConn) -> Command {
         let mut cmd = self.command(ps, line, None);
-        cmd.secrets.extend(conn.env.iter().cloned());
+        cmd.secrets.extend(conn.secrets());
         cmd
     }
 
     /// Las variables de las credenciales `db` que no son la de este paso: un paso `sql` recibe
     /// todas las credenciales del plan, pero no las contraseñas de las otras bases.
     fn foreign_db_vars(&self, own: Option<&str>) -> Vec<String> {
-        let keys = baton_core::credential::fields_for(CredentialKind::Db);
         self.plan
             .db_credentials()
             .filter(|c| Some(c.id.as_str()) != own)
-            .flat_map(|c| keys.iter().map(|k| c.reference.variable(k.key)))
+            .flat_map(|c| {
+                baton_core::credential::fields_for(c.kind)
+                    .iter()
+                    .map(|k| c.reference.variable(k.key))
+            })
             .collect()
     }
 
@@ -305,7 +320,7 @@ impl Ctx {
             let foreign = self.foreign_db_vars(own);
             secrets.retain(|(name, _)| !foreign.contains(name));
             // las variables de `libpq` (PGUSER, PGPASSWORD...) que `psql` lee del entorno
-            secrets.extend(self.step_conn(ps).env);
+            secrets.extend(self.step_conn(ps).secrets());
         }
         Command {
             cwd,
@@ -908,10 +923,11 @@ async fn backup_database(
     let conns = ctx.backup_conns();
     for (id, conn) in &conns {
         let file = dir.join(format!(
-            "{}-{}-{}.dump",
+            "{}-{}-{}.{}",
             ctx.plan.name,
             ctx.fecha,
-            backup_label(conns.len() > 1, id, conn)
+            backup_label(conns.len() > 1, id, conn),
+            conn.extension()
         ));
         if ctx.backups.lock().is_ok_and(|b| b.contains(&file)) {
             ctx.log(
@@ -921,7 +937,11 @@ async fn backup_database(
             );
             continue;
         }
-        let line = pg_dump_command(conn, &file.to_string_lossy());
+        let path = file.to_string_lossy();
+        let line = match conn {
+            DbConn::Pg(c) => pg_dump_command(c, &path),
+            DbConn::Sqlite(c) => sqlite_backup_command(c, &path),
+        };
         let cmd = ctx.db_command(&ctx.steps[step], line, conn);
         run_command(ctx, cmds, step, cmd, ctx.steps[step].step.retries).await?;
         if !ctx.opts.dry_run
@@ -936,11 +956,44 @@ async fn backup_database(
 /// El nombre del respaldo de una base dentro del archivo (`<plan>-<fecha>-<nombre>.dump`). Con
 /// varias bases en el mismo respaldo se antepone el id de la credencial, porque dos credenciales
 /// pueden apuntar a bases que se llaman igual en servidores distintos.
-fn backup_label(many: bool, id: &str, conn: &PgConn) -> String {
+fn backup_label(many: bool, id: &str, conn: &DbConn) -> String {
     if many {
-        format!("{id}-{}", dump_label(conn))
+        format!("{id}-{}", conn.label())
     } else {
-        dump_label(conn)
+        conn.label()
+    }
+}
+
+/// La conexión de una base de datos, según su motor.
+#[derive(Debug, Clone)]
+enum DbConn {
+    Pg(PgConn),
+    Sqlite(SqliteConn),
+}
+
+impl DbConn {
+    /// Variables secretas que el comando recibe por el entorno (las `PG*` de `libpq`).
+    fn secrets(&self) -> Vec<(String, String)> {
+        match self {
+            DbConn::Pg(c) => c.env.clone(),
+            DbConn::Sqlite(_) => Vec::new(),
+        }
+    }
+
+    /// Nombre de la base dentro del archivo de respaldo.
+    fn label(&self) -> String {
+        match self {
+            DbConn::Pg(c) => dump_label(c),
+            DbConn::Sqlite(c) => sqlite_label(c),
+        }
+    }
+
+    /// Extensión del archivo de respaldo.
+    fn extension(&self) -> &'static str {
+        match self {
+            DbConn::Pg(_) => "dump",
+            DbConn::Sqlite(_) => "sqlite3",
+        }
     }
 }
 
@@ -1044,7 +1097,16 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
             let vars = ctx.vars(ps, file.map(PathBuf::as_path));
             let line = match (template, file) {
                 (Some(t), _) => vars.render(t),
-                (None, Some(f)) if is_sql => psql_command(&ctx.step_conn(ps), &file_name(f)),
+                (None, Some(f)) if is_sql => match ctx.step_conn(ps) {
+                    DbConn::Pg(conn) => psql_command(&conn, &file_name(f)),
+                    DbConn::Sqlite(conn) => {
+                        let dir = f
+                            .parent()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        sqlite_run_command(&conn, &dir, &file_name(f))
+                    }
+                },
                 (None, Some(f)) => script_line(&ctx.project.root, f),
                 // un script siempre trae archivo (`prepare_run` lo exige): no se llega aquí
                 (None, None) => continue,
@@ -1158,7 +1220,9 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
     let mut all_ok = true;
     for (id, conn) in &conns {
         let label = backup_label(conns.len() > 1, id, conn);
-        let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &label) else {
+        let Some(file) =
+            baton_store::backups::latest_dump(&dir, &ctx.plan.name, &label, conn.extension())
+        else {
             ctx.log(
                 i,
                 LogKind::Error,
@@ -1170,7 +1234,12 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
             all_ok = false;
             continue;
         };
-        let cmd = ctx.db_command(ps, pg_restore_command(conn, &file.to_string_lossy()), conn);
+        let path = file.to_string_lossy();
+        let line = match conn {
+            DbConn::Pg(c) => pg_restore_command(c, &path),
+            DbConn::Sqlite(c) => sqlite_restore_command(c, &path),
+        };
+        let cmd = ctx.db_command(ps, line, conn);
         ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
         let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
         match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {

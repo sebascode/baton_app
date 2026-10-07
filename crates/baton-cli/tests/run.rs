@@ -1022,3 +1022,69 @@ fn ci_only_asks_for_the_credentials_of_the_databases_the_plan_uses() {
     assert!(e.contains("REP_USER") || e.contains("db.env#REP"), "{e}");
     assert!(!e.contains("APP_USER") && !e.contains("db.env#APP"), "{e}");
 }
+
+fn have_sqlite() -> bool {
+    std::process::Command::new("sqlite3")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+#[test]
+fn a_sqlite_plan_runs_in_ci_with_the_file_taken_from_the_environment() {
+    if !have_sqlite() {
+        return;
+    }
+    // el archivo viene de la variable (así CI no necesita .baton/credentials) y la ruta puede ser
+    // distinta en cada máquina
+    let plan = "name = \"instalar\"\n\
+        [[credentials]]\nid = \"local\"\nkind = \"sqlite\"\nref = \"db.env#LOCAL\"\n\
+        [[steps]]\nid = \"m\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n";
+    let fx = Fx::new(plan);
+    fs::create_dir_all(fx.root.join("db")).unwrap();
+    fs::write(fx.root.join("db/01.sql"), "CREATE TABLE t (id integer);\n").unwrap();
+
+    // sin el archivo: falla antes de ejecutar y dice cuál
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("falta archivo") && err(&o).contains("LOCAL_FILE"),
+        "{}",
+        err(&o)
+    );
+
+    let db = fx.root.join("estado.db");
+    let o = fx.baton_env(
+        &["run", "instalar"],
+        &[("LOCAL_FILE", &db.to_string_lossy())],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let tables = std::process::Command::new("sqlite3")
+        .arg(&db)
+        .arg("select name from sqlite_master")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&tables.stdout).trim(), "t");
+}
+
+#[test]
+fn each_ambiente_can_point_the_sqlite_credential_at_a_different_file() {
+    if !have_sqlite() {
+        return;
+    }
+    let plan = "name = \"instalar\"\n\
+        [[credentials]]\nid = \"local\"\nkind = \"sqlite\"\nref = \"db.env#LOCAL\"\n\
+        [[steps]]\nid = \"m\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n";
+    let fx = Fx::new(plan);
+    fs::create_dir_all(fx.root.join("db")).unwrap();
+    fs::write(fx.root.join("db/01.sql"), "CREATE TABLE t (id integer);\n").unwrap();
+    fx.write_credential(Some("dev"), "db.env", "LOCAL_FILE=dev.db\n");
+    fx.write_credential(Some("qa"), "db.env", "LOCAL_FILE=qa.db\n");
+    assert_eq!(
+        fx.baton(&["run", "instalar", "--ambiente", "qa"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert!(fx.root.join("qa.db").exists() && !fx.root.join("dev.db").exists());
+}

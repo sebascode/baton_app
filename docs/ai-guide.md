@@ -76,7 +76,7 @@ Campos de un paso:
 | `compose` | `source` | Corre una vez **por archivo**, dentro de la carpeta del archivo. Sin `command`: `docker compose up -d`. |
 | `dockerfile` | `source` | Igual. Sin `command`: `docker build -t {name}:latest .` |
 | `script` | `source` | Un `.sh` por archivo, en orden alfabético, dentro de su carpeta. Sin `command` usa el shebang (`#!/bin/bash`, o `sh` si no hay). No necesita permiso de ejecución. |
-| `sql` | `source`, y una credencial `db` | Ejecuta cada `.sql` con `psql` (solo PostgreSQL). El primer error detiene todo. |
+| `sql` | `source`, y una credencial `db` (PostgreSQL) o `sqlite` | Ejecuta cada `.sql` con `psql` o `sqlite3`. El primer error detiene todo. |
 | `comando` | `command` | Un comando suelto, en la raíz del proyecto. |
 | `check` | `command` | Una verificación: pasa si el comando termina con código 0. |
 | `backup` | sección `[backup]` | Respalda los volúmenes (y la base si `database = true`). Sin `[backup]` el plan no valida. |
@@ -152,7 +152,7 @@ Declara una solo si el plan la necesita: un paso `sql` (o `[backup] database = t
 ```toml
 [[credentials]]
 id = "db"                  # único en el plan
-kind = "db"                # git | docker | ssh | db | otro
+kind = "db"                # git | docker | ssh | db | sqlite | otro
 label = "Base de datos"    # opcional
 ref = "db.env#DB"          # archivo.env#PREFIJO
 ```
@@ -282,7 +282,7 @@ Si no puedes ejecutar comandos, repasa esta lista antes de entregar:
 - [ ] Todo paso `compose`, `dockerfile`, `script` y `sql` tiene `source` relativo y existente.
 - [ ] Todo paso `comando` y `check` tiene `command`.
 - [ ] Hay `[backup]` si usas un paso `backup` o `backup_before`.
-- [ ] Hay una credencial `db` si usas `sql`; con varias, cada paso `sql` lleva `database = "<id>"`.
+- [ ] Hay una credencial `db` o `sqlite` si usas `sql`; con varias, cada paso `sql` lleva `database = "<id>"`.
 - [ ] Un gate automático en un paso que no es compose o dockerfile lleva `checks` explícitos.
 - [ ] No hay secretos, ni campos inventados, ni pasos destructivos activos.
 - [ ] `[[credentials]]` va al final del archivo, después de los pasos.

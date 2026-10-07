@@ -44,9 +44,7 @@ impl Plan {
 
     /// Las credenciales de tipo `db` que declara el plan, en su orden.
     pub fn db_credentials(&self) -> impl Iterator<Item = &CredentialReq> {
-        self.credentials
-            .iter()
-            .filter(|c| c.kind == CredentialKind::Db)
+        self.credentials.iter().filter(|c| c.kind.is_database())
     }
 
     /// La credencial `db` con la que corre un paso `sql`: la que nombra su `database` o, si no
@@ -180,8 +178,18 @@ pub enum CredentialKind {
     Git,
     Docker,
     Ssh,
+    /// PostgreSQL (`psql`, directo o con `docker exec`).
     Db,
+    /// Un archivo SQLite (`sqlite3`).
+    Sqlite,
     Otro,
+}
+
+impl CredentialKind {
+    /// Una base de datos a la que se conecta un paso `sql` y que puede respaldarse.
+    pub fn is_database(self) -> bool {
+        matches!(self, CredentialKind::Db | CredentialKind::Sqlite)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

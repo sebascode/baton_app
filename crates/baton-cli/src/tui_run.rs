@@ -285,7 +285,7 @@ impl RunDriver {
         let (Some(item), Some(req)) = (c.items.get(i), self.cred_reqs.get(i)) else {
             return;
         };
-        let (ok, message) = test_connection(req.kind, &req.reference, item);
+        let (ok, message) = test_connection(req.kind, &req.reference, item, &self.project.root);
         c.set_test_result(i, ok, &message);
     }
 
@@ -541,6 +541,7 @@ fn test_connection(
     kind: CredentialKind,
     reference: &baton_core::CredentialRef,
     item: &CredItem,
+    root: &std::path::Path,
 ) -> (bool, String) {
     let value_of = |key: &str| -> String {
         baton_core::fields_for(kind)
@@ -575,6 +576,7 @@ fn test_connection(
                 .collect();
             db_ping(reference, &resolved, None, DB_PING_TIMEOUT)
         }
+        CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
         CredentialKind::Git | CredentialKind::Otro => {
             (false, "sin prueba automática todavía".to_string())
         }
@@ -584,48 +586,39 @@ fn test_connection(
 /// Cuánto se espera a que la base responda antes de dar la prueba por fallida.
 const DB_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Conecta a la base con los valores dados (`PREFIJO_CAMPO`) y corre un `select` trivial. La
-/// contraseña viaja por el entorno del proceso, nunca en un argumento, y se tacha de cualquier
-/// mensaje. `program` reemplaza a `psql`/`docker` (para probar con uno de mentira).
-fn db_ping(
-    reference: &baton_core::CredentialRef,
-    resolved: &[(String, String)],
-    program: Option<&std::path::Path>,
+/// Cómo terminó un proceso de prueba.
+struct Finished {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+/// Por qué no se pudo obtener un resultado.
+enum Unfinished {
+    NotFound,
+    TimedOut,
+    Other(String),
+}
+
+/// Corre un programa (sin terminal, con `env` extra) y espera hasta `timeout`.
+fn run_limited(
+    program: &std::ffi::OsStr,
+    args: &[String],
+    env: &[(String, String)],
     timeout: std::time::Duration,
-) -> (bool, String) {
+) -> Result<Finished, Unfinished> {
     use std::process::{Command, Stdio};
-    let conn = baton_core::sql::pg_conn(reference, resolved);
-    if !conn.env.iter().any(|(n, _)| n == "PGUSER") {
-        return (false, "falta el usuario para probar".to_string());
-    }
-    let (default_program, args) = baton_core::sql::pg_ping_command(&conn);
-    let program = program.map_or_else(
-        || std::ffi::OsString::from(&default_program),
-        |p| p.as_os_str().to_owned(),
-    );
-    let mut child = match Command::new(&program)
-        .args(&args)
-        .envs(conn.env.iter().cloned())
-        .env("PGCONNECT_TIMEOUT", "5")
+    let mut child = Command::new(program)
+        .args(args)
+        .envs(env.iter().cloned())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-    {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return (
-                false,
-                if conn.container.is_some() {
-                    "no se encontró docker en el PATH".to_string()
-                } else {
-                    "no se encontró psql en el PATH (o define un contenedor para usar docker exec)"
-                        .to_string()
-                },
-            );
-        }
-        Err(e) => return (false, format!("no se pudo ejecutar {default_program}: {e}")),
-    };
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Unfinished::NotFound,
+            _ => Unfinished::Other(format!("no se pudo ejecutar {}: {e}", program.display())),
+        })?;
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -636,12 +629,13 @@ fn db_ping(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return (
-                    false,
-                    format!("la base no respondió en {} s", timeout.as_secs().max(1)),
-                );
+                return Err(Unfinished::TimedOut);
             }
-            Err(e) => return (false, format!("no se pudo esperar a la prueba: {e}")),
+            Err(e) => {
+                return Err(Unfinished::Other(format!(
+                    "no se pudo esperar a la prueba: {e}"
+                )));
+            }
         }
     };
     let out = child.wait_with_output().ok();
@@ -650,26 +644,136 @@ fn db_ping(
             .map(|b| String::from_utf8_lossy(b).into_owned())
             .unwrap_or_default()
     };
-    if status.success() {
-        let stdout = text(out.as_ref().map(|o| &o.stdout));
-        return (
-            true,
-            baton_core::sql::pg_ping_summary(&stdout).unwrap_or_else(|| "conectado".to_string()),
-        );
-    }
-    let passwords: Vec<String> = conn
-        .env
-        .iter()
-        .filter(|(n, _)| n == "PGPASSWORD")
-        .map(|(_, v)| v.clone())
-        .collect();
-    let stderr = baton_core::mask::redact(&text(out.as_ref().map(|o| &o.stderr)), &passwords);
-    let first = stderr
-        .lines()
+    Ok(Finished {
+        ok: status.success(),
+        stdout: text(out.as_ref().map(|o| &o.stdout)),
+        stderr: text(out.as_ref().map(|o| &o.stderr)),
+    })
+}
+
+/// La primera línea con texto de un mensaje de error.
+fn first_line(text: &str, fallback: &str) -> String {
+    text.lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .unwrap_or("la conexión falló");
-    (false, first.trim_start_matches("psql: error: ").to_string())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// Conecta a la base con los valores dados (`PREFIJO_CAMPO`) y corre un `select` trivial. La
+/// contraseña viaja por el entorno del proceso, nunca en un argumento, y se tacha de cualquier
+/// mensaje. `program` reemplaza a `psql`/`docker` (para probar con uno de mentira).
+fn db_ping(
+    reference: &baton_core::CredentialRef,
+    resolved: &[(String, String)],
+    program: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> (bool, String) {
+    let conn = baton_core::sql::pg_conn(reference, resolved);
+    if !conn.env.iter().any(|(n, _)| n == "PGUSER") {
+        return (false, "falta el usuario para probar".to_string());
+    }
+    let (default_program, args) = baton_core::sql::pg_ping_command(&conn);
+    let program = program.map_or_else(
+        || std::ffi::OsString::from(&default_program),
+        |p| p.as_os_str().to_owned(),
+    );
+    let mut env = conn.env.clone();
+    env.push(("PGCONNECT_TIMEOUT".to_string(), "5".to_string()));
+    match run_limited(&program, &args, &env, timeout) {
+        Err(Unfinished::NotFound) => (
+            false,
+            if conn.container.is_some() {
+                "no se encontró docker en el PATH".to_string()
+            } else {
+                "no se encontró psql en el PATH (o define un contenedor para usar docker exec)"
+                    .to_string()
+            },
+        ),
+        Err(Unfinished::TimedOut) => (
+            false,
+            format!("la base no respondió en {} s", timeout.as_secs().max(1)),
+        ),
+        Err(Unfinished::Other(e)) => (false, e),
+        Ok(done) if done.ok => (
+            true,
+            baton_core::sql::pg_ping_summary(&done.stdout)
+                .unwrap_or_else(|| "conectado".to_string()),
+        ),
+        Ok(done) => {
+            let passwords: Vec<String> = conn
+                .env
+                .iter()
+                .filter(|(n, _)| n == "PGPASSWORD")
+                .map(|(_, v)| v.clone())
+                .collect();
+            let stderr = baton_core::mask::redact(&done.stderr, &passwords);
+            let line = first_line(&stderr, "la conexión falló");
+            (false, line.trim_start_matches("psql: error: ").to_string())
+        }
+    }
+}
+
+/// Abre el archivo SQLite en solo lectura y cuenta sus objetos. `file` es relativo a `root` (la
+/// raíz del proyecto) o absoluto. Un archivo que todavía no existe no es un error: `sqlite3` lo
+/// crea al ejecutar el primer paso; lo que sí hace falta es que exista su carpeta.
+fn sqlite_ping(
+    root: &std::path::Path,
+    file: &str,
+    program: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> (bool, String) {
+    if file.is_empty() {
+        return (false, "falta el archivo para probar".to_string());
+    }
+    let expanded = match file.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME").map_or_else(
+            || std::path::PathBuf::from(file),
+            |h| std::path::Path::new(&h).join(rest),
+        ),
+        None => std::path::PathBuf::from(file),
+    };
+    let path = root.join(expanded);
+    if !path.exists() {
+        return match path.parent().filter(|p| !p.exists()) {
+            Some(dir) => (false, format!("no existe la carpeta {}", dir.display())),
+            None => (
+                true,
+                "el archivo no existe todavía: sqlite3 lo creará al ejecutar".to_string(),
+            ),
+        };
+    }
+    let (default_program, args) = baton_core::sql::sqlite_ping_command(&path.to_string_lossy());
+    let program = program.map_or_else(
+        || std::ffi::OsString::from(&default_program),
+        |p| p.as_os_str().to_owned(),
+    );
+    match run_limited(&program, &args, &[], timeout) {
+        Err(Unfinished::NotFound) => (false, "no se encontró sqlite3 en el PATH".to_string()),
+        Err(Unfinished::TimedOut) => (
+            false,
+            format!("el archivo no respondió en {} s", timeout.as_secs().max(1)),
+        ),
+        Err(Unfinished::Other(e)) => (false, e),
+        Ok(done) if done.ok => {
+            let line = first_line(&done.stdout, "");
+            let mut parts = line.split('|');
+            let (objects, version) = (parts.next().unwrap_or("0"), parts.next().unwrap_or(""));
+            let name = path
+                .file_name()
+                .map_or_else(|| file.to_string(), |n| n.to_string_lossy().into_owned());
+            (
+                true,
+                format!("conectado a {name} (SQLite {version}, {objects} objetos)"),
+            )
+        }
+        Ok(done) => (
+            false,
+            first_line(&done.stderr, "no se pudo abrir el archivo")
+                .trim_start_matches("Error: ")
+                .to_string(),
+        ),
+    }
 }
 
 fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
@@ -987,6 +1091,89 @@ exit 2"#,
         assert!(!ok);
         assert!(msg.contains("nadie"), "el error nombra al usuario: {msg}");
         assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
+    }
+
+    fn have_sqlite() -> bool {
+        std::process::Command::new("sqlite3")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    #[test]
+    fn a_sqlite_file_is_tested_read_only_and_reports_its_objects() {
+        if !have_sqlite() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("app.db");
+        let made = std::process::Command::new("sqlite3")
+            .arg(&db)
+            .arg("create table a (id integer); create table b (id integer);")
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let t = std::time::Duration::from_secs(5);
+        // relativa a la raíz del proyecto y absoluta
+        for file in ["app.db", db.to_str().unwrap()] {
+            let (ok, msg) = sqlite_ping(dir.path(), file, None, t);
+            assert!(ok, "{file}: {msg}");
+            assert!(
+                msg.starts_with("conectado a app.db (SQLite 3.") && msg.ends_with(", 2 objetos)"),
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sqlite_file_that_does_not_exist_yet_is_fine_but_a_missing_folder_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = std::time::Duration::from_secs(5);
+        let (ok, msg) = sqlite_ping(dir.path(), "nuevo.db", None, t);
+        assert!(ok && msg.contains("lo creará"), "{msg}");
+        assert!(
+            !dir.path().join("nuevo.db").exists(),
+            "la prueba no lo crea"
+        );
+        let (ok, msg) = sqlite_ping(dir.path(), "no/existe/app.db", None, t);
+        assert!(!ok && msg.contains("no existe la carpeta"), "{msg}");
+        assert_eq!(
+            sqlite_ping(dir.path(), "", None, t),
+            (false, "falta el archivo para probar".to_string())
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_database_gives_sqlites_own_message() {
+        if !have_sqlite() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("texto.db"),
+            "esto no es sqlite, es solo texto largo".repeat(10),
+        )
+        .unwrap();
+        let (ok, msg) = sqlite_ping(
+            dir.path(),
+            "texto.db",
+            None,
+            std::time::Duration::from_secs(5),
+        );
+        assert!(!ok && msg.contains("not a database"), "{msg}");
+    }
+
+    #[test]
+    fn without_sqlite3_it_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.db"), "").unwrap();
+        let (ok, msg) = sqlite_ping(
+            dir.path(),
+            "a.db",
+            Some(std::path::Path::new("/no/existe/sqlite3")),
+            std::time::Duration::from_secs(1),
+        );
+        assert!(!ok && msg.contains("no se encontró sqlite3"), "{msg}");
     }
 
     fn shell_fixture(extra_config: &str) -> (Project, Config, Plan) {

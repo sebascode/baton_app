@@ -1,4 +1,5 @@
-//! Respaldos de la base de datos (`<plan>-<fecha>-<base>.dump`) en la carpeta de backups.
+//! Respaldos de la base de datos (`<plan>-<fecha>-<base>.dump`, o `.sqlite3` para SQLite) en la
+//! carpeta de backups.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,11 +14,12 @@ fn is_fecha(s: &str) -> bool {
         })
 }
 
-/// El respaldo más reciente de la base `label` del plan `plan` en `dir`, si hay alguno. Como la
-/// fecha del nombre se ordena igual que el tiempo, basta ordenar por nombre. Un plan que empieza
-/// igual que otro (`app` y `app-prod`) no se confunde: tras el nombre debe venir una fecha.
-pub fn latest_dump(dir: &Path, plan: &str, label: &str) -> Option<PathBuf> {
-    let suffix = format!("-{label}.dump");
+/// El respaldo más reciente de la base `label` del plan `plan` en `dir` con extensión `ext`
+/// (`dump`, `sqlite3`), si hay alguno. Como la fecha del nombre se ordena igual que el tiempo,
+/// basta ordenar por nombre. Un plan que empieza igual que otro (`app` y `app-prod`) no se
+/// confunde: tras el nombre debe venir una fecha.
+pub fn latest_dump(dir: &Path, plan: &str, label: &str, ext: &str) -> Option<PathBuf> {
+    let suffix = format!("-{label}.{ext}");
     let prefix = format!("{plan}-");
     let mut found: Vec<String> = fs::read_dir(dir)
         .ok()?
@@ -57,21 +59,31 @@ mod tests {
             touch(d, n);
         }
         assert_eq!(
-            latest_dump(d, "app", "tienda"),
+            latest_dump(d, "app", "tienda", "dump"),
             Some(d.join("app-2026-10-01-0900-tienda.dump"))
         );
         assert_eq!(
-            latest_dump(d, "app-prod", "tienda"),
+            latest_dump(d, "app-prod", "tienda", "dump"),
             Some(d.join("app-prod-2027-01-01-0000-tienda.dump"))
         );
-        assert_eq!(latest_dump(d, "app", "nada"), None);
+        assert_eq!(latest_dump(d, "app", "nada", "dump"), None);
+        // otra extensión (SQLite) no se mezcla con los volcados de PostgreSQL
+        touch(d, "app-2026-11-01-0000-tienda.sqlite3");
+        assert_eq!(
+            latest_dump(d, "app", "tienda", "sqlite3"),
+            Some(d.join("app-2026-11-01-0000-tienda.sqlite3"))
+        );
+        assert_eq!(
+            latest_dump(d, "app", "tienda", "dump"),
+            Some(d.join("app-2026-10-01-0900-tienda.dump"))
+        );
     }
 
     #[test]
     fn a_missing_folder_has_no_dumps() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(
-            latest_dump(&tmp.path().join("no-existe"), "app", "db"),
+            latest_dump(&tmp.path().join("no-existe"), "app", "db", "dump"),
             None
         );
     }

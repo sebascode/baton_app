@@ -168,6 +168,15 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
             optional: true,
         },
     ];
+    // Un archivo SQLite no tiene usuario ni contraseña: solo dónde está (relativa a la raíz del
+    // proyecto, o absoluta). Va en una credencial, y no en el plan, porque cambia de una máquina o
+    // un ambiente a otro.
+    const SQLITE: [FieldSpec; 1] = [FieldSpec {
+        key: "FILE",
+        label: "archivo",
+        secret: false,
+        optional: false,
+    }];
     const OTRO: [FieldSpec; 1] = [FieldSpec {
         key: "VALUE",
         label: "valor",
@@ -179,6 +188,7 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
         CredentialKind::Docker => &DOCKER,
         CredentialKind::Ssh => &SSH,
         CredentialKind::Db => &DB,
+        CredentialKind::Sqlite => &SQLITE,
         CredentialKind::Otro => &OTRO,
     }
 }
@@ -211,7 +221,7 @@ pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
     let mut out: Vec<Requirement> = plan
         .credentials
         .iter()
-        .filter(|c| c.kind != CredentialKind::Db || db_in_use.contains(&c.id.as_str()))
+        .filter(|c| !c.kind.is_database() || db_in_use.contains(&c.id.as_str()))
         .map(|c| Requirement {
             id: c.id.clone(),
             kind: c.kind,
@@ -285,6 +295,7 @@ mod tests {
             keys(CredentialKind::Db),
             ["USER", "PASSWORD", "HOST", "PORT", "DATABASE", "CONTAINER"]
         );
+        assert_eq!(keys(CredentialKind::Sqlite), ["FILE"]);
         assert_eq!(keys(CredentialKind::Otro), ["VALUE"]);
         // los secretos nunca son el único dato visible sin enmascarar
         for k in [
