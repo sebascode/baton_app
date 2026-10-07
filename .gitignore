@@ -6,3 +6,8 @@ CLAUDE.md
 
 # el README sí se versiona
 !/README.md
+!/docs/ai-guide.md
+
+# imágenes de diseño: solo locales
+/docs/design/
+/docs/design_2/

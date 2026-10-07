@@ -99,6 +99,10 @@ eval "$(baton shell-init bash)"   # también zsh y fish; muestra (baton:proyecto
 
 Más detalle con `baton --help` y `man baton`.
 
+### Generar un plan con una IA
+
+Si quieres que un asistente (Claude Code, Gemini, DeepSeek u otro) escriba el plan de tu proyecto, pásale [docs/ai-guide.md](docs/ai-guide.md). Explica el formato, las reglas y cómo comprobar el resultado con `baton validate` y `baton run --dry-run`.
+
 ## Desarrollo
 
 ```sh
