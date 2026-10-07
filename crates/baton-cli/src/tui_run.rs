@@ -15,7 +15,7 @@ use baton_store::state::{State, credential_key};
 use baton_store::{Project, check_plan};
 use baton_tui::app::Mode;
 use baton_tui::credentials::{CredField, CredItem, CredStatus, CredentialsState};
-use baton_tui::demo::{Driver, Flow};
+use baton_tui::demo::{Driver, Flow, ShellSession};
 use baton_tui::gate_view::ScannedService;
 use baton_tui::history_view::{HistoryState, LogFileState};
 use baton_tui::{App, EditorState, Effect, PreviewState, RunRequest, plan_step_infos};
@@ -43,6 +43,10 @@ pub struct RunDriver {
     cred_initial: Vec<Vec<String>>,
     /// Cómo terminó la ejecución, si llegó a terminar.
     pub outcome: Option<RunOutcome>,
+    /// Ids de los pasos de la ejecución en curso, en orden (los eventos hablan por posición).
+    run_steps: Vec<String>,
+    /// Posición del paso que está fallado ahora, para abrir el shell en su destino.
+    failed_step: Option<usize>,
 }
 
 impl RunDriver {
@@ -56,6 +60,8 @@ impl RunDriver {
             cred_reqs: Vec::new(),
             cred_initial: Vec::new(),
             outcome: None,
+            run_steps: Vec::new(),
+            failed_step: None,
         }
     }
 
@@ -286,6 +292,8 @@ impl RunDriver {
     fn start(&mut self, app: &mut App, req: RunRequest) {
         self.persist_credentials(app);
         let mut options = RunOptions::for_plan(&self.plan);
+        self.run_steps = req.steps.clone();
+        self.failed_step = None;
         options.only = Some(req.steps);
         options.backup = req.backup;
         options.dry_run = req.dry_run;
@@ -609,6 +617,57 @@ fn describe_issues(issues: &[Issue]) -> String {
     out
 }
 
+/// La sesión que abre "Abrir shell para investigar" en la pantalla de fallo, según dónde corre el
+/// paso que falló: en la máquina local, un shell en la carpeta del proyecto; en un destino ssh,
+/// una sesión ssh (con la misma llave y bastion que la ejecución) en su carpeta remota; en un
+/// docker context, un shell local con `DOCKER_CONTEXT` puesta. No lleva las credenciales.
+fn shell_session(
+    project: &Project,
+    config: &Config,
+    plan: &Plan,
+    ambiente: Option<&str>,
+    failed_step: Option<&str>,
+) -> ShellSession {
+    use baton_core::config::Target;
+    let local = || ShellSession::local(project.root.clone());
+    let Some(step) = failed_step.and_then(|id| plan.step(id)) else {
+        return local();
+    };
+    let name = step
+        .target
+        .clone()
+        .unwrap_or_else(|| config.default_target().to_string());
+    match config.targets.get(&name) {
+        Some(Target::Ssh(ssh)) => {
+            let bastion = match ssh.bastion.as_deref().and_then(|b| config.targets.get(b)) {
+                Some(Target::Ssh(b)) => Some(b),
+                _ => None,
+            };
+            let access = baton_exec::ssh_access(project, config, ambiente, ssh, bastion);
+            let dir = ssh.remote_dir.clone().unwrap_or_else(|| ".".to_string());
+            ShellSession {
+                banner: format!(
+                    "shell en {}:{dir}, destino '{name}' (escribe exit para volver a baton)",
+                    access.destination()
+                ),
+                program: Some("ssh".to_string()),
+                args: access.shell_args(&dir),
+                env: access.askpass_env(),
+                dir: None,
+            }
+        }
+        Some(Target::Context(c)) => ShellSession {
+            banner: format!(
+                "shell local con DOCKER_CONTEXT={} (destino '{name}'; escribe exit para volver a baton)",
+                c.context
+            ),
+            env: vec![("DOCKER_CONTEXT".to_string(), c.context.clone())],
+            ..local()
+        },
+        _ => local(),
+    }
+}
+
 impl Driver for RunDriver {
     fn on_effect(&mut self, app: &mut App, effect: Effect) -> Flow {
         match effect {
@@ -616,7 +675,17 @@ impl Driver for RunDriver {
             Effect::StartRun(req) => self.start(app, req),
             // abrir un shell suspende la pantalla: no es cosa del runner, que sigue esperando
             Effect::Command(RunCommand::OpenShell) => {
-                return Flow::Shell(self.project.root.clone());
+                let failed = self
+                    .failed_step
+                    .and_then(|i| self.run_steps.get(i))
+                    .map(String::as_str);
+                return Flow::Shell(shell_session(
+                    &self.project,
+                    &self.config,
+                    &self.plan,
+                    self.flags.ambiente.as_deref(),
+                    failed,
+                ));
             }
             Effect::Command(cmd) => {
                 if let Some(h) = &self.handle {
@@ -645,8 +714,11 @@ impl Driver for RunDriver {
             return;
         };
         while let Ok(ev) = h.events.try_recv() {
-            if let RunEvent::RunFinished { outcome, .. } = &ev {
-                self.outcome = Some(*outcome);
+            match &ev {
+                RunEvent::RunFinished { outcome, .. } => self.outcome = Some(*outcome),
+                RunEvent::StepFailed { step, .. } => self.failed_step = Some(*step),
+                RunEvent::StepStarted { .. } => self.failed_step = None,
+                _ => {}
             }
             app.on_event(ev);
         }
@@ -657,6 +729,119 @@ impl Driver for RunDriver {
 mod tests {
     use super::*;
     use baton_core::plan::CredentialKind;
+
+    fn shell_fixture(extra_config: &str) -> (Project, Config, Plan) {
+        let project = Project::at("/proyecto");
+        let config = Config::parse(&format!(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nport = 2222\nuser = \"deploy\"\n\
+             remote_dir = \"/opt/stack\"\n[targets.qa]\ntype = \"context\"\ncontext = \"qa-ctx\"\n{extra_config}"
+        ))
+        .unwrap();
+        let plan = Plan::parse(
+            "name = \"p\"\n\
+             [[steps]]\nid = \"aqui\"\nname = \"Aqui\"\ntype = \"comando\"\ncommand = \"true\"\n\
+             [[steps]]\nid = \"remoto\"\nname = \"Remoto\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"prod\"\n\
+             [[steps]]\nid = \"ctx\"\nname = \"Ctx\"\ntype = \"comando\"\ncommand = \"true\"\ntarget = \"qa\"\n",
+        )
+        .unwrap();
+        (project, config, plan)
+    }
+
+    #[test]
+    fn a_failed_local_step_opens_a_local_shell_in_the_project() {
+        let (p, c, plan) = shell_fixture("");
+        for failed in [Some("aqui"), Some("no-existe"), None] {
+            let s = shell_session(&p, &c, &plan, None, failed);
+            assert_eq!(s.program, None, "{failed:?}");
+            assert_eq!(s.dir, Some(std::path::PathBuf::from("/proyecto")));
+            assert!(s.env.is_empty() && s.args.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_failed_ssh_step_opens_an_ssh_session_in_its_remote_folder() {
+        let (p, c, plan) = shell_fixture("");
+        let s = shell_session(&p, &c, &plan, None, Some("remoto"));
+        assert_eq!(s.program.as_deref(), Some("ssh"));
+        assert_eq!(s.dir, None, "la carpeta es la del destino, no una local");
+        assert_eq!(s.args.first().map(String::as_str), Some("-t"));
+        assert!(
+            s.args.windows(2).any(|w| w == ["-p", "2222"]),
+            "{:?}",
+            s.args
+        );
+        assert!(s.args.contains(&"deploy@10.0.4.12".to_string()));
+        assert!(
+            s.args
+                .last()
+                .unwrap()
+                .starts_with("cd '/opt/stack' && exec \"$SHELL\" -l"),
+            "{:?}",
+            s.args
+        );
+        assert!(
+            s.banner.contains("deploy@10.0.4.12:/opt/stack"),
+            "{}",
+            s.banner
+        );
+        assert!(s.env.is_empty(), "sin frase secreta no hay askpass");
+        assert!(!format!("{s:?}").contains("TOKEN"), "no lleva credenciales");
+    }
+
+    #[test]
+    fn the_ssh_session_uses_the_same_key_phrase_and_bastion_as_the_run() {
+        let (_, _, plan) = shell_fixture("");
+        let tmp = tempfile::tempdir().unwrap();
+        let project = Project::at(tmp.path());
+        baton_store::credentials::save_fields(
+            &project,
+            None,
+            &"servers.env#PROD".parse().unwrap(),
+            &[
+                ("key", "/home/x/.ssh/prod".to_string()),
+                ("passphrase", "frase uno".to_string()),
+            ],
+        )
+        .unwrap();
+        let config = Config::parse(
+            "[targets.prod]\ntype = \"ssh\"\nhost = \"10.0.4.12\"\nuser = \"deploy\"\nremote_dir = \"/opt/stack\"\n\
+             credential = \"servers.env#PROD\"\nbastion = \"salto\"\n\
+             [targets.salto]\ntype = \"ssh\"\nhost = \"203.0.113.5\"\nuser = \"jump\"\nsync = false\n",
+        )
+        .unwrap();
+        let s = shell_session(&project, &config, &plan, None, Some("remoto"));
+        assert!(
+            s.args.windows(2).any(|w| w == ["-i", "/home/x/.ssh/prod"]),
+            "{:?}",
+            s.args
+        );
+        // el bastion no tiene llave propia: salto simple; y con frase, ssh puede preguntar al askpass
+        assert!(
+            s.args
+                .windows(2)
+                .any(|w| w == ["-J", "jump@203.0.113.5:22"]),
+            "{:?}",
+            s.args
+        );
+        assert!(s.args.contains(&"BatchMode=no".to_string()), "{:?}", s.args);
+        let env: std::collections::HashMap<_, _> = s.env.into_iter().collect();
+        assert_eq!(env["SSH_ASKPASS_REQUIRE"], "force");
+        // la frase no está en los argumentos
+        assert!(!s.args.join(" ").contains("frase uno"));
+    }
+
+    #[test]
+    fn a_failed_docker_context_step_opens_a_local_shell_pointing_at_the_context() {
+        let (p, c, plan) = shell_fixture("");
+        let s = shell_session(&p, &c, &plan, None, Some("ctx"));
+        assert_eq!(s.program, None);
+        assert_eq!(
+            s.env,
+            [("DOCKER_CONTEXT".to_string(), "qa-ctx".to_string())]
+        );
+        assert_eq!(s.dir, Some(std::path::PathBuf::from("/proyecto")));
+        assert!(s.banner.contains("DOCKER_CONTEXT=qa-ctx"));
+    }
 
     /// Cambiar de plan se niega si el editor tiene cambios sin guardar; para que no se niegue
     /// siempre, abrir el editor sin tocar nada debe dar exactamente los pasos del plan en disco.

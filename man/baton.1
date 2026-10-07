@@ -499,7 +499,7 @@ Alternar el log y el pipeline.
 .BR q ", " ctrl + c
 Salir (pide confirmación).
 .PP
-Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer rollback, \fBver el log completo\fR (\fBl\fR, dentro de la aplicación, parado en el paso que falló), \fBabrir un shell\fR en la carpeta del proyecto para investigar (al salir con \fBexit\fR se vuelve a la aplicación) o abortar. Al terminar o abortar, \fBenter\fR vuelve a la vista del plan, que muestra arriba cómo terminó la última ejecución y deja el cursor en el paso que falló; solo \fBq\fR cierra \fBbaton\fR. Para corregir un paso: \fBe\fR (editar), \fBctrl + s\fR (guardar) y \fBu\fR (reanudar).
+Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer rollback, \fBver el log completo\fR (\fBl\fR, dentro de la aplicación, parado en el paso que falló), \fBabrir un shell\fR para investigar (en la carpeta del proyecto si el paso corrió en tu máquina; en una sesión ssh en el directorio remoto, con la misma llave y bastion, si corrió en un destino ssh; con \fBDOCKER_CONTEXT\fR puesta si fue un docker context; nunca con las credenciales) (al salir con \fBexit\fR se vuelve a la aplicación) o abortar. Al terminar o abortar, \fBenter\fR vuelve a la vista del plan, que muestra arriba cómo terminó la última ejecución y deja el cursor en el paso que falló; solo \fBq\fR cierra \fBbaton\fR. Para corregir un paso: \fBe\fR (editar), \fBctrl + s\fR (guardar) y \fBu\fR (reanudar).
 .
 .SH ENTORNO
 .TP
@@ -585,7 +585,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),

@@ -18,9 +18,40 @@ const FRAME: Duration = Duration::from_millis(50);
 pub enum Flow {
     Continue,
     Quit,
-    /// Suspender la pantalla y abrir un shell del sistema en esa carpeta; al salir de él se vuelve
-    /// a la aplicación (por ejemplo, para investigar un fallo).
-    Shell(std::path::PathBuf),
+    /// Suspender la pantalla y abrir una sesión interactiva (un shell local, una sesión ssh en el
+    /// destino del paso...); al salir de ella se vuelve a la aplicación (por ejemplo, para
+    /// investigar un fallo).
+    Shell(ShellSession),
+}
+
+/// Qué abrir con "Abrir shell para investigar".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellSession {
+    /// Programa a ejecutar; sin valor, el `$SHELL` del usuario (o `sh`).
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    /// Variables extra para ese proceso (por ejemplo `DOCKER_CONTEXT`).
+    pub env: Vec<(String, String)>,
+    /// Carpeta de trabajo (local).
+    pub dir: Option<std::path::PathBuf>,
+    /// Lo que se escribe antes de abrirla, para que se sepa dónde se está.
+    pub banner: String,
+}
+
+impl ShellSession {
+    /// Un shell local en `dir`.
+    pub fn local(dir: std::path::PathBuf) -> ShellSession {
+        ShellSession {
+            banner: format!(
+                "shell en {} (escribe exit para volver a baton)",
+                dir.display()
+            ),
+            program: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            dir: Some(dir),
+        }
+    }
 }
 
 /// Quien atiende lo que las pantallas piden (probar conexiones, ejecutar, escanear...).
@@ -60,7 +91,7 @@ fn event_loop(
         {
             match driver.on_effect(app, effect) {
                 Flow::Quit => break,
-                Flow::Shell(dir) => open_shell(terminal, &dir)?,
+                Flow::Shell(session) => open_shell(terminal, &session)?,
                 Flow::Continue => {}
             }
         }
@@ -78,25 +109,28 @@ fn event_loop(
     Ok(())
 }
 
-/// Deja la pantalla, abre `$SHELL` (o `sh`) en `dir` y, al salir de él, la recupera.
-fn open_shell(terminal: &mut ratatui::DefaultTerminal, dir: &std::path::Path) -> io::Result<()> {
+/// Deja la pantalla, abre la sesión pedida y, al salir de ella, la recupera.
+fn open_shell(terminal: &mut ratatui::DefaultTerminal, session: &ShellSession) -> io::Result<()> {
     ratatui::restore();
     // Fuera del modo raw, ctrl+c llega a todo el grupo de procesos: sin esto mataría a baton
-    // (que espera al shell) en vez de quedarse en el shell, que ya sabe ignorarlo.
+    // (que espera a la sesión) en vez de quedarse en ella, que ya sabe ignorarlo.
     let _ = signal_hook::flag::register(
         signal_hook::consts::SIGINT,
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     );
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
+    let program = session
+        .program
+        .clone()
+        .or_else(|| std::env::var("SHELL").ok().filter(|s| !s.is_empty()))
         .unwrap_or_else(|| "sh".to_string());
-    eprintln!(
-        "\nbaton: shell en {} (escribe exit para volver a baton)",
-        dir.display()
-    );
-    if let Err(e) = std::process::Command::new(&shell).current_dir(dir).status() {
-        eprintln!("baton: no se pudo abrir {shell}: {e}");
+    eprintln!("\nbaton: {}", session.banner);
+    let mut cmd = std::process::Command::new(&program);
+    cmd.args(&session.args).envs(session.env.iter().cloned());
+    if let Some(dir) = &session.dir {
+        cmd.current_dir(dir);
+    }
+    if let Err(e) = cmd.status() {
+        eprintln!("baton: no se pudo abrir {program}: {e}");
         std::thread::sleep(Duration::from_millis(1500));
     }
     *terminal = ratatui::init();

@@ -351,6 +351,18 @@ impl SshAccess {
         ]
     }
 
+    /// Los argumentos de `ssh` para una sesión interactiva en `dir` del destino (`ssh -t`): mismas
+    /// llaves y bastion que la ejecución, y un shell de login en esa carpeta. El comando lo
+    /// interpreta el shell de login remoto, que puede ser fish o csh: solo `cd`, `&&`, `exec` y
+    /// `"$SHELL"`, que valen en todos.
+    pub fn shell_args(&self, dir: &str) -> Vec<String> {
+        let mut args = vec!["-t".to_string()];
+        args.extend(self.options(&[]));
+        args.push(self.destination());
+        args.push(format!("cd {} && exec \"$SHELL\" -l", sh_quote(dir)));
+        args
+    }
+
     /// Lo que va después de `-e` en `rsync`: el mismo `ssh` (puerto, llave, bastion).
     pub fn rsync_shell(&self) -> String {
         let mut parts = vec!["ssh".to_string()];
@@ -776,6 +788,19 @@ mod tests {
         assert_eq!(
             access().rsync_shell(),
             "ssh -o BatchMode=yes -p 2222 -i /home/x/.ssh/prod_app -o \"ProxyCommand=ssh -o BatchMode=yes -p 22 -i '/home/x/.ssh/bastion key' -W %h:%p jump@203.0.113.5\""
+        );
+    }
+
+    #[test]
+    fn the_interactive_session_asks_for_a_tty_and_a_login_shell_in_the_folder() {
+        let mut a = access();
+        a.jump = None;
+        let args = a.shell_args("/opt/mi stack");
+        assert_eq!(args[0], "-t");
+        assert!(args.contains(&"deploy@10.0.4.12".to_string()));
+        assert_eq!(
+            args.last().unwrap(),
+            "cd '/opt/mi stack' && exec \"$SHELL\" -l"
         );
     }
 
