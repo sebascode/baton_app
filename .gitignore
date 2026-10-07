@@ -3,3 +3,6 @@ CLAUDE.md
 *.md
 **/**.md
 /target
+
+# el README sí se versiona
+!/README.md
