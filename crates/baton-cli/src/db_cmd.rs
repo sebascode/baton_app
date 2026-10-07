@@ -263,6 +263,11 @@ pub(crate) fn invocation_for(
                 Vec::new(),
             ))
         }
+        CredentialKind::Mysql => {
+            let conn = baton_core::sql::my_conn(&cred.reference, resolved);
+            let secrets = conn.env.iter().map(|(_, v)| v.clone()).collect();
+            Ok((db_console::mysql_query_invocation(&conn, write), secrets))
+        }
         _ => {
             let conn = baton_core::sql::pg_conn(&cred.reference, resolved);
             let secrets = conn
@@ -314,7 +319,8 @@ pub fn query_csv(
     query: &str,
     timeout: Duration,
 ) -> Result<(String, bool), QueryError> {
-    let input = format!("{}\n;\n", query.trim_end());
+    // (la salida es CSV, o TSV si `inv.tsv`: `show` la interpreta según `inv.tsv`)
+    let input = format!("{}{}\n;\n", inv.stdin_prefix, query.trim_end());
     let done = match run_capture(
         std::ffi::OsStr::new(&inv.program),
         &inv.args,
@@ -330,7 +336,10 @@ pub fn query_csv(
     // psql escribe `ERROR:` en stderr; si por alguna razón saliera con 0 igual (otra versión o un
     // `\set` ajeno), un error de la consulta no debe pasar por una consulta sin resultados
     let engine_error = done.stderr.lines().any(|l| {
-        l.starts_with("ERROR:") || l.starts_with("Parse error") || l.starts_with("Runtime error")
+        l.starts_with("ERROR:")
+            || l.starts_with("ERROR ")
+            || l.starts_with("Parse error")
+            || l.starts_with("Runtime error")
     });
     if !done.ok || engine_error {
         let text = baton_core::mask::redact(&done.stderr, secrets);
@@ -350,15 +359,23 @@ pub fn query_csv(
 }
 
 /// Dibuja la salida CSV de un motor en el formato pedido.
-pub fn show(csv: &str, truncated: bool, view: &View) -> Result<(), String> {
+pub fn show(csv: &str, truncated: bool, tsv: bool, view: &View) -> Result<(), String> {
     if truncated {
         eprintln!("aviso: la salida pasó de 64 MiB y se cortó");
     }
+    let table = || {
+        if tsv {
+            Ok(db_console::parse_tsv(csv))
+        } else {
+            db_console::parse_csv(csv)
+        }
+    };
     match view.format {
         // la marca de NULL no se filtra: en CSV un NULL es un campo vacío
-        Format::Csv => print!("{}", csv.replace(NULL_MARK, "")),
-        Format::Json => println!("{}", db_console::to_json(&db_console::parse_csv(csv)?)),
-        Format::Tabla => print_table(&db_console::parse_csv(csv)?, view),
+        Format::Csv if !tsv => print!("{}", csv.replace(NULL_MARK, "")),
+        Format::Csv => print!("{}", db_console::to_csv(&table()?)),
+        Format::Json => println!("{}", db_console::to_json(&table()?)),
+        Format::Tabla => print_table(&table()?, view),
     }
     Ok(())
 }
@@ -371,7 +388,7 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
         write: args.write,
     };
     match query_csv(inv, secrets, query, args.timeout) {
-        Ok((csv, truncated)) => match show(&csv, truncated, &view) {
+        Ok((csv, truncated)) => match show(&csv, truncated, inv.tsv, &view) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -544,7 +561,7 @@ fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, Str
             "sqlite",
             get("FILE").unwrap_or_else(|| "(falta el archivo)".into()),
         ),
-        _ => {
+        kind => {
             let user = get("USER").unwrap_or_else(|| "(falta el usuario)".into());
             let place = get("CONTAINER").map_or_else(
                 || {
@@ -557,7 +574,12 @@ fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, Str
                 |ct| format!("contenedor {ct}"),
             );
             let db = get("DATABASE").map(|d| format!("/{d}")).unwrap_or_default();
-            ("postgres", format!("{user}@{place}{db}"))
+            let name = if kind == CredentialKind::Mysql {
+                "mysql"
+            } else {
+                "postgres"
+            };
+            (name, format!("{user}@{place}{db}"))
         }
     }
 }

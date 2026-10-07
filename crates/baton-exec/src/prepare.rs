@@ -252,6 +252,28 @@ pub fn prepare_run(
         }
     }
 
+    // `mysqldump` necesita saber qué base volcar (a diferencia de PostgreSQL, que toma el nombre
+    // del usuario): sin `DATABASE`, el respaldo de una credencial mysql no puede hacerse.
+    if opts.backup && !opts.dry_run {
+        let resolver = Resolver::new(project, config, opts.ambiente.as_deref());
+        for cred in plan
+            .backup_dbs()
+            .into_iter()
+            .filter(|c| c.kind == baton_core::plan::CredentialKind::Mysql)
+        {
+            let database = resolver
+                .resolve(&cred.reference, "DATABASE", cred.provider.as_deref())
+                .value;
+            if database.as_deref().is_none_or(str::is_empty) {
+                errors.push(format!(
+                    "base '{}': respaldar MySQL necesita el campo base ({}); sin él mysqldump no sabe qué volcar",
+                    cred.id,
+                    cred.reference.variable("DATABASE")
+                ));
+            }
+        }
+    }
+
     // El ambiente va dentro de comandos y es una carpeta de credenciales: solo nombres simples. Y
     // un paso que usa `{ambiente}` sin que haya uno elegido no puede correr (quedaría el texto
     // literal `{ambiente}` en el comando).

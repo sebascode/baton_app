@@ -222,7 +222,7 @@ impl Session<'_> {
             };
         match query_csv(&inv, &secrets, sql, self.args.timeout) {
             Ok((csv, truncated)) => {
-                if let Err(e) = show(&csv, truncated, &self.view) {
+                if let Err(e) = show(&csv, truncated, inv.tsv, &self.view) {
                     eprintln!("error: {e}");
                 }
             }

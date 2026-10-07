@@ -2900,3 +2900,230 @@ fn a_missing_sqlite_file_setting_is_named_in_ci_before_anything_runs() {
         "{text}"
     );
 }
+
+// ------------------------------------------------------------------ MySQL (mysql de mentira)
+
+/// Un `mysql` de mentira: registra carpeta, argumentos, la contraseña del entorno y la entrada, y
+/// falla si el script trae la palabra ERROR (como el cliente real al primer error).
+const FAKE_MYSQL: &str = r#"#!/bin/sh
+input=$(cat)
+echo "$PWD|$*|pwd=$MYSQL_PWD|in=$(echo "$input" | tr '\n' ' ')" >> "$BATON_MYSQL"
+case "$input" in *ERROR*) echo "ERROR 1064 (42000) at line 1: simulado" >&2; exit 1;; esac
+exit 0
+"#;
+const FAKE_MYSQLDUMP: &str = r#"#!/bin/sh
+echo "dump|$*|pwd=$MYSQL_PWD" >> "$BATON_MYSQL"
+echo "-- VOLCADO"
+"#;
+
+const MYSQL_CRED: &str = "[[credentials]]\nid = \"my\"\nkind = \"mysql\"\nref = \"db.env#MY\"\n\n";
+
+fn mysql_fx(files: &[(&str, &str)], container: Option<&str>) -> Fx {
+    let fx = Fx::new(&[]);
+    for (name, body) in files {
+        write_script(&fx, name, body);
+    }
+    for (name, body) in [("mysql", FAKE_MYSQL), ("mysqldump", FAKE_MYSQLDUMP)] {
+        let p = fx.root().join("_bin").join(name);
+        fs::write(&p, body).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut fields = vec![
+        ("user", "app".to_string()),
+        ("password", "s3cr3to-my".to_string()),
+        ("host", "db.interno".to_string()),
+        ("port", "3307".to_string()),
+        ("database", "tienda".to_string()),
+    ];
+    if let Some(c) = container {
+        fields.push(("container", c.to_string()));
+        // el docker de mentira reenvía a los clientes de mentira
+        let docker = fx.root().join("_bin/docker");
+        fs::write(
+            &docker,
+            "#!/bin/sh\nshift; [ \"$1\" = -i ] && shift\nwhile [ \"$1\" = -e ]; do shift 2; done\nshift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#MY".parse().unwrap(),
+        &fields,
+    )
+    .unwrap();
+    fx
+}
+
+fn mysql_options(fx: &Fx, p: &Plan) -> RunOptions {
+    let mut o = fx.options(p);
+    o.env.push((
+        "BATON_MYSQL".into(),
+        fx.root().join("_mysql").display().to_string(),
+    ));
+    o
+}
+
+fn mysql_calls(fx: &Fx) -> Vec<String> {
+    fs::read_to_string(fx.root().join("_mysql"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.replace(&fx.root().display().to_string(), ""))
+        .collect()
+}
+
+#[test]
+fn mysql_files_run_in_order_inside_their_folder_with_the_password_only_in_the_environment() {
+    let fx = mysql_fx(
+        &[
+            ("db/02-datos.sql", "INSERT INTO t VALUES (1);\n"),
+            ("db/01-esquema.sql", "CREATE TABLE t (id int);\n"),
+        ],
+        None,
+    );
+    let p = plan(&format!(
+        "{MYSQL_CRED}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let events = run(&fx, &p, mysql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let calls = mysql_calls(&fx);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(
+        calls[0].starts_with(
+            "/db|-u app -h db.interno -P 3307 tienda|pwd=s3cr3to-my|in=CREATE TABLE t"
+        ),
+        "{calls:?}"
+    );
+    assert!(calls[1].contains("in=INSERT INTO t"), "{calls:?}");
+    let logs = all_logs(&events);
+    assert!(!logs.contains("s3cr3to-my"), "{logs}");
+    assert!(
+        logs.contains("mysql '-u' 'app' '-h' 'db.interno' '-P' '3307' 'tienda' < '01-esquema.sql'"),
+        "{logs}"
+    );
+}
+
+#[test]
+fn the_first_error_in_a_mysql_file_stops_the_plan() {
+    let fx = mysql_fx(
+        &[
+            ("db/01-mal.sql", "SELECT ERROR;\n"),
+            ("db/02-nunca.sql", "SELECT 1;\n"),
+        ],
+        None,
+    );
+    let p = plan(&format!(
+        "{MYSQL_CRED}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let events = run(&fx, &p, mysql_options(&fx, &p));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(mysql_calls(&fx).len(), 1);
+    let f = failure(&events);
+    assert!(f.command.contains("01-mal.sql"), "{}", f.command);
+    assert!(!f.message.contains("s3cr3to-my"));
+}
+
+#[test]
+fn with_a_container_mysql_runs_through_docker_exec_without_the_password_in_the_arguments() {
+    let fx = mysql_fx(&[("db/01.sql", "SELECT 1;\n")], Some("mi-mysql"));
+    let p = plan(&format!(
+        "{MYSQL_CRED}[[steps]]\nid = \"migrar\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n"
+    ));
+    let events = run(&fx, &p, mysql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains(
+            "docker 'exec' '-i' '-e' 'MYSQL_PWD' 'mi-mysql' 'mysql' '-u' 'app' 'tienda' < '01.sql'"
+        ),
+        "sin host ni puerto dentro del contenedor: {logs}"
+    );
+    assert!(!logs.contains("s3cr3to-my"), "{logs}");
+    // la contraseña sí llegó al cliente, por el entorno
+    assert!(
+        mysql_calls(&fx)[0].contains("pwd=s3cr3to-my"),
+        "{:?}",
+        mysql_calls(&fx)
+    );
+}
+
+#[test]
+fn a_mysql_backup_is_dumped_before_the_plan_and_restored_by_the_rollback() {
+    let fx = mysql_fx(&[], None);
+    let p = plan(&format!(
+        "{MYSQL_CRED}[backup]\ndatabase = true\n\
+         [[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n\
+         [[steps]]\nid = \"boom\"\nname = \"Boom\"\ntype = \"comando\"\ncommand = \"exit 1\"\n"
+    ));
+    let mut o = mysql_options(&fx, &p);
+    o.backup = true;
+    o.auto_rollback = true;
+    o.interactive = false;
+    let events = run(&fx, &p, o);
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Failed,
+        "{}",
+        all_logs(&events)
+    );
+    let calls = mysql_calls(&fx);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(
+        calls[0].starts_with("dump|--single-transaction --routines --triggers -u app -h db.interno -P 3307 tienda|pwd=s3cr3to-my"),
+        "{calls:?}"
+    );
+    assert!(
+        calls[1].contains("|-u app -h db.interno -P 3307 tienda|")
+            && calls[1].contains("in=-- VOLCADO"),
+        "el rollback reinyecta el volcado: {calls:?}"
+    );
+    let backups: Vec<String> = fs::read_dir(fx.root().join(".baton/backups"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert!(backups[0].ends_with("-tienda.mysql.sql"), "{backups:?}");
+    assert!(all_logs(&events).contains("base 'my' restaurada desde .baton/backups/"));
+}
+
+#[test]
+fn backing_up_mysql_without_a_database_is_refused_before_running_anything() {
+    let fx = mysql_fx(&[], None);
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#MY".parse().unwrap(),
+        // un campo vacío se borra del .env
+        &[("database", String::new())],
+    )
+    .unwrap();
+    let p = plan(&format!(
+        "{MYSQL_CRED}[backup]\ndatabase = true\n[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n"
+    ));
+    let mut o = mysql_options(&fx, &p);
+    o.backup = true;
+    let err = baton_exec::spawn(baton_exec::RunInput {
+        project: fx.project.clone(),
+        config: baton_core::Config::default(),
+        plan: p,
+        options: o,
+    })
+    .err()
+    .expect("falta la base");
+    let text = err.0.join("\n");
+    assert!(
+        text.contains("respaldar MySQL necesita el campo base (MY_DATABASE)"),
+        "{text}"
+    );
+}

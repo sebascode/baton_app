@@ -20,8 +20,9 @@ use baton_core::events::{
 };
 use baton_core::plan::{CredentialKind, GateMode, Plan, StepKind};
 use baton_core::sql::{
-    PgConn, SqliteConn, dump_label, pg_dump_command, pg_restore_command, psql_command,
-    sqlite_backup_command, sqlite_label, sqlite_restore_command, sqlite_run_command,
+    MyConn, PgConn, SqliteConn, dump_label, mysql_label, mysql_restore_command, mysql_run_command,
+    mysqldump_command, pg_dump_command, pg_restore_command, psql_command, sqlite_backup_command,
+    sqlite_label, sqlite_restore_command, sqlite_run_command,
 };
 use baton_core::step_run::{StepVars, step_info};
 use baton_store::Project;
@@ -184,6 +185,9 @@ impl Ctx {
                     },
                 ),
             ),
+            CredentialKind::Mysql => {
+                DbConn::Mysql(baton_core::sql::my_conn(&cred.reference, &self.secrets))
+            }
             _ => DbConn::Pg(baton_core::sql::pg_conn(&cred.reference, &self.secrets)),
         }
     }
@@ -940,6 +944,7 @@ async fn backup_database(
         let path = file.to_string_lossy();
         let line = match conn {
             DbConn::Pg(c) => pg_dump_command(c, &path),
+            DbConn::Mysql(c) => mysqldump_command(c, &path),
             DbConn::Sqlite(c) => sqlite_backup_command(c, &path),
         };
         let cmd = ctx.db_command(&ctx.steps[step], line, conn);
@@ -968,6 +973,7 @@ fn backup_label(many: bool, id: &str, conn: &DbConn) -> String {
 #[derive(Debug, Clone)]
 enum DbConn {
     Pg(PgConn),
+    Mysql(MyConn),
     Sqlite(SqliteConn),
 }
 
@@ -976,6 +982,7 @@ impl DbConn {
     fn secrets(&self) -> Vec<(String, String)> {
         match self {
             DbConn::Pg(c) => c.env.clone(),
+            DbConn::Mysql(c) => c.env.clone(),
             DbConn::Sqlite(_) => Vec::new(),
         }
     }
@@ -984,6 +991,7 @@ impl DbConn {
     fn label(&self) -> String {
         match self {
             DbConn::Pg(c) => dump_label(c),
+            DbConn::Mysql(c) => mysql_label(c),
             DbConn::Sqlite(c) => sqlite_label(c),
         }
     }
@@ -992,6 +1000,7 @@ impl DbConn {
     fn extension(&self) -> &'static str {
         match self {
             DbConn::Pg(_) => "dump",
+            DbConn::Mysql(_) => "mysql.sql",
             DbConn::Sqlite(_) => "sqlite3",
         }
     }
@@ -1099,6 +1108,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
                 (Some(t), _) => vars.render(t),
                 (None, Some(f)) if is_sql => match ctx.step_conn(ps) {
                     DbConn::Pg(conn) => psql_command(&conn, &file_name(f)),
+                    DbConn::Mysql(conn) => mysql_run_command(&conn, &file_name(f)),
                     DbConn::Sqlite(conn) => {
                         let dir = f
                             .parent()
@@ -1237,6 +1247,7 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
         let path = file.to_string_lossy();
         let line = match conn {
             DbConn::Pg(c) => pg_restore_command(c, &path),
+            DbConn::Mysql(c) => mysql_restore_command(c, &path),
             DbConn::Sqlite(c) => sqlite_restore_command(c, &path),
         };
         let cmd = ctx.db_command(ps, line, conn);

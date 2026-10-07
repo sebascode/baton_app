@@ -247,7 +247,7 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
             DatabaseBackup::All if plan.db_credentials().next().is_none() => {
                 out.push(Issue::error(
                     path!["backup", "database"],
-                    "database = true necesita una credencial de tipo db o sqlite en [[credentials]]",
+                    "database = true necesita una credencial de tipo db, mysql o sqlite en [[credentials]]",
                 ));
             }
             DatabaseBackup::Only(ids) if ids.is_empty() => out.push(Issue::error(
@@ -259,7 +259,7 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
                     if !plan.db_credentials().any(|c| c.id == *id) {
                         out.push(Issue::error(
                             path!["backup", "database"],
-                            format!("'{id}' no es una credencial de tipo db o sqlite declarada en [[credentials]]"),
+                            format!("'{id}' no es una credencial de tipo db, mysql o sqlite declarada en [[credentials]]"),
                         ));
                     }
                 }
@@ -407,7 +407,7 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
             (Some(id), _) if ids.contains(&id.as_str()) => continue,
             (Some(id), _) => {
                 let why = if plan.credentials.iter().any(|c| c.id == *id) {
-                    format!("'{id}' no es una credencial de tipo db o sqlite")
+                    format!("'{id}' no es una credencial de tipo db, mysql o sqlite")
                 } else {
                     format!("no existe una credencial con id '{id}' en [[credentials]]")
                 };
@@ -415,7 +415,7 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
                 continue;
             }
             (None, 0) => {
-                "un paso sql necesita una credencial de tipo db o sqlite en [[credentials]] (con la conexión a la base)"
+                "un paso sql necesita una credencial de tipo db, mysql o sqlite en [[credentials]] (con la conexión a la base)"
                     .to_string()
             }
             (None, 1) => continue,
@@ -1387,7 +1387,7 @@ mod tests {
         assert_error(
             &wrong,
             "steps[0].database",
-            "'reg' no es una credencial de tipo db o sqlite",
+            "'reg' no es una credencial de tipo db, mysql o sqlite",
         );
         // con una sola, nombrarla también vale
         let one = validate_plan(
@@ -1443,8 +1443,35 @@ mod tests {
         assert_error(
             &check(format!("{docker}{}", step("database = \"reg\"\n"))),
             "steps[0].database",
-            "no es una credencial de tipo db o sqlite",
+            "no es una credencial de tipo db, mysql o sqlite",
         );
+    }
+
+    #[test]
+    fn a_mysql_credential_counts_as_a_database_like_the_others() {
+        let mysql = "[[credentials]]\nid = \"my\"\nkind = \"mysql\"\nref = \"db.env#MY\"\n";
+        let pg = "[[credentials]]\nid = \"pg\"\nkind = \"db\"\nref = \"db.env#PG\"\n";
+        let step = |extra: &str| {
+            format!(
+                "[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n{extra}"
+            )
+        };
+        let check = |text: String| {
+            validate_plan(
+                &Plan::parse(&format!("name = \"p\"\n{text}")).unwrap(),
+                None,
+            )
+        };
+        assert!(errors(&check(format!("{mysql}{}", step("")))).is_empty());
+        assert_error(
+            &check(format!("{mysql}{pg}{}", step(""))),
+            "steps[0].type",
+            "(my, pg)",
+        );
+        let ok = check(format!("{mysql}{pg}{}", step("database = \"my\"\n")));
+        assert!(errors(&ok).is_empty(), "{:?}", errors(&ok));
+        let backup = "[backup]\ndatabase = [\"my\"]\n[[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"backup\"\n";
+        assert!(errors(&check(format!("{backup}{mysql}"))).is_empty());
     }
 
     #[test]
@@ -1473,12 +1500,12 @@ mod tests {
         assert_error(
             &with("[backup]\ndatabase = [\"nope\"]\n"),
             "backup.database",
-            "'nope' no es una credencial de tipo db o sqlite",
+            "'nope' no es una credencial de tipo db, mysql o sqlite",
         );
         assert_error(
             &with("[backup]\ndatabase = [\"reg\"]\n"),
             "backup.database",
-            "'reg' no es una credencial de tipo db o sqlite",
+            "'reg' no es una credencial de tipo db, mysql o sqlite",
         );
         assert_error(
             &with("[backup]\ndatabase = []\n"),

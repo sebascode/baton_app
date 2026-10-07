@@ -714,3 +714,220 @@ fn the_interactive_flag_does_not_mix_with_a_query_and_fails_early_without_the_da
     assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
     assert!(err(&o).contains("no existe"), "{}", err(&o));
 }
+
+// ------------------------------------------------------------------------- MySQL
+
+/// Un `mysql` de mentira: responde en TSV como `mysql --batch` y registra cómo lo invocan.
+const FAKE_MYSQL: &str = r#"#!/bin/sh
+input=$(cat)
+{
+  echo "args: $*"
+  echo "MYSQL_PWD=$MYSQL_PWD"
+  echo "stdin: $(echo "$input" | tr '\n' ' ')"
+} > "$BATON_FAKE_LOG"
+case "$MYSQL_PWD" in
+  falla) echo "ERROR 1045 (28000): Access denied for user 'app' (using password: YES) [falla]" >&2; exit 1;;
+esac
+printf 'id\tnota\ttotal\n1\thola\\nmundo\t10.50\n2\tNULL\tNULL\n'
+"#;
+
+fn mysql_fx(password: &str) -> Fx {
+    let plan = "name = \"p\"\n[[credentials]]\nid = \"my\"\nkind = \"mysql\"\nref = \"db.env#MY\"\n\
+                [[steps]]\nid = \"x\"\nname = \"X\"\ntype = \"comando\"\ncommand = \"true\"\n";
+    let fx = Fx::new(
+        plan,
+        &format!("MY_USER=app\nMY_PASSWORD={password}\nMY_HOST=db.interno\nMY_DATABASE=tienda\n"),
+    );
+    fx.script("mysql", FAKE_MYSQL);
+    fx
+}
+
+#[test]
+fn mysql_gets_a_read_only_session_the_query_on_stdin_and_the_password_in_the_environment() {
+    let fx = mysql_fx("s3creto-my");
+    let log = fx.root.join("_log");
+    let env = [("BATON_FAKE_LOG", log.to_str().unwrap())];
+    let o = fx.baton_in(
+        &["-c", "select * from t where clave = 'secreta'"],
+        None,
+        &env,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(
+        t.contains("│  1 │ hola↵mundo │ 10.50 │") && t.contains("│  2 │ NULL       │  NULL │"),
+        "{t}"
+    );
+    let seen = fs::read_to_string(&log).unwrap();
+    assert!(
+        seen.contains("args: --batch --connect-timeout=10 -u app -h db.interno tienda"),
+        "{seen}"
+    );
+    assert!(seen.contains("MYSQL_PWD=s3creto-my"), "{seen}");
+    assert!(
+        seen.contains(
+            "stdin: set session transaction read only; select * from t where clave = 'secreta'"
+        ),
+        "{seen}"
+    );
+    let args_line = seen.lines().next().unwrap();
+    assert!(
+        !args_line.contains("secreta") && !args_line.contains("s3creto"),
+        "{args_line}"
+    );
+
+    let o = fx.baton_in(
+        &["-c", "update t set a = 1 where id = 2", "--escribir"],
+        None,
+        &env,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(!fs::read_to_string(&log).unwrap().contains("read only"));
+}
+
+#[test]
+fn mysql_results_come_out_as_csv_and_json_too() {
+    let fx = mysql_fx("x");
+    let log = fx.root.join("_log");
+    let env = [("BATON_FAKE_LOG", log.to_str().unwrap())];
+    let o = fx.baton_in(&["-c", "select 1", "--formato", "csv"], None, &env);
+    assert_eq!(out(&o), "id,nota,total\n1,\"hola\nmundo\",10.50\n2,,\n");
+    let o = fx.baton_in(&["-c", "select 1", "--formato", "json"], None, &env);
+    let v: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(v[0]["nota"], "hola\nmundo");
+    assert_eq!(v[0]["total"], 10.50);
+    assert!(v[1]["nota"].is_null());
+}
+
+#[test]
+fn a_mysql_error_exits_3_without_showing_the_password() {
+    let fx = mysql_fx("falla");
+    let log = fx.root.join("_log");
+    let o = fx.baton_in(
+        &["-c", "select 1"],
+        None,
+        &[("BATON_FAKE_LOG", log.to_str().unwrap())],
+    );
+    assert_eq!(o.status.code(), Some(3), "{}\n{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("ERROR 1045 (28000): Access denied"),
+        "{}",
+        err(&o)
+    );
+    assert!(
+        !err(&o).contains("[falla]"),
+        "la contraseña se tacha: {}",
+        err(&o)
+    );
+}
+
+#[test]
+fn a_mysql_interactive_session_lists_tables_and_columns_of_the_current_database() {
+    let fx = mysql_fx("x");
+    let log = fx.root.join("_log");
+    let env = [("BATON_FAKE_LOG", log.to_str().unwrap())];
+    let o = fx.baton_in(
+        &["my", "-i"],
+        Some("\\tablas\n\\columnas clientes\n\\q\n"),
+        &env,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let seen = fs::read_to_string(&log).unwrap();
+    assert!(
+        seen.contains("table_name = 'clientes' and table_schema = database()"),
+        "\\columnas fue la última: {seen}"
+    );
+    assert!(
+        out(&o).contains("baton db · my (mysql app@db.interno/tienda) · solo lectura"),
+        "{}",
+        out(&o)
+    );
+}
+
+/// Contra un MySQL de verdad en un contenedor (necesita `podman`). Se corre a mano:
+/// `cargo test -p baton --test db real_mysql -- --ignored`.
+#[test]
+#[ignore = "necesita podman y la imagen mysql:8.4"]
+fn real_mysql_in_a_container_is_read_only_by_default_and_reports_errors() {
+    let name = format!("baton-my-it-{}", std::process::id());
+    assert!(
+        Command::new("podman")
+            .args([
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                &name,
+                "-e",
+                "MYSQL_ROOT_PASSWORD=pw",
+                "-e",
+                "MYSQL_DATABASE=tienda",
+                "mysql:8.4"
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    struct Stop(String);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            let _ = Command::new("podman").args(["rm", "-f", &self.0]).output();
+        }
+    }
+    let _stop = Stop(name.clone());
+    // la imagen arranca primero un servidor temporal (puerto 0) para inicializar y luego se
+    // reinicia: el definitivo es el que avisa "port: 3306"
+    for _ in 0..120 {
+        let logs = Command::new("podman")
+            .args(["logs", &name])
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&logs.stdout),
+            String::from_utf8_lossy(&logs.stderr)
+        );
+        if text
+            .lines()
+            .any(|l| l.contains("ready for connections") && l.contains("port: 3306"))
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    let plan = "name = \"p\"\n[[credentials]]\nid = \"my\"\nkind = \"mysql\"\nref = \"db.env#MY\"\n\
+                [[steps]]\nid = \"x\"\nname = \"X\"\ntype = \"comando\"\ncommand = \"true\"\n";
+    let fx = Fx::new(
+        plan,
+        &format!("MY_USER=root\nMY_PASSWORD=pw\nMY_DATABASE=tienda\nMY_CONTAINER={name}\n"),
+    );
+    fx.script("docker", "#!/bin/sh\nexec /usr/bin/podman \"$@\"\n");
+
+    let o = fx.baton(&["-c", "select 1 as uno, null as nada, 'a,b\ttab' as texto"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("│ uno │ nada │ texto") && out(&o).contains("NULL"),
+        "{}",
+        out(&o)
+    );
+
+    let o = fx.baton(&["-c", "create table t(i int)"]);
+    assert_eq!(
+        o.status.code(),
+        Some(3),
+        "solo lectura: {}\n{}",
+        out(&o),
+        err(&o)
+    );
+    assert!(err(&o).contains("READ ONLY transaction"), "{}", err(&o));
+    let o = fx.baton(&["-c", "create table t(i int)", "--escribir"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let o = fx.baton(&["-c", "select * from no_existe"]);
+    assert_eq!(o.status.code(), Some(3));
+    assert!(err(&o).contains("doesn't exist"), "{}", err(&o));
+    let o = fx.baton(&[
+        "-c",
+        "select table_name from information_schema.tables where table_schema = 'tienda'",
+    ]);
+    assert!(out(&o).contains("│ t "), "{}", out(&o));
+}

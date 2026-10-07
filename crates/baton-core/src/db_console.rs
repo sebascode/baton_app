@@ -16,6 +16,10 @@ pub struct Invocation {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Texto que va antes de la consulta en la entrada estándar (el solo lectura de MySQL).
+    pub stdin_prefix: String,
+    /// La salida viene en TSV (MySQL) y no en CSV.
+    pub tsv: bool,
 }
 
 /// `psql` (o `docker exec ... psql`) en modo CSV y silencioso (sin etiquetas como `INSERT 0 1`).
@@ -46,6 +50,8 @@ pub fn pg_query_invocation(conn: &PgConn, write: bool) -> Invocation {
             program: "psql".to_string(),
             args: psql[1..].to_vec(),
             env,
+            stdin_prefix: String::new(),
+            tsv: false,
         },
         Some(container) => {
             let mut args = vec!["exec".to_string(), "-i".to_string()];
@@ -59,6 +65,8 @@ pub fn pg_query_invocation(conn: &PgConn, write: bool) -> Invocation {
                 program: "docker".to_string(),
                 args,
                 env,
+                stdin_prefix: String::new(),
+                tsv: false,
             }
         }
     }
@@ -79,6 +87,26 @@ pub fn sqlite_query_invocation(file: &str, write: bool) -> Invocation {
         program: "sqlite3".to_string(),
         args,
         env: Vec::new(),
+        stdin_prefix: String::new(),
+        tsv: false,
+    }
+}
+
+/// `mysql` en modo por lotes (TSV con encabezado). Solo lectura por defecto: la sesión empieza con
+/// `SET SESSION TRANSACTION READ ONLY`, y una escritura falla con el error 1792 (es un seguro
+/// contra accidentes, no una barrera: una sesión puede volver a activar la escritura).
+pub fn mysql_query_invocation(conn: &crate::sql::MyConn, write: bool) -> Invocation {
+    let (program, args) = conn.program("mysql", &["--batch", "--connect-timeout=10"], true);
+    Invocation {
+        program,
+        args,
+        env: conn.env.clone(),
+        stdin_prefix: if write {
+            String::new()
+        } else {
+            "set session transaction read only;\n".to_string()
+        },
+        tsv: true,
     }
 }
 
@@ -153,6 +181,82 @@ pub fn parse_csv(text: &str) -> Result<Table, String> {
         })
         .collect();
     Ok(Table { columns, rows })
+}
+
+/// Lee la salida de `mysql --batch`: columnas y filas separadas por tabuladores, con `\n`, `\t`,
+/// `\0` y `\\` escapados. NULL sale como el texto `NULL` (no se distingue de esa cadena). Si la
+/// consulta no devolvió filas, `mysql` no imprime ni el encabezado: la tabla queda sin columnas.
+pub fn parse_tsv(text: &str) -> Table {
+    let unescape = |field: &str| -> Option<String> {
+        if field == "NULL" {
+            return None;
+        }
+        let mut out = String::with_capacity(field.len());
+        let mut chars = field.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('0') => out.push('\0'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        }
+        Some(out)
+    };
+    let mut lines = text.lines();
+    let Some(header) = lines.next().filter(|l| !l.is_empty()) else {
+        return Table::default();
+    };
+    Table {
+        columns: header
+            .split('\t')
+            .map(|c| unescape(c).unwrap_or_else(|| "NULL".to_string()))
+            .collect(),
+        rows: lines
+            .filter(|l| !l.is_empty())
+            .map(|l| l.split('\t').map(unescape).collect())
+            .collect(),
+    }
+}
+
+/// El resultado como CSV (RFC 4180): NULL es un campo vacío. Se usa cuando el motor no habla CSV.
+pub fn to_csv(table: &Table) -> String {
+    let field = |v: &str| {
+        if v.contains([',', '"', '\n', '\r']) {
+            format!("\"{}\"", v.replace('"', "\"\""))
+        } else {
+            v.to_string()
+        }
+    };
+    if table.columns.is_empty() {
+        return String::new();
+    }
+    let mut out = table
+        .columns
+        .iter()
+        .map(|c| field(c))
+        .collect::<Vec<_>>()
+        .join(",");
+    out.push('\n');
+    for row in &table.rows {
+        let line: Vec<String> = row
+            .iter()
+            .map(|v| v.as_deref().map_or_else(String::new, field))
+            .collect();
+        out.push_str(&line.join(","));
+        out.push('\n');
+    }
+    out
 }
 
 /// ¿El texto es un número tal como lo escribe una base de datos (`12`, `-3.50`)? Sin ceros a la
@@ -250,6 +354,11 @@ pub fn tables_query(kind: crate::plan::CredentialKind) -> String {
              and name not like 'sqlite_%' order by name"
                 .to_string()
         }
+        crate::plan::CredentialKind::Mysql => {
+            "select table_name as nombre, table_type as tipo from information_schema.tables \
+             where table_schema = database() order by 1"
+                .to_string()
+        }
         _ => "select table_schema as esquema, table_name as nombre, table_type as tipo \
               from information_schema.tables \
               where table_schema not in ('pg_catalog', 'information_schema') \
@@ -277,6 +386,20 @@ pub fn columns_query(kind: crate::plan::CredentialKind, table: &str) -> Result<S
             format!(
                 "select name as columna, type as tipo, \"notnull\" as no_nulo, dflt_value as defecto, pk \
                  from pragma_table_info('{table}')"
+            )
+        }
+        crate::plan::CredentialKind::Mysql => {
+            let (schema, name) = table
+                .split_once('.')
+                .map_or((None, table), |(s, n)| (Some(s), n));
+            let schema = schema.map_or_else(
+                || "table_schema = database()".to_string(),
+                |s| format!("table_schema = '{s}'"),
+            );
+            format!(
+                "select column_name as columna, column_type as tipo, is_nullable as acepta_nulos, \
+                 column_default as defecto, column_key as llave from information_schema.columns \
+                 where table_name = '{name}' and {schema} order by ordinal_position"
             )
         }
         _ => {
@@ -513,5 +636,72 @@ mod tests {
         assert!(looks_sensitive("ALTER USER app WITH PASSWORD 'x'"));
         assert!(looks_sensitive("select * from api_keys where token = 'a'"));
         assert!(!looks_sensitive("select * from clientes where id = 1"));
+    }
+
+    #[test]
+    fn mysql_batch_output_is_unescaped_and_null_is_recognised() {
+        let t = parse_tsv(
+            "id\tnota\ttotal\n1\tok, bien\t99.90\n2\tNULL\tNULL\n3\tl1\\nl2\\tt\\\\x\t5.00\n",
+        );
+        assert_eq!(t.columns, ["id", "nota", "total"]);
+        assert_eq!(
+            t.rows,
+            [
+                vec![some("1"), some("ok, bien"), some("99.90")],
+                vec![some("2"), None, None],
+                vec![some("3"), some("l1\nl2\tt\\x"), some("5.00")],
+            ]
+        );
+        // sin filas mysql no imprime ni el encabezado
+        assert_eq!(parse_tsv(""), Table::default());
+        assert_eq!(parse_tsv("\n"), Table::default());
+    }
+
+    #[test]
+    fn a_table_can_be_written_back_as_csv_with_quoting() {
+        let t = parse_tsv("a\tb\n1\tx,y\n2\tNULL\n3\tdijo \"hola\"\n");
+        assert_eq!(to_csv(&t), "a,b\n1,\"x,y\"\n2,\n3,\"dijo \"\"hola\"\"\"\n");
+        // lo que escribe se vuelve a leer igual
+        assert_eq!(
+            parse_csv(&to_csv(&t)).unwrap().rows[0],
+            vec![some("1"), some("x,y")]
+        );
+        assert_eq!(to_csv(&Table::default()), "");
+    }
+
+    #[test]
+    fn mysql_is_invoked_in_batch_mode_read_only_with_the_password_in_the_environment() {
+        let r: crate::credential::CredentialRef = "db.env#M".parse().unwrap();
+        let conn = crate::sql::my_conn(
+            &r,
+            &[
+                ("M_USER".into(), "app".into()),
+                ("M_PASSWORD".into(), "s3creto".into()),
+                ("M_DATABASE".into(), "tienda".into()),
+            ],
+        );
+        let ro = mysql_query_invocation(&conn, false);
+        assert_eq!(ro.program, "mysql");
+        assert!(ro.tsv);
+        assert_eq!(ro.stdin_prefix, "set session transaction read only;\n");
+        assert!(ro.args.contains(&"--batch".to_string()));
+        assert_eq!(ro.args.last().map(String::as_str), Some("tienda"));
+        assert_eq!(ro.env, [("MYSQL_PWD".to_string(), "s3creto".to_string())]);
+        assert!(!ro.args.join(" ").contains("s3creto"));
+        assert_eq!(mysql_query_invocation(&conn, true).stdin_prefix, "");
+    }
+
+    #[test]
+    fn the_mysql_catalog_queries_use_the_current_database() {
+        use crate::plan::CredentialKind::Mysql;
+        assert!(tables_query(Mysql).contains("table_schema = database()"));
+        let q = columns_query(Mysql, "clientes").unwrap();
+        assert!(
+            q.contains("table_name = 'clientes' and table_schema = database()"),
+            "{q}"
+        );
+        let q = columns_query(Mysql, "otra.clientes").unwrap();
+        assert!(q.contains("table_schema = 'otra'"), "{q}");
+        assert!(columns_query(Mysql, "a'b").is_err());
     }
 }

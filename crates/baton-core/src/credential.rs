@@ -168,6 +168,45 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
             optional: true,
         },
     ];
+    // MySQL y MariaDB: los mismos campos que PostgreSQL; la contraseña viaja en `MYSQL_PWD`.
+    const MYSQL: [FieldSpec; 6] = [
+        FieldSpec {
+            key: "USER",
+            label: "usuario",
+            secret: false,
+            optional: false,
+        },
+        FieldSpec {
+            key: "PASSWORD",
+            label: "contraseña",
+            secret: true,
+            optional: false,
+        },
+        FieldSpec {
+            key: "HOST",
+            label: "host",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "PORT",
+            label: "puerto",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "DATABASE",
+            label: "base",
+            secret: false,
+            optional: true,
+        },
+        FieldSpec {
+            key: "CONTAINER",
+            label: "contenedor",
+            secret: false,
+            optional: true,
+        },
+    ];
     // Un archivo SQLite no tiene usuario ni contraseña: solo dónde está (relativa a la raíz del
     // proyecto, o absoluta). Va en una credencial, y no en el plan, porque cambia de una máquina o
     // un ambiente a otro.
@@ -189,6 +228,7 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
         CredentialKind::Ssh => &SSH,
         CredentialKind::Db => &DB,
         CredentialKind::Sqlite => &SQLITE,
+        CredentialKind::Mysql => &MYSQL,
         CredentialKind::Otro => &OTRO,
     }
 }
@@ -296,6 +336,10 @@ mod tests {
             ["USER", "PASSWORD", "HOST", "PORT", "DATABASE", "CONTAINER"]
         );
         assert_eq!(keys(CredentialKind::Sqlite), ["FILE"]);
+        assert_eq!(
+            keys(CredentialKind::Mysql),
+            ["USER", "PASSWORD", "HOST", "PORT", "DATABASE", "CONTAINER"]
+        );
         assert_eq!(keys(CredentialKind::Otro), ["VALUE"]);
         // los secretos nunca son el único dato visible sin enmascarar
         for k in [
@@ -303,6 +347,7 @@ mod tests {
             CredentialKind::Docker,
             CredentialKind::Ssh,
             CredentialKind::Db,
+            CredentialKind::Mysql,
         ] {
             assert!(fields_for(k).iter().any(|f| f.secret));
         }

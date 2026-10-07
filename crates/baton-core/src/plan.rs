@@ -182,13 +182,18 @@ pub enum CredentialKind {
     Db,
     /// Un archivo SQLite (`sqlite3`).
     Sqlite,
+    /// MySQL o MariaDB (`mysql`, directo o con `docker exec`).
+    Mysql,
     Otro,
 }
 
 impl CredentialKind {
     /// Una base de datos a la que se conecta un paso `sql` y que puede respaldarse.
     pub fn is_database(self) -> bool {
-        matches!(self, CredentialKind::Db | CredentialKind::Sqlite)
+        matches!(
+            self,
+            CredentialKind::Db | CredentialKind::Sqlite | CredentialKind::Mysql
+        )
     }
 }
 

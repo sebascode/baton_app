@@ -578,6 +578,18 @@ fn test_connection(
                 .collect();
             db_ping(reference, &resolved, None, DB_PING_TIMEOUT)
         }
+        CredentialKind::Mysql => {
+            let resolved: Vec<(String, String)> = baton_core::fields_for(kind)
+                .iter()
+                .enumerate()
+                .filter_map(|(i, spec)| {
+                    item.fields
+                        .get(i)
+                        .map(|f| (reference.variable(spec.key), f.value.value()))
+                })
+                .collect();
+            mysql_ping(reference, &resolved, None, DB_PING_TIMEOUT)
+        }
         CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
         CredentialKind::Git | CredentialKind::Otro => {
             (false, "sin prueba automática todavía".to_string())
@@ -657,6 +669,58 @@ fn db_ping(
             let stderr = baton_core::mask::redact(&done.stderr, &passwords);
             let line = first_line(&stderr, "la conexión falló");
             (false, line.trim_start_matches("psql: error: ").to_string())
+        }
+    }
+}
+
+/// Conecta a MySQL o MariaDB con los valores dados y corre una consulta trivial. La contraseña
+/// viaja en `MYSQL_PWD` (el entorno, nunca un argumento) y se tacha de cualquier mensaje.
+fn mysql_ping(
+    reference: &baton_core::CredentialRef,
+    resolved: &[(String, String)],
+    program: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> (bool, String) {
+    let conn = baton_core::sql::my_conn(reference, resolved);
+    if !conn.args.contains(&"-u".to_string()) {
+        return (false, "falta el usuario para probar".to_string());
+    }
+    let (default_program, args) = baton_core::sql::mysql_ping_command(&conn);
+    let program = program.map_or_else(
+        || std::ffi::OsString::from(&default_program),
+        |p| p.as_os_str().to_owned(),
+    );
+    match run_limited(&program, &args, &conn.env, timeout) {
+        Err(Unfinished::NotFound) => (
+            false,
+            if conn.container.is_some() {
+                "no se encontró docker en el PATH".to_string()
+            } else {
+                "no se encontró mysql en el PATH (o define un contenedor para usar docker exec)"
+                    .to_string()
+            },
+        ),
+        Err(Unfinished::TimedOut) => (
+            false,
+            format!("la base no respondió en {} s", timeout.as_secs().max(1)),
+        ),
+        Err(Unfinished::Other(e)) => (false, e),
+        Ok(done) if done.ok => (
+            true,
+            baton_core::sql::mysql_ping_summary(&done.stdout)
+                .unwrap_or_else(|| "conectado".to_string()),
+        ),
+        Ok(done) => {
+            let passwords: Vec<String> = conn.env.iter().map(|(_, v)| v.clone()).collect();
+            let stderr = baton_core::mask::redact(&done.stderr, &passwords);
+            // mysql avisa de la contraseña en la línea de comandos y de nombres de programa
+            // antiguos: el error de verdad es la primera línea que empieza con ERROR
+            let line = stderr
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with("ERROR"))
+                .map_or_else(|| first_line(&stderr, "la conexión falló"), str::to_string);
+            (false, line)
         }
     }
 }
@@ -1038,6 +1102,72 @@ exit 2"#,
         assert!(!ok);
         assert!(msg.contains("nadie"), "el error nombra al usuario: {msg}");
         assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
+    }
+
+    fn mysql_ping_with(body: &str, extra: &[(&str, &str)]) -> (bool, String) {
+        let (_d, script) = fake_psql(body);
+        let reference: baton_core::CredentialRef = "db.env#MY".parse().unwrap();
+        let mut resolved = vec![
+            ("MY_USER".to_string(), "app".to_string()),
+            ("MY_PASSWORD".to_string(), "contrasena-secreta".to_string()),
+        ];
+        resolved.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        // otro hilo puede estar escribiendo un ejecutable justo al hacer `fork`: se reintenta
+        for _ in 0..50 {
+            let r = mysql_ping(
+                &reference,
+                &resolved,
+                Some(&script),
+                std::time::Duration::from_secs(5),
+            );
+            if !r.1.contains("busy") && !r.1.contains("ocupado") {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unreachable!("el archivo siguió ocupado")
+    }
+
+    #[test]
+    fn a_reachable_mysql_reports_where_it_connected_with_the_password_in_the_environment() {
+        let (ok, msg) = mysql_ping_with(
+            r#"[ "$MYSQL_PWD" = contrasena-secreta ] || { echo "sin entorno" >&2; exit 2; }
+case "$*" in *contrasena*) echo "contrasena en argumentos" >&2; exit 3;; esac
+printf 'tienda\tapp@%%\t8.4.0\n'"#,
+            &[("MY_DATABASE", "tienda")],
+        );
+        assert!(ok, "{msg}");
+        assert_eq!(msg, "conectado a tienda como app@% (MySQL 8.4.0)");
+    }
+
+    #[test]
+    fn a_refused_mysql_connection_shows_the_error_line_without_the_password() {
+        let (ok, msg) = mysql_ping_with(
+            r#"echo "mysql: [Warning] Using a password on the command line interface can be insecure." >&2
+echo "ERROR 1045 (28000): Access denied for user 'app' (using password: YES) contrasena-secreta" >&2
+exit 1"#,
+            &[],
+        );
+        assert!(!ok);
+        assert!(
+            msg.starts_with("ERROR 1045 (28000): Access denied"),
+            "{msg}"
+        );
+        assert!(!msg.contains("contrasena-secreta"), "{msg}");
+    }
+
+    #[test]
+    fn mysql_without_a_user_or_without_the_client_says_what_is_missing() {
+        let reference: baton_core::CredentialRef = "db.env#MY".parse().unwrap();
+        let t = std::time::Duration::from_secs(1);
+        assert_eq!(
+            mysql_ping(&reference, &[], None, t),
+            (false, "falta el usuario para probar".to_string())
+        );
+        let missing = std::path::Path::new("/no/existe/mysql");
+        let user = [("MY_USER".to_string(), "app".to_string())];
+        let (ok, msg) = mysql_ping(&reference, &user, Some(missing), t);
+        assert!(!ok && msg.contains("no se encontró mysql"), "{msg}");
     }
 
     fn have_sqlite() -> bool {

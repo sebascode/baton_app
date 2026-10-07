@@ -261,6 +261,164 @@ pub fn sqlite_ping_command(file: &str) -> (String, Vec<String>) {
     )
 }
 
+// -------------------------------------------------------------------- MySQL
+
+/// Cómo llegar a un MySQL o MariaDB: los argumentos que no son secretos (`-u`, `-h`, `-P`), la base,
+/// la contraseña en `MYSQL_PWD` (el entorno, nunca un argumento) y, si vive en un contenedor, su
+/// nombre (se usa `docker exec`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MyConn {
+    /// `-u usuario [-h host -P puerto]`.
+    pub args: Vec<String>,
+    pub database: Option<String>,
+    pub env: Vec<(String, String)>,
+    pub container: Option<String>,
+}
+
+/// Arma la conexión de una credencial `mysql` con los valores ya resueltos (`PREFIJO_CAMPO`). Con
+/// contenedor, `host` y `puerto` no se usan: dentro del contenedor el cliente habla por su socket.
+pub fn my_conn(reference: &CredentialRef, resolved: &[(String, String)]) -> MyConn {
+    let get = |key: &str| {
+        let name = reference.variable(key);
+        resolved
+            .iter()
+            .find(|(n, v)| *n == name && !v.is_empty())
+            .map(|(_, v)| v.clone())
+    };
+    let container = get("CONTAINER");
+    let mut args = Vec::new();
+    if let Some(user) = get("USER") {
+        args.extend(["-u".to_string(), user]);
+    }
+    if container.is_none() {
+        if let Some(host) = get("HOST") {
+            args.extend(["-h".to_string(), host]);
+        }
+        if let Some(port) = get("PORT") {
+            args.extend(["-P".to_string(), port]);
+        }
+    }
+    let env = get("PASSWORD")
+        .map(|p| vec![("MYSQL_PWD".to_string(), p)])
+        .unwrap_or_default();
+    MyConn {
+        args,
+        database: get("DATABASE"),
+        env,
+        container,
+    }
+}
+
+impl MyConn {
+    /// El programa y sus argumentos para correr `client` (`mysql`, `mysqldump`) con la conexión y
+    /// `extra` antes de ella; con contenedor, a través de `docker exec`.
+    pub fn program(
+        &self,
+        client: &str,
+        extra: &[&str],
+        interactive: bool,
+    ) -> (String, Vec<String>) {
+        let mut tail: Vec<String> = extra.iter().map(|s| (*s).to_string()).collect();
+        tail.extend(self.args.iter().cloned());
+        if let Some(db) = &self.database {
+            tail.push(db.clone());
+        }
+        match &self.container {
+            None => (client.to_string(), tail),
+            Some(container) => {
+                let mut args = vec!["exec".to_string()];
+                if interactive {
+                    args.push("-i".to_string());
+                }
+                for (name, _) in &self.env {
+                    args.push("-e".to_string());
+                    args.push(name.clone());
+                }
+                args.push(container.clone());
+                args.push(client.to_string());
+                args.extend(tail);
+                ("docker".to_string(), args)
+            }
+        }
+    }
+
+    /// El mismo comando como una línea de shell.
+    fn line(&self, client: &str, extra: &[&str], interactive: bool) -> String {
+        let (program, args) = self.program(client, extra, interactive);
+        std::iter::once(program)
+            .chain(args.iter().map(|a| sh_quote(a)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// El comando que corre un archivo `.sql` contra MySQL (dentro de la carpeta del archivo). El
+/// primer error detiene el archivo (el cliente sale con 1), como `ON_ERROR_STOP` en `psql`.
+pub fn mysql_run_command(conn: &MyConn, file: &str) -> String {
+    format!("{} < {}", conn.line("mysql", &[], true), sh_quote(file))
+}
+
+/// Volcado consistente de la base (`--single-transaction`, con rutinas y disparadores) a `file`.
+/// El volcado trae `DROP TABLE IF EXISTS` de cada tabla, así que restaurarlo la reemplaza.
+pub fn mysqldump_command(conn: &MyConn, file: &str) -> String {
+    format!(
+        "{} > {}",
+        conn.line(
+            "mysqldump",
+            &["--single-transaction", "--routines", "--triggers"],
+            false
+        ),
+        sh_quote(file)
+    )
+}
+
+/// Restaura un volcado de `mysqldump` sobre la base.
+pub fn mysql_restore_command(conn: &MyConn, file: &str) -> String {
+    mysql_run_command(conn, file)
+}
+
+/// Nombre de la base para el archivo de respaldo: la base, si no el usuario, si no `db`.
+pub fn mysql_label(conn: &MyConn) -> String {
+    let user = conn
+        .args
+        .windows(2)
+        .find(|w| w[0] == "-u")
+        .map(|w| w[1].as_str());
+    sanitize_label(conn.database.as_deref().or(user).unwrap_or("db"))
+}
+
+/// La prueba de conexión: una consulta trivial con base, usuario y versión.
+pub fn mysql_ping_command(conn: &MyConn) -> (String, Vec<String>) {
+    conn.program(
+        "mysql",
+        &[
+            "--connect-timeout=5",
+            "-N",
+            "-B",
+            "-e",
+            "select database(), current_user(), version()",
+        ],
+        false,
+    )
+}
+
+/// Lo que respondió la prueba: `tienda\tapp@%\t8.4.0` pasa a `conectado a tienda como app@% (MySQL 8.4.0)`.
+pub fn mysql_ping_summary(stdout: &str) -> Option<String> {
+    let line = stdout.lines().find(|l| !l.trim().is_empty())?;
+    let mut parts = line.trim().split('\t');
+    let (db, user) = (parts.next()?, parts.next()?);
+    let version = parts.next().filter(|v| !v.is_empty());
+    let target = if db == "NULL" {
+        format!("conectado como {user}")
+    } else {
+        format!("conectado a {db} como {user}")
+    };
+    Some(match version {
+        Some(v) => format!("{target} (MySQL {v})"),
+        None => target,
+    })
+}
+
 // --------------------------------------------------------------- destructivas
 
 /// Una sentencia que puede destruir datos.
@@ -830,5 +988,84 @@ mod tests {
         ] {
             assert_eq!(ends_statement(sql), done, "{sql:?}");
         }
+    }
+
+    fn my(pairs: &[(&str, &str)]) -> MyConn {
+        let r: CredentialRef = "db.env#M".parse().unwrap();
+        let resolved: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (format!("M_{k}"), (*v).to_string()))
+            .collect();
+        my_conn(&r, &resolved)
+    }
+
+    #[test]
+    fn the_mysql_connection_keeps_the_password_in_the_environment_only() {
+        let c = my(&[
+            ("USER", "app"),
+            ("PASSWORD", "s3creto"),
+            ("HOST", "db.interno"),
+            ("PORT", "3307"),
+            ("DATABASE", "tienda"),
+        ]);
+        assert_eq!(c.args, ["-u", "app", "-h", "db.interno", "-P", "3307"]);
+        assert_eq!(c.env, [("MYSQL_PWD".to_string(), "s3creto".to_string())]);
+        assert!(!c.args.join(" ").contains("s3creto"));
+        let run = mysql_run_command(&c, "01 esquema.sql");
+        assert_eq!(
+            run,
+            "mysql '-u' 'app' '-h' 'db.interno' '-P' '3307' 'tienda' < '01 esquema.sql'"
+        );
+        assert!(!run.contains("s3creto"));
+    }
+
+    #[test]
+    fn a_mysql_container_drops_host_and_port_and_passes_the_password_by_name() {
+        let c = my(&[
+            ("USER", "app"),
+            ("PASSWORD", "s3creto"),
+            ("HOST", "ignorado"),
+            ("DATABASE", "tienda"),
+            ("CONTAINER", "mi-mysql"),
+        ]);
+        assert_eq!(c.args, ["-u", "app"]);
+        assert_eq!(
+            mysql_run_command(&c, "a.sql"),
+            "docker 'exec' '-i' '-e' 'MYSQL_PWD' 'mi-mysql' 'mysql' '-u' 'app' 'tienda' < 'a.sql'"
+        );
+        assert_eq!(
+            mysqldump_command(&c, "/b/t.mysql.sql"),
+            "docker 'exec' '-e' 'MYSQL_PWD' 'mi-mysql' 'mysqldump' '--single-transaction' '--routines' '--triggers' '-u' 'app' 'tienda' > '/b/t.mysql.sql'"
+        );
+        assert!(!mysql_run_command(&c, "a.sql").contains("s3creto"));
+    }
+
+    #[test]
+    fn the_mysql_dump_label_is_the_database_then_the_user() {
+        assert_eq!(
+            mysql_label(&my(&[("USER", "app"), ("DATABASE", "tienda")])),
+            "tienda"
+        );
+        assert_eq!(mysql_label(&my(&[("USER", "app")])), "app");
+        assert_eq!(mysql_label(&my(&[])), "db");
+        assert_eq!(mysql_label(&my(&[("DATABASE", "a/b c")])), "a-b-c");
+    }
+
+    #[test]
+    fn the_mysql_ping_runs_directly_and_reads_its_answer() {
+        let c = my(&[("USER", "app"), ("PASSWORD", "x"), ("DATABASE", "tienda")]);
+        let (program, args) = mysql_ping_command(&c);
+        assert_eq!(program, "mysql");
+        assert_eq!(args.last().map(String::as_str), Some("tienda"));
+        assert!(args.contains(&"--connect-timeout=5".to_string()));
+        assert_eq!(
+            mysql_ping_summary("tienda\tapp@%\t8.4.0\n").as_deref(),
+            Some("conectado a tienda como app@% (MySQL 8.4.0)")
+        );
+        assert_eq!(
+            mysql_ping_summary("NULL\tapp@%\t8.4.0\n").as_deref(),
+            Some("conectado como app@% (MySQL 8.4.0)")
+        );
+        assert_eq!(mysql_ping_summary(""), None);
     }
 }
