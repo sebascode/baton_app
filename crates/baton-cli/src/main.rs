@@ -3,6 +3,7 @@
 mod ambiente;
 mod ask;
 mod config_run;
+mod history_cmd;
 mod import;
 mod last;
 mod overview;
@@ -229,6 +230,14 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+    },
+    /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
+    History {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+        /// Cuántas ejecuciones se muestran, de la más reciente a la más antigua
+        #[arg(long, default_value_t = 20, value_name = "N")]
+        limit: usize,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
     Config,
@@ -537,6 +546,12 @@ fn main() -> ExitCode {
         Command::Rollback { plan, ambiente } => {
             match pick::resolve(&project, plan, "rollback", "deshacer") {
                 Ok(plan) => run::rollback(&project, &plan, ambiente.as_deref()),
+                Err(code) => code,
+            }
+        }
+        Command::History { plan, limit } => {
+            match pick::resolve(&project, plan, "history", "consultar") {
+                Ok(plan) => history_cmd::run(&project, &plan, limit),
                 Err(code) => code,
             }
         }

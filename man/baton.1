@@ -157,6 +157,11 @@ Muestra cómo terminó la última ejecución de un plan: el resultado, una barra
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
+.SS baton history [plan]
+Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Sale con 1 si el plan todavía no se ejecutó.
+.TP
+.BI \-\-limit " n"
+Cuántas ejecuciones se muestran (20 por defecto).
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
@@ -574,7 +579,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. No hay un comando de texto para el historial: se ve desde la aplicación. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),

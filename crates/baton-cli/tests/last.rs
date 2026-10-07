@@ -253,3 +253,52 @@ fn last_is_a_reserved_plan_name() {
     let o = fx.baton(&["copy", "instalar", "last"]);
     assert_eq!(o.status.code(), Some(2), "{}", err(&o));
 }
+
+#[test]
+fn history_lists_every_remembered_run_newest_first_and_honours_the_limit() {
+    let toggle = "name = \"mixto\"\n[[steps]]\nid = \"a\"\nname = \"Preparar\"\ntype = \"comando\"\ncommand = \"true\"\n\
+                  [[steps]]\nid = \"b\"\nname = \"Desplegar\"\ntype = \"comando\"\ncommand = \"test ! -f FALLAR\"\n";
+    let fx = Fx::new(&[("mixto", toggle)]);
+    assert_eq!(fx.run("mixto").status.code(), Some(0));
+    fs::write(fx.root.join("FALLAR"), "").unwrap();
+    assert_eq!(fx.run("mixto").status.code(), Some(3));
+    fs::remove_file(fx.root.join("FALLAR")).unwrap();
+    assert_eq!(fx.run("mixto").status.code(), Some(0));
+
+    let o = fx.baton(&["history", "mixto"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let text = out(&o);
+    has(
+        &text,
+        &[
+            "mixto · 3 ejecuciones (2 ✓  1 ✗)",
+            "falló en «Desplegar»",
+            "completada",
+            "■■",
+            "baton last mixto",
+        ],
+    );
+    let rows: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("  ✓") || l.starts_with("  ✗"))
+        .collect();
+    assert_eq!(rows.len(), 3, "{text}");
+    assert!(rows[0].starts_with("  ✓") && rows[1].starts_with("  ✗") && rows[2].starts_with("  ✓"));
+
+    let text = out(&fx.baton(&["history", "mixto", "--limit", "1"]));
+    has(&text, &["... y 2 más"]);
+    assert_eq!(text.lines().filter(|l| l.starts_with("  ✓")).count(), 1);
+}
+
+#[test]
+fn history_without_runs_or_with_an_unknown_plan_says_what_to_do() {
+    let fx = Fx::new(&[("instalar", PLAN)]);
+    let o = fx.baton(&["history", "instalar"]);
+    assert_eq!(o.status.code(), Some(1));
+    has(&out(&o), &["todavía no se ejecutó", "baton run instalar"]);
+    assert_eq!(fx.baton(&["history", "fantasma"]).status.code(), Some(2));
+    assert_eq!(
+        fx.baton(&["copy", "instalar", "history"]).status.code(),
+        Some(2)
+    );
+}
