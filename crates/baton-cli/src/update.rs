@@ -62,6 +62,7 @@ fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
     if flags.check {
         match kind {
             InstallKind::Homebrew => println!("actualiza con: brew upgrade baton"),
+            InstallKind::Package => println!("baja el paquete nuevo: {REPO}/releases/latest"),
             InstallKind::Direct => println!("actualiza con: baton update"),
             InstallKind::Development => {}
         }
@@ -83,6 +84,9 @@ fn refuse_if_managed(kind: InstallKind) -> Option<ExitCode> {
         InstallKind::Direct => return None,
         InstallKind::Homebrew => {
             "este baton se instaló con Homebrew: actualiza con `brew upgrade baton`"
+        }
+        InstallKind::Package => {
+            "este baton lo instaló un paquete (.deb o .rpm) y lo gestiona el sistema: baja el paquete de la versión nueva desde https://github.com/sebascode/baton_app/releases/latest"
         }
         InstallKind::Development => {
             "este baton es un build de desarrollo (target/): vuelve a compilarlo o usa scripts/install.sh"

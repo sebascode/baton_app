@@ -2,7 +2,8 @@ name: release
 
 # Al subir un tag vX.Y.Z compila baton para cada plataforma y publica el release con un
 # `baton-vX.Y.Z-<plataforma>.tar.gz` y su `.sha256` por plataforma: es lo que baja `baton update`
-# (los nombres tienen que coincidir con baton-core/src/update.rs).
+# (los nombres tienen que coincidir con baton-core/src/update.rs). Además arma los paquetes
+# .deb y .rpm de Linux con esos mismos binarios.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -75,10 +76,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      # el repositorio trae packaging/nfpm.yaml, LICENSE y scripts/build-packages.sh
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # .deb y .rpm (amd64 y arm64) con los mismos binarios estáticos de Linux del release
+      - name: Paquetes .deb y .rpm
+        run: scripts/build-packages.sh "${GITHUB_REF_NAME#v}" dist
 
       - name: Publicar el release
         env:

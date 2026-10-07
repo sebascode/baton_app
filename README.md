@@ -31,13 +31,29 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 
 ## Instalación
 
-Con Homebrew (macOS y Linux), compilando desde el código fuente:
+Elige una:
+
+**Una línea** (Linux y macOS con Apple Silicon; sin Rust ni Homebrew). Baja el binario de tu plataforma, comprueba su suma sha256 y lo deja en `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sebascode/baton_app/main/scripts/get.sh | sh
+```
+
+Con otra versión o carpeta: `... | sh -s -- --version 0.3.0 --dir /usr/local/bin`.
+
+**Homebrew** (macOS y Linux), compilando desde el código fuente:
 
 ```sh
 brew install sebascode/baton/baton
 ```
 
-O a mano, con Rust 1.88 o superior:
+**Paquetes de Linux**: cada [release](https://github.com/sebascode/baton_app/releases/latest) trae un `.deb` (Debian, Ubuntu...) y un `.rpm` (Fedora, RHEL...) para x86_64 y arm64, con su `.sha256`:
+
+```sh
+sudo apt install ./baton_0.3.0-1_amd64.deb      # o: sudo dnf install ./baton-0.3.0-1.x86_64.rpm
+```
+
+**A mano**, con Rust 1.88 o superior:
 
 ```sh
 git clone https://github.com/sebascode/baton_app
@@ -49,7 +65,9 @@ Para volver a la versión anterior: `scripts/install.sh --rollback`. Comprueba c
 
 ### Actualizar
 
-Con Homebrew: `brew upgrade baton`. En cualquier otro caso, baton se actualiza solo:
+- Instalado con la línea de arriba, a mano o con un binario del release: `baton update` (abajo).
+- Con Homebrew: `brew upgrade baton`.
+- Con un `.deb` o `.rpm`: baja el paquete de la versión nueva e instálalo igual (`baton update` te lo recuerda y no toca `/usr/bin`).
 
 ```sh
 baton update --check      # ¿hay una versión nueva? (una consulta a GitHub, no descarga nada)

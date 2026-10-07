@@ -99,6 +99,8 @@ pub enum InstallKind {
     Development,
     /// Lo gestiona Homebrew: se actualiza con `brew upgrade`.
     Homebrew,
+    /// Lo instaló un paquete (`.deb` o `.rpm`, en `/usr/bin`): lo gestiona el sistema.
+    Package,
     /// Copiado directamente (`install.sh` o una descarga): `baton update` puede reemplazarlo.
     Direct,
 }
@@ -113,6 +115,9 @@ pub fn install_kind(exe: &str) -> InstallKind {
         .any(|p| lower.contains(p))
     {
         InstallKind::Homebrew
+    } else if lower.starts_with("/usr/bin/") {
+        // `/usr/local/bin` no entra aquí: es donde la gente copia binarios a mano
+        InstallKind::Package
     } else {
         InstallKind::Direct
     }
@@ -261,5 +266,11 @@ mod tests {
             Homebrew
         );
         assert_eq!(install_kind("/opt/homebrew/bin/baton"), Homebrew);
+        assert_eq!(install_kind("/usr/bin/baton"), Package);
+        assert_eq!(
+            install_kind("/usr/local/bin/baton"),
+            Direct,
+            "copiado a mano"
+        );
     }
 }

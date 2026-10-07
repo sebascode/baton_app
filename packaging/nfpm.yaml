@@ -1,0 +1,51 @@
+# Paquetes .deb y .rpm de baton (los arma scripts/build-packages.sh con nfpm).
+# Las variables ${...} las pone ese script: ARCH (amd64 | arm64), VERSION, BINARY y MANPAGE.
+name: baton
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: "1"
+section: admin
+priority: optional
+maintainer: Sebas Contreras <swf.sebas@gmail.com>
+homepage: https://github.com/sebascode/baton_app
+license: MIT
+description: |
+  Orquesta instalaciones y despliegues definidos en carpetas.
+  Ejecuta, en orden, pasos de docker compose, Dockerfile, scripts sh y SQL
+  (PostgreSQL, MySQL, SQLite), en tu máquina, por ssh o en un docker context, y
+  muestra en todo momento qué está pasando. Binario estático: no depende de nada.
+# Lo que baton usa si está, no lo exige: ssh y rsync para los destinos remotos, docker o podman
+# para compose y Dockerfile, y los clientes de la base que consultes.
+recommends:
+  - openssh-client
+  - rsync
+  - curl
+overrides:
+  rpm:
+    # en Fedora y derivadas el cliente de ssh se llama openssh-clients
+    recommends:
+      - openssh-clients
+      - rsync
+      - curl
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/baton
+    expand: true
+    file_info:
+      mode: 0755
+  - src: ${MANPAGE}
+    dst: /usr/share/man/man1/baton.1.gz
+    expand: true
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/baton/copyright
+    file_info:
+      mode: 0644
+    packager: deb
+  - src: LICENSE
+    dst: /usr/share/licenses/baton/LICENSE
+    file_info:
+      mode: 0644
+    packager: rpm
