@@ -15,10 +15,10 @@ name = "baton"
 path = "src/main.rs"
 
 [dependencies]
-baton-core = { version = "0.1.0", path = "../baton-core" }
-baton-exec = { version = "0.1.0", path = "../baton-exec" }
-baton-store = { version = "0.1.0", path = "../baton-store" }
-baton-tui = { version = "0.1.0", path = "../baton-tui" }
+baton-core = { version = "0.2.0", path = "../baton-core" }
+baton-exec = { version = "0.2.0", path = "../baton-exec" }
+baton-store = { version = "0.2.0", path = "../baton-store" }
+baton-tui = { version = "0.2.0", path = "../baton-tui" }
 clap = { version = "4.6.7", features = ["derive"] }
 inquire = "0.9.4"
 
