@@ -4,7 +4,7 @@ Herramienta de terminal para orquestar instalaciones y despliegues. Defines un p
 
 Está pensada para ser simple y amigable: pantallas con teclado, backup y rollback siempre opcionales, y nada sale de tu máquina que no deba.
 
-> Estado: proyecto personal en desarrollo (versión 0.3). Solo se ha probado en Linux y macOS con Apple Silicon.
+> Estado: proyecto personal en desarrollo (versión 0.4). Solo se ha probado en Linux y macOS con Apple Silicon.
 
 ## Qué es
 
@@ -157,6 +157,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-07 | **0.1.0.** CI en Linux y macOS, copiar, renombrar y eliminar planes, licencia MIT, guía para asistentes de IA e instalación con Homebrew. |
 | 2026-10-07 | **0.2.0.** `baton update` y binarios en cada release. `{ambiente}` en los comandos. `baton last` y `baton history`, y un resumen visual en `baton`. Llaves ssh con frase secreta y bastion con llave propia. Exportación de logs a OTLP y syslog. |
 | 2026-10-07 | **0.3.0.** Varias bases de datos por plan y SQLite junto a PostgreSQL. Probar la conexión de una credencial `db`. "Abrir shell" en el destino del paso que falló. `baton db`: consultas de solo lectura contra las bases del plan, en tabla, CSV o JSON. |
+| 2026-10-07 | **0.4.0.** MySQL y MariaDB. Sesión interactiva de `baton db`, con historial y comandos para ver tablas y columnas. Instalador de una línea y paquetes `.deb` y `.rpm`. |
 
 ## Desarrollo
 
