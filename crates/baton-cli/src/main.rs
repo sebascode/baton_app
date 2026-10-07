@@ -11,6 +11,7 @@ mod shell_init;
 mod start;
 mod text_run;
 mod tui_run;
+mod update;
 mod validate;
 
 use std::ffi::OsString;
@@ -51,6 +52,15 @@ struct Cli {
 enum Command {
     /// Muestra la versión instalada (también: `baton -V` / `baton --version`)
     Version,
+    /// Busca una versión nueva de baton en GitHub y la instala (no necesita proyecto)
+    Update {
+        /// Solo avisa si hay una versión nueva; no descarga ni instala nada
+        #[arg(long, conflicts_with = "rollback")]
+        check: bool,
+        /// Vuelve a la versión que había antes de la última actualización
+        #[arg(long)]
+        rollback: bool,
+    },
     /// Valida la configuración y los planes (todos, o solo el indicado)
     Validate {
         /// Nombre del plan (archivo en baton/plans/)
@@ -333,6 +343,9 @@ fn main() -> ExitCode {
         println!("baton {VERSION}");
         return ExitCode::SUCCESS;
     }
+    if let Some(Command::Update { check, rollback }) = cli.command {
+        return update::run(update::Flags { check, rollback });
+    }
     if let Some(Command::Demo { fast, screen }) = cli.command {
         return demo(fast, screen.into());
     }
@@ -537,6 +550,7 @@ fn main() -> ExitCode {
         | Command::Init { .. }
         | Command::Create { .. }
         | Command::Import { .. }
+        | Command::Update { .. }
         | Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
     }
 }

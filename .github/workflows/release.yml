@@ -1,0 +1,91 @@
+name: release
+
+# Al subir un tag vX.Y.Z compila baton para cada plataforma y publica el release con un
+# `baton-vX.Y.Z-<plataforma>.tar.gz` y su `.sha256` por plataforma: es lo que baja `baton update`
+# (los nombres tienen que coincidir con baton-core/src/update.rs).
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Linux con musl: un binario estático que corre en cualquier distribución (todo el código
+          # es Rust, no hace falta musl-gcc).
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          # macos-latest es Apple Silicon (arm64). Intel no se soporta.
+          - platform: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: El tag coincide con la versión del Cargo.toml
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "baton"))')"
+          test "v$version" = "$GITHUB_REF_NAME" \
+            || { echo "el tag $GITHUB_REF_NAME no coincide con la versión $version del Cargo.toml" >&2; exit 1; }
+
+      - name: Compilar
+        run: cargo build --release --locked --target ${{ matrix.target }} -p baton
+
+      - name: Empaquetar
+        run: |
+          name="baton-${GITHUB_REF_NAME}-${{ matrix.platform }}"
+          mkdir stage
+          cp "target/${{ matrix.target }}/release/baton" man/baton.1 LICENSE stage/
+          # el binario tiene que ejecutarse y decir la versión del tag
+          stage/baton version | tee /dev/stderr | grep -q "^baton ${GITHUB_REF_NAME#v} "
+          tar -czf "$name.tar.gz" -C stage baton baton.1 LICENSE
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            baton-*.tar.gz
+            baton-*.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publicar el release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

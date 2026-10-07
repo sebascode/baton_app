@@ -19,6 +19,7 @@ pub mod sql;
 pub mod step_run;
 pub mod template;
 pub mod units;
+pub mod update;
 pub mod validate;
 
 pub use config::Config;

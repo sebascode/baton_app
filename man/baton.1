@@ -176,6 +176,16 @@ Imprime la etiqueta del proyecto que contiene la carpeta actual, por ejemplo \fB
 Formato de la etiqueta: \fB{name}\fR es la carpeta del proyecto y \fB{root}\fR su ruta completa. Por defecto, \fB(baton:{name})\fR.
 .SS baton version
 Imprime \fBbaton <versión> (<commit>)\fR, o \fB(<commit>, con cambios locales)\fR si se compiló con cambios sin commitear. No necesita proyecto.
+.SS baton update
+Busca en GitHub si hay una versión más nueva de baton y, si la hay, la instala. Consultar es barato: pregunta cuál es el último release y no descarga nada si ya tienes esa versión. Si hay una nueva, baja el binario de tu plataforma (Linux x86_64 y aarch64, macOS con Apple Silicon), comprueba su suma sha256 y que el binario responda con la versión esperada, y solo entonces reemplaza el instalado, de forma atómica. Deja el anterior como \fBbaton.prev\fR, junto al ejecutable. Si ya hay una página de manual instalada, la actualiza. No necesita proyecto ni hace nada por su cuenta: solo consulta la red cuando lo ejecutas. Usa los programas del sistema \fBcurl\fR, \fBtar\fR y \fBsha256sum\fR (o \fBshasum\fR).
+.PP
+Si baton se instaló con Homebrew, \fBupdate\fR no lo toca y te indica \fBbrew upgrade baton\fR; un build de desarrollo (\fItarget/\fR) tampoco se reemplaza. Sale con 0 si todo bien (también si ya tienes la última), con 1 si no se pudo consultar, descargar o verificar (no se instala nada) y con 2 si el binario lo gestiona otra herramienta.
+.TP
+.B \-\-check
+Solo avisa si hay una versión nueva; no descarga ni instala nada.
+.TP
+.B \-\-rollback
+Vuelve a la versión que había antes de la última actualización (\fBbaton.prev\fR).
 .SS baton (sin argumentos)
 Muestra el proyecto, sus planes (cantidad de pasos, si tienen errores y cómo terminó la última ejecución) y qué comandos usar a continuación. Fuera de un proyecto, explica cómo empezar.
 .

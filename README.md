@@ -47,6 +47,18 @@ scripts/install.sh        # instala en ~/.local/bin y deja el manual (man baton)
 
 Para volver a la versión anterior: `scripts/install.sh --rollback`. Comprueba con `baton version`.
 
+### Actualizar
+
+Con Homebrew: `brew upgrade baton`. En cualquier otro caso, baton se actualiza solo:
+
+```sh
+baton update --check      # ¿hay una versión nueva? (una consulta a GitHub, no descarga nada)
+baton update              # baja el binario del release, verifica su sha256 y lo reemplaza
+baton update --rollback   # vuelve a la versión anterior
+```
+
+Cada release de GitHub trae binarios para Linux (x86_64 y aarch64) y macOS (Apple Silicon). `baton update` necesita `curl`, `tar` y `sha256sum` (o `shasum`), y nunca consulta la red por su cuenta.
+
 ## Cómo usarlo
 
 Prueba las pantallas con datos falsos, sin tocar nada:
