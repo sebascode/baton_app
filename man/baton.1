@@ -152,6 +152,11 @@ Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso 
 .TP
 .BI \-\-ambiente " ambiente"
 Ambiente de los comandos de rollback que usan \fB{ambiente}\fR y de las credenciales; se elige igual que en \fBbaton run\fR.
+.SS baton last [plan]
+Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó.
+.TP
+.BI \-\-lines " n"
+Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
@@ -190,7 +195,7 @@ Solo avisa si hay una versión nueva; no descarga ni instala nada.
 .B \-\-rollback
 Vuelve a la versión que había antes de la última actualización (\fBbaton.prev\fR).
 .SS baton (sin argumentos)
-Muestra el proyecto, sus planes (cantidad de pasos, si tienen errores y cómo terminó la última ejecución) y qué comandos usar a continuación. Fuera de un proyecto, explica cómo empezar.
+Muestra el proyecto y sus planes. Por cada plan: cuántos pasos tiene, si tiene errores, y si ya se ejecutó, una barra con el avance de la última ejecución, cómo terminó (y en qué paso falló), hace cuánto, cuánto tardó y cuántas ejecuciones lleva con su desglose. Sugiere los siguientes comandos, con \fBbaton last\fR primero si algún plan falló. Con color solo si la salida es una terminal; \fBNO_COLOR\fR lo desactiva. Fuera de un proyecto, explica cómo empezar.
 .
 .SH PREGUNTAS PARA SCRIPTS
 .nf

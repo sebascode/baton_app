@@ -4,12 +4,14 @@ mod ambiente;
 mod ask;
 mod config_run;
 mod import;
+mod last;
 mod overview;
 mod pick;
 mod plans_cmd;
 mod run;
 mod shell_init;
 mod start;
+mod style;
 mod text_run;
 mod tui_run;
 mod update;
@@ -219,6 +221,14 @@ enum Command {
         /// Ambiente de los comandos de rollback que usan {ambiente} y de las credenciales
         #[arg(long)]
         ambiente: Option<String>,
+    },
+    /// Cómo terminó la última ejecución de un plan, y el error si falló
+    Last {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+        /// Cuántas líneas de la salida del paso que falló se muestran
+        #[arg(long, default_value_t = 15, value_name = "N")]
+        lines: usize,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
     Config,
@@ -530,6 +540,10 @@ fn main() -> ExitCode {
                 Err(code) => code,
             }
         }
+        Command::Last { plan, lines } => match pick::resolve(&project, plan, "last", "consultar") {
+            Ok(plan) => last::run(&project, &plan, lines),
+            Err(code) => code,
+        },
         Command::Copy { plan, nuevo } => plans_cmd::copy(&project, &plan, &nuevo),
         Command::Rename { plan, nuevo } => plans_cmd::rename(&project, &plan, &nuevo),
         Command::Delete { plan, yes } => plans_cmd::delete(&project, &plan, yes),

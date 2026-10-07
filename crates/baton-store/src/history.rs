@@ -9,6 +9,9 @@ use chrono::{DateTime, FixedOffset};
 
 use crate::state::{LastRun, RunStatus, State, StepRecord, StepState};
 
+/// Un instante con su zona, tal como lo guarda `state.json`.
+pub type Now = DateTime<FixedOffset>;
+
 /// La hora actual, con la zona local.
 pub fn now() -> DateTime<FixedOffset> {
     chrono::Local::now().fixed_offset()
@@ -105,6 +108,31 @@ pub fn entries(state: &State, plan: &Plan, now: DateTime<FixedOffset>) -> Vec<Hi
             has_log: run.log_path.is_some(),
         })
         .collect()
+}
+
+/// Cuántas ejecuciones recuerda `state.json` de un plan y cómo terminó cada una.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunCounts {
+    pub total: usize,
+    /// Completadas, con o sin advertencias.
+    pub completed: usize,
+    pub failed: usize,
+    /// Abortadas o que quedaron sin terminar.
+    pub aborted: usize,
+}
+
+/// Cuenta las ejecuciones recordadas (la última y el historial, tope [`crate::state::HISTORY_LIMIT`]).
+pub fn run_counts(state: &State, plan: &str) -> RunCounts {
+    let mut c = RunCounts::default();
+    for run in state.runs(plan) {
+        c.total += 1;
+        match outcome(run.status) {
+            RunOutcome::Completed | RunOutcome::CompletedWithWarnings => c.completed += 1,
+            RunOutcome::Failed => c.failed += 1,
+            RunOutcome::Aborted => c.aborted += 1,
+        }
+    }
+    c
 }
 
 /// La franja de la vista del plan; `None` si el plan nunca se ejecutó.
@@ -339,5 +367,34 @@ mod tests {
         assert_eq!(e[1].duration, Some(Duration::from_secs(42)));
         assert_eq!(e[1].started, "2026-10-01 17:57");
         assert!(e[1].has_log);
+    }
+
+    #[test]
+    fn counts_every_remembered_run_by_how_it_ended() {
+        let mut state = State::default();
+        assert_eq!(run_counts(&state, "p"), RunCounts::default());
+        for status in [
+            RunStatus::Completed,
+            RunStatus::Failed,
+            RunStatus::CompletedWithWarnings,
+            RunStatus::Aborted,
+            RunStatus::Running,
+            RunStatus::Failed,
+        ] {
+            state.archive_last_run("p");
+            state.set_last_run("p", run(status, &[("build", record(StepState::Done, 1))]));
+        }
+        let c = run_counts(&state, "p");
+        assert_eq!(
+            c,
+            RunCounts {
+                total: 6,
+                completed: 2,
+                failed: 2,
+                aborted: 2
+            },
+            "un Running que quedó guardado cuenta como abortado"
+        );
+        assert_eq!(run_counts(&state, "otro").total, 0);
     }
 }

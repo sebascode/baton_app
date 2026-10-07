@@ -110,15 +110,19 @@ fn bare_baton_in_a_project_lists_its_plans_and_what_to_do_next() {
     let o = baton(tmp.path(), &[]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     let t = out(&o);
-    assert!(t.contains("planes:"), "{t}");
+    assert!(t.contains("planes    3"), "{t}");
     let line = |name: &str| {
         t.lines()
-            .find(|l| l.trim_start().starts_with(name))
+            .find(|l| {
+                l.trim_start()
+                    .trim_start_matches(['○', '✓', '✗', '!', ' '])
+                    .starts_with(name)
+            })
             .unwrap_or("")
             .to_string()
     };
     assert!(
-        line("instalar").contains("1 paso(s)") && line("instalar").contains("sin ejecutar"),
+        line("instalar").contains("1 paso ·") && line("instalar").contains("sin ejecutar"),
         "{t}"
     );
     assert!(line("roto").contains("con errores"), "{t}");
@@ -309,7 +313,7 @@ fn bare_baton_in_a_subfolder_shows_the_project_and_where_you_are() {
     let t = out(&o);
     assert!(
         t.contains(&format!(
-            "proyecto: {} (una carpeta superior; estás en web/src/)",
+            "proyecto  {} (una carpeta superior; estás en web/src/)",
             root.display()
         )),
         "{t}"

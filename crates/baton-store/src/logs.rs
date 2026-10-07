@@ -153,6 +153,49 @@ pub fn parse_log_line(raw: &str) -> LogLine {
     }
 }
 
+/// Lo que pasó en un paso, sacado de su log: el último comando y lo que escribió después.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepExcerpt {
+    /// El último comando que corrió el paso (sin el `$ `).
+    pub command: Option<String>,
+    /// Sus últimas líneas, de la más vieja a la más nueva, con su tipo y sin el prefijo del paso.
+    pub lines: Vec<(LogKind, String)>,
+    /// Cuántas líneas anteriores quedaron fuera.
+    pub omitted: usize,
+}
+
+/// Las últimas `max` líneas del paso `step_id` desde su último comando (salida y errores; los
+/// éxitos y los comandos anteriores no). Un paso que no aparece en el log da `None`.
+pub fn step_excerpt(log: &ReadLog, step_id: &str, max: usize) -> Option<StepExcerpt> {
+    let prefix = format!("{step_id}: ");
+    let own: Vec<(LogKind, &str)> = log
+        .lines
+        .iter()
+        .filter_map(|l| l.text.strip_prefix(&prefix).map(|t| (l.kind, t)))
+        .collect();
+    if own.is_empty() {
+        return None;
+    }
+    let from = own
+        .iter()
+        .rposition(|(k, _)| *k == LogKind::Command)
+        .map_or(0, |i| i + 1);
+    let command = from
+        .checked_sub(1)
+        .map(|i| own[i].1.trim_start_matches("$ ").to_string());
+    let shown: Vec<(LogKind, String)> = own[from..]
+        .iter()
+        .filter(|(k, t)| *k != LogKind::Success && !t.trim().is_empty())
+        .map(|(k, t)| (*k, (*t).to_string()))
+        .collect();
+    let omitted = shown.len().saturating_sub(max);
+    Some(StepExcerpt {
+        command,
+        lines: shown[omitted..].to_vec(),
+        omitted,
+    })
+}
+
 /// Lee el log de una ejecución para el visor. Un archivo grande se recorta al final.
 pub fn read_log(path: &Path) -> io::Result<ReadLog> {
     let mut file = File::open(path)?;
@@ -275,6 +318,66 @@ pub fn apply_retention(dir: &Path, ext: &str, retention: &Retention) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn log_of(raw: &[&str]) -> ReadLog {
+        ReadLog {
+            lines: raw.iter().map(|l| parse_log_line(l)).collect(),
+            note: None,
+        }
+    }
+
+    #[test]
+    fn the_excerpt_is_the_last_command_of_the_step_and_what_it_wrote() {
+        let log = log_of(&[
+            "[10:00:00] build: ▸ docker build .",
+            "[10:00:01] build: ✓ listo",
+            "[10:00:02] smoke: ▸ curl a",
+            "[10:00:02] smoke: ✗ falló con código 1",
+            "[10:00:03] smoke: ↻ reintento 1/2",
+            "[10:00:03] smoke: ▸ curl b",
+            "[10:00:04] smoke: connection refused",
+            "[10:00:04] build: otra cosa de otro paso",
+            "[10:00:05] smoke: ✗ falló con código 7",
+        ]);
+        let e = step_excerpt(&log, "smoke", 10).unwrap();
+        assert_eq!(e.command.as_deref(), Some("curl b"));
+        assert_eq!(
+            e.lines,
+            [
+                (LogKind::Output, "connection refused".to_string()),
+                (LogKind::Error, "falló con código 7".to_string()),
+            ]
+        );
+        assert_eq!(e.omitted, 0);
+    }
+
+    #[test]
+    fn the_excerpt_keeps_the_tail_and_says_how_much_was_left_out() {
+        let mut raw = vec!["[10:00:00] p: ▸ ./deploy.sh".to_string()];
+        raw.extend((1..=30).map(|n| format!("[10:00:01] p: línea {n}")));
+        raw.push("[10:00:02] p: ✗ falló con código 2".to_string());
+        let refs: Vec<&str> = raw.iter().map(String::as_str).collect();
+        let e = step_excerpt(&log_of(&refs), "p", 5).unwrap();
+        assert_eq!(e.lines.len(), 5);
+        assert_eq!(e.omitted, 26);
+        assert_eq!(e.lines[0].1, "línea 27");
+        assert_eq!(e.lines[4].0, LogKind::Error);
+    }
+
+    #[test]
+    fn the_excerpt_works_on_json_logs_and_for_a_step_without_command() {
+        let log = log_of(&[
+            r#"{"at":"10:00:00","step":"a","kind":"output","text":"sin comando"}"#,
+            r#"{"at":"10:00:01","step":"a","kind":"error","text":"roto"}"#,
+        ]);
+        let e = step_excerpt(&log, "a", 10).unwrap();
+        assert_eq!(e.command, None);
+        assert_eq!(e.lines.len(), 2);
+        assert!(step_excerpt(&log, "otro", 10).is_none());
+        // un id que es prefijo de otro no se confunde
+        let log = log_of(&["[10:00:00] db-seed: ▸ x", "[10:00:00] db-seed: hola"]);
+        assert!(step_excerpt(&log, "db", 10).is_none());
+    }
 
     #[test]
     fn resolves_templates_relative_and_absolute() {

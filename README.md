@@ -81,6 +81,7 @@ Otros comandos útiles:
 baton validate                # revisa el plan sin ejecutar
 baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
+baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton rollback                # deshace la última ejecución
 baton import pipeline.yml     # convierte GitHub Actions, GitLab CI o Azure Pipelines en un plan
 baton config                  # destinos, logs y credenciales
