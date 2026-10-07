@@ -199,14 +199,19 @@ pub struct Requirement {
 /// activos usan (sin repetir una misma referencia). El orden es estable: primero las declaradas,
 /// luego las de destinos, cada grupo en su propio orden.
 pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
-    // Una credencial de base de datos solo se exige si algo la usa: un paso `sql` activo o el
-    // respaldo de la base. Así un plan con sus pasos `sql` desactivados no pide una conexión.
-    let db_in_use = plan.backup.as_ref().is_some_and(|b| b.database)
-        || plan.active_steps().any(|s| s.kind == StepKind::Sql);
+    // Una credencial de base de datos solo se exige si algo la usa: un paso `sql` activo que se
+    // conecta con ella o el respaldo de esa base. Así un plan con sus pasos `sql` desactivados no
+    // pide una conexión, y con varias bases solo se piden las que se van a usar.
+    let mut db_in_use: Vec<&str> = plan.backup_dbs().iter().map(|c| c.id.as_str()).collect();
+    for step in plan.active_steps().filter(|s| s.kind == StepKind::Sql) {
+        if let Some(c) = plan.db_for_step(step) {
+            db_in_use.push(&c.id);
+        }
+    }
     let mut out: Vec<Requirement> = plan
         .credentials
         .iter()
-        .filter(|c| c.kind != CredentialKind::Db || db_in_use)
+        .filter(|c| c.kind != CredentialKind::Db || db_in_use.contains(&c.id.as_str()))
         .map(|c| Requirement {
             id: c.id.clone(),
             kind: c.kind,
@@ -400,6 +405,41 @@ mod tests {
         assert_eq!(db_ids(&plan_with_db(&sql(true), "")), ["db", "g"]);
         assert_eq!(db_ids(&plan_with_db(&sql(false), "")), ["g"]);
         assert_eq!(db_ids(&plan_with_db(cmd, "")), ["g"]);
+        // con varias bases solo se piden las que se usan: las que elige un paso sql activo y las
+        // que respalda [backup]
+        let two = |steps: &str, backup: &str| {
+            let p = Plan::parse(&format!(
+                "name = \"p\"\n{backup}\
+                 [[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n\
+                 [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n{steps}"
+            ))
+            .unwrap();
+            required_credentials(&p, &Config::default())
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        };
+        let step = |id: &str, enabled: bool, db: &str| {
+            format!(
+                "[[steps]]\nid = \"{id}\"\nname = \"{id}\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n\
+                 database = \"{db}\"\nenabled = {enabled}\n"
+            )
+        };
+        assert_eq!(two(&step("a", true, "rep"), ""), ["rep"]);
+        assert_eq!(
+            two(&(step("a", true, "app") + &step("b", true, "rep")), ""),
+            ["app", "rep"]
+        );
+        assert_eq!(
+            two(&(step("a", true, "app") + &step("b", false, "rep")), ""),
+            ["app"],
+            "un paso desactivado no arrastra su base"
+        );
+        assert_eq!(
+            two(&step("a", true, "app"), "[backup]\ndatabase = [\"rep\"]\n"),
+            ["app", "rep"]
+        );
+        assert_eq!(two("", "[backup]\ndatabase = true\n"), ["app", "rep"]);
         // el respaldo de la base también la usa
         assert_eq!(
             db_ids(&plan_with_db(cmd, "[backup]\ndatabase = true\n")),

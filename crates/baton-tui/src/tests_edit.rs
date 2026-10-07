@@ -797,3 +797,74 @@ fn a_duplicated_step_is_marked_as_unsaved_too() {
     );
     assert!(editor_of(&mut app).is_dirty());
 }
+
+// ------------------------------------------------------------ varias bases de datos
+
+const TWO_DB_PLAN: &str = "name = \"p\"\n\
+    [[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n\
+    [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n\
+    [[steps]]\nid = \"m\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\ndatabase = \"rep\"\n\
+    [[steps]]\nid = \"c\"\nname = \"Comando\"\ntype = \"comando\"\ncommand = \"true\"\n";
+
+#[test]
+fn the_database_selector_only_exists_when_the_plan_has_several_db_credentials() {
+    let two = editor_for(&Plan::parse(TWO_DB_PLAN).unwrap());
+    assert!(
+        two.steps
+            .iter()
+            .all(|s| s.form.field("base (sql)").is_some())
+    );
+    // con una sola, o ninguna, no hace falta
+    let one = TWO_DB_PLAN.replace(
+        "[[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n",
+        "",
+    );
+    let one = one.replace("database = \"rep\"\n", "");
+    let e = editor_for(&Plan::parse(&one).unwrap());
+    assert!(e.steps.iter().all(|s| s.form.field("base (sql)").is_none()));
+    let e = editor_for(&example());
+    assert!(e.steps.iter().all(|s| s.form.field("base (sql)").is_none()));
+}
+
+#[test]
+fn the_selector_round_trips_and_changing_it_changes_the_saved_step() {
+    let plan = Plan::parse(TWO_DB_PLAN).unwrap();
+    let mut e = editor_for(&plan);
+    // sin tocar nada el editor devuelve exactamente los pasos del plan
+    assert_eq!(e.to_steps().unwrap(), plan.steps);
+    assert_eq!(e.steps[0].form.field("base (sql)").unwrap().value(), "rep");
+    assert_eq!(
+        e.steps[1].form.field("base (sql)").unwrap().value(),
+        "(ninguna)"
+    );
+    assert!(!e.is_dirty());
+
+    e.steps[0]
+        .form
+        .field_mut("base (sql)")
+        .unwrap()
+        .select("app");
+    assert!(e.is_dirty());
+    assert_eq!(e.to_steps().unwrap()[0].database.as_deref(), Some("app"));
+    e.steps[0]
+        .form
+        .field_mut("base (sql)")
+        .unwrap()
+        .select("(ninguna)");
+    assert_eq!(e.to_steps().unwrap()[0].database, None);
+}
+
+#[test]
+fn a_new_step_in_a_multi_db_plan_can_pick_its_database() {
+    let plan = Plan::parse(TWO_DB_PLAN).unwrap();
+    let mut app = App::editor_only(editor_for(&plan));
+    let ed = editor_of(&mut app);
+    ed.new_step();
+    let last = ed.steps.last_mut().unwrap();
+    assert_eq!(last.form.field("base (sql)").unwrap().value(), "(ninguna)");
+    last.form.field_mut("tipo").unwrap().select("sql");
+    last.form.field_mut("base (sql)").unwrap().select("app");
+    last.form.field_mut("origen").unwrap().set_text("db/*.sql");
+    let steps = ed.to_steps().unwrap();
+    assert_eq!(steps.last().unwrap().database.as_deref(), Some("app"));
+}

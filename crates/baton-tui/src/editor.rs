@@ -42,6 +42,10 @@ const F_RETRIES: usize = 7;
 const F_GATE: usize = 8;
 const F_ROLLBACK: usize = 9;
 const F_BACKUP: usize = 10;
+/// Solo existe si el plan declara varias credenciales `db`: cuál usa un paso `sql`.
+const F_DATABASE: usize = 11;
+/// Lo que muestra el selector de base cuando el paso no elige ninguna.
+const NO_DATABASE: &str = "(ninguna)";
 
 /// Datos con los que se crea un paso en el editor.
 #[derive(Debug, Clone, Default)]
@@ -59,6 +63,8 @@ pub struct StepSpec {
     pub gate: Option<GateState>,
     pub rollback: String,
     pub backup_before: bool,
+    /// Credencial `db` que elige el paso (vacío: ninguna).
+    pub database: String,
     /// Id del paso en el plan (vacío en un paso nuevo: se genera al guardar).
     pub step_id: String,
     /// El paso del plan del que viene, para conservar lo que el editor no muestra.
@@ -81,28 +87,39 @@ pub struct StepDraft {
 }
 
 impl StepDraft {
-    fn new(id: u32, spec: StepSpec, targets: &[String]) -> StepDraft {
+    fn new(id: u32, spec: StepSpec, targets: &[String], db_ids: &[String]) -> StepDraft {
         let mut target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
         // el destino del paso siempre debe poder elegirse, aunque no esté en la lista conocida
         if !spec.target.is_empty() && !target_refs.contains(&spec.target.as_str()) {
             target_refs.push(&spec.target);
         }
         let source = Field::text("origen", &spec.source);
+        let mut fields = vec![
+            Field::text("nombre", &spec.name),
+            Field::choice("tipo", &KINDS, &spec.kind),
+            source,
+            Field::drop("destino", &target_refs, &spec.target),
+            Field::text("comando", &spec.command),
+            Field::deps("depende de"),
+            Field::text("timeout", &spec.timeout).width(8),
+            Field::number("reintentos", &spec.retries).width(6).inline(),
+            Field::card("gate para avanzar"),
+            Field::text("rollback", &spec.rollback),
+            Field::toggle("backup", "antes de este paso", spec.backup_before),
+        ];
+        if !db_ids.is_empty() {
+            let mut options: Vec<&str> = vec![NO_DATABASE];
+            options.extend(db_ids.iter().map(String::as_str));
+            let selected = if spec.database.is_empty() {
+                NO_DATABASE
+            } else {
+                spec.database.as_str()
+            };
+            fields.push(Field::drop("base (sql)", &options, selected));
+        }
         StepDraft {
             id,
-            form: Form::new(vec![
-                Field::text("nombre", &spec.name),
-                Field::choice("tipo", &KINDS, &spec.kind),
-                source,
-                Field::drop("destino", &target_refs, &spec.target),
-                Field::text("comando", &spec.command),
-                Field::deps("depende de"),
-                Field::text("timeout", &spec.timeout).width(8),
-                Field::number("reintentos", &spec.retries).width(6).inline(),
-                Field::card("gate para avanzar"),
-                Field::text("rollback", &spec.rollback),
-                Field::toggle("backup", "antes de este paso", spec.backup_before),
-            ]),
+            form: Form::new(fields),
             depends: spec.depends,
             dep_cursor: 0,
             gate: spec.gate,
@@ -147,6 +164,8 @@ pub struct EditorState {
     pub selected: usize,
     pub(crate) focus: Focus,
     pub targets: Vec<String>,
+    /// Ids de las credenciales `db` del plan cuando hay varias (para elegir la de un paso sql).
+    db_ids: Vec<String>,
     next_id: u32,
     /// Abierto el gate multi-check del paso seleccionado.
     pub gate_open: bool,
@@ -172,11 +191,27 @@ pub struct EditorState {
 
 impl EditorState {
     pub fn new(plan: &str, targets: &[&str], specs: Vec<StepSpec>) -> EditorState {
+        EditorState::with_databases(plan, targets, &[], specs)
+    }
+
+    /// Como `new`, con los ids de las credenciales `db` del plan: con varias, cada paso muestra un
+    /// selector "base (sql)"; con una o ninguna no hace falta.
+    pub fn with_databases(
+        plan: &str,
+        targets: &[&str],
+        db_ids: &[String],
+        specs: Vec<StepSpec>,
+    ) -> EditorState {
         let targets: Vec<String> = targets.iter().map(|s| s.to_string()).collect();
+        let db_ids: Vec<String> = if db_ids.len() > 1 {
+            db_ids.to_vec()
+        } else {
+            Vec::new()
+        };
         let steps: Vec<StepDraft> = specs
             .into_iter()
             .enumerate()
-            .map(|(i, s)| StepDraft::new(i as u32 + 1, s, &targets))
+            .map(|(i, s)| StepDraft::new(i as u32 + 1, s, &targets, &db_ids))
             .collect();
         let next_id = steps.len() as u32 + 1;
         // Sin pasos no hay campo donde estar: se parte en la lista (en "+ nuevo paso"), si no la
@@ -192,6 +227,7 @@ impl EditorState {
             selected: 0,
             focus,
             targets,
+            db_ids,
             next_id,
             gate_open: false,
             notice: None,
@@ -282,13 +318,15 @@ impl EditorState {
                     retries: s.retries.to_string(),
                     rollback: s.rollback.clone().unwrap_or_default(),
                     backup_before: s.backup_before,
+                    database: s.database.clone().unwrap_or_default(),
                     step_id: s.id.clone(),
                     origin: Some(s.clone()),
                 }
             })
             .collect();
         let names: Vec<&str> = targets.iter().map(String::as_str).collect();
-        let mut e = EditorState::new(&plan.name, &names, specs);
+        let db_ids: Vec<String> = plan.db_credentials().map(|c| c.id.clone()).collect();
+        let mut e = EditorState::with_databases(&plan.name, &names, &db_ids, specs);
         e.can_save = true;
         e.default_target = default_target.to_string();
         e.baseline = e.to_steps().ok();
@@ -442,6 +480,10 @@ impl EditorState {
             gate,
             rollback: opt(f(F_ROLLBACK)),
             backup_before: d.form.fields[F_BACKUP].is_on(),
+            database: match d.form.fields.get(F_DATABASE).map(|f| f.value()) {
+                Some(v) => (v != NO_DATABASE && !v.is_empty()).then_some(v),
+                None => origin.and_then(|o| o.database.clone()),
+            },
         })
     }
 
@@ -497,7 +539,7 @@ impl EditorState {
         self.gate_open = true;
     }
 
-    fn new_step(&mut self) {
+    pub(crate) fn new_step(&mut self) {
         let id = self.next_id;
         self.next_id += 1;
         let spec = StepSpec {
@@ -508,7 +550,8 @@ impl EditorState {
             retries: "0".into(),
             ..StepSpec::default()
         };
-        self.steps.push(StepDraft::new(id, spec, &self.targets));
+        self.steps
+            .push(StepDraft::new(id, spec, &self.targets, &self.db_ids));
         self.selected = self.steps.len() - 1;
         self.focus = Focus::Field(F_NAME);
         self.test = None;

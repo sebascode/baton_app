@@ -36,7 +36,7 @@ dry_run = false
 
 [backup]                           # solo si usas respaldos
 volumes = ["pg_data"]              # volúmenes docker a respaldar
-database = false                   # true: además vuelca la base (necesita credencial db)
+database = false                   # true: además vuelca la base (necesita credencial db); o una lista de ids: ["app", "reportes"]
 dir = ".baton/backups"             # opcional
 
 [[steps]]                          # uno por paso, en orden de ejecución
@@ -282,7 +282,7 @@ Si no puedes ejecutar comandos, repasa esta lista antes de entregar:
 - [ ] Todo paso `compose`, `dockerfile`, `script` y `sql` tiene `source` relativo y existente.
 - [ ] Todo paso `comando` y `check` tiene `command`.
 - [ ] Hay `[backup]` si usas un paso `backup` o `backup_before`.
-- [ ] Hay una (y solo una) credencial `db` si usas `sql`.
+- [ ] Hay una credencial `db` si usas `sql`; con varias, cada paso `sql` lleva `database = "<id>"`.
 - [ ] Un gate automático en un paso que no es compose o dockerfile lleva `checks` explícitos.
 - [ ] No hay secretos, ni campos inventados, ni pasos destructivos activos.
 - [ ] `[[credentials]]` va al final del archivo, después de los pasos.

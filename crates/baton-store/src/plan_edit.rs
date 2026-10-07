@@ -307,6 +307,14 @@ fn update_step(t: &mut Table, old: Option<&Step>, s: &Step) {
         &s.backup_before.then_some(true),
         |v| Value::from(*v),
     );
+    put(
+        t,
+        "database",
+        o.map(|o| o.database.as_deref().and_then(non_empty))
+            .as_ref(),
+        &s.database.as_deref().and_then(non_empty),
+        string_value,
+    );
     update_gate(t, old.and_then(|o| o.gate.as_ref()), s.gate.as_ref());
 }
 
@@ -579,6 +587,51 @@ service = "web"
 kind = "http"
 url = "http://{destino}:3000/health"
 "#;
+
+    #[test]
+    fn the_database_of_a_sql_step_survives_an_edit_and_is_written_for_new_steps() {
+        let text = "name = \"instalar\"\n\
+            [[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n\
+            [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n\
+            [[steps]]\nid = \"m\"\nname = \"Migrar\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n\
+            database = \"rep\" # la de reportes\n";
+        let (_t, p) = project_with(text);
+        // guardar lo mismo no cambia nada (ni el comentario)
+        let same = steps(&p);
+        assert_eq!(same[0].database.as_deref(), Some("rep"));
+        save_plan_steps(&p, "instalar", &same, None).unwrap();
+        assert_eq!(read(&p), text);
+        // cambiar otro campo conserva database y su comentario
+        let mut edited = same.clone();
+        edited[0].name = "Migrar reportes".into();
+        save_plan_steps(&p, "instalar", &edited, None).unwrap();
+        let after = read(&p);
+        assert!(
+            after.contains("database = \"rep\" # la de reportes"),
+            "{after}"
+        );
+        assert!(after.contains("Migrar reportes"));
+        // cambiar la base se escribe; quitarla borra la línea
+        let mut other = steps(&p);
+        other[0].database = Some("app".into());
+        save_plan_steps(&p, "instalar", &other, None).unwrap();
+        assert_eq!(steps(&p)[0].database.as_deref(), Some("app"));
+        // con dos bases quitarla deja el paso ambiguo: el guardado lo rechaza y no toca el archivo
+        let before = read(&p);
+        let mut none = steps(&p);
+        none[0].database = None;
+        let err = save_plan_steps(&p, "instalar", &none, None).unwrap_err();
+        assert!(err.to_string().contains("database"), "{err}");
+        assert_eq!(read(&p), before);
+        // un paso nuevo con database lo escribe
+        let mut added = steps(&p);
+        let mut new_step = added[0].clone();
+        new_step.id = "m2".into();
+        new_step.database = Some("rep".into());
+        added.push(new_step);
+        save_plan_steps(&p, "instalar", &added, None).unwrap();
+        assert_eq!(steps(&p)[1].database.as_deref(), Some("rep"));
+    }
 
     #[test]
     fn a_removed_step_disappears_and_the_comments_of_the_others_survive() {

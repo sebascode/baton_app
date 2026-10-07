@@ -171,22 +171,46 @@ impl Ctx {
             .collect()
     }
 
-    /// La conexión de la credencial `db` del plan (la validación exige que sea una sola).
-    fn pg_conn(&self) -> PgConn {
+    /// La conexión de una credencial `db`.
+    fn conn_of(&self, cred: &baton_core::plan::CredentialReq) -> PgConn {
+        baton_core::sql::pg_conn(&cred.reference, &self.secrets)
+    }
+
+    /// La conexión de un paso `sql`: la de su `database` o la única del plan (la validación
+    /// asegura que haya una y solo una posible).
+    fn step_conn(&self, ps: &PStep) -> PgConn {
         self.plan
-            .credentials
-            .iter()
-            .find(|c| c.kind == CredentialKind::Db)
-            .map(|c| baton_core::sql::pg_conn(&c.reference, &self.secrets))
+            .db_for_step(&ps.step)
+            .map(|c| self.conn_of(c))
             .unwrap_or_default()
     }
 
-    /// Un comando que usa la conexión de la base (respaldo y restauración): lleva las variables de
-    /// `libpq` aunque su línea no las nombre.
-    fn db_command(&self, ps: &PStep, line: String) -> Command {
+    /// Las bases que respalda `[backup]` (y restaura un rollback), con el id de su credencial.
+    fn backup_conns(&self) -> Vec<(String, PgConn)> {
+        self.plan
+            .backup_dbs()
+            .into_iter()
+            .map(|c| (c.id.clone(), self.conn_of(c)))
+            .collect()
+    }
+
+    /// Un comando que usa la conexión de una base (respaldo y restauración): lleva las variables
+    /// de `libpq` aunque su línea no las nombre.
+    fn db_command(&self, ps: &PStep, line: String, conn: &PgConn) -> Command {
         let mut cmd = self.command(ps, line, None);
-        cmd.secrets.extend(self.pg_conn().env);
+        cmd.secrets.extend(conn.env.iter().cloned());
         cmd
+    }
+
+    /// Las variables de las credenciales `db` que no son la de este paso: un paso `sql` recibe
+    /// todas las credenciales del plan, pero no las contraseñas de las otras bases.
+    fn foreign_db_vars(&self, own: Option<&str>) -> Vec<String> {
+        let keys = baton_core::credential::fields_for(CredentialKind::Db);
+        self.plan
+            .db_credentials()
+            .filter(|c| Some(c.id.as_str()) != own)
+            .flat_map(|c| keys.iter().map(|k| c.reference.variable(k.key)))
+            .collect()
     }
 
     fn redact(&self, text: &str) -> String {
@@ -277,8 +301,11 @@ impl Ctx {
         };
         let mut secrets = self.secrets_for(&line, ps.step.kind.is_scanned());
         if ps.step.kind == StepKind::Sql {
+            let own = self.plan.db_for_step(&ps.step).map(|c| c.id.as_str());
+            let foreign = self.foreign_db_vars(own);
+            secrets.retain(|(name, _)| !foreign.contains(name));
             // las variables de `libpq` (PGUSER, PGPASSWORD...) que `psql` lee del entorno
-            secrets.extend(self.pg_conn().env);
+            secrets.extend(self.step_conn(ps).env);
         }
         Command {
             cwd,
@@ -858,7 +885,7 @@ async fn backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(),
             b.push(dir.join(&file));
         }
     }
-    if spec.database {
+    if spec.database.is_on() {
         backup_database(ctx, cmds, step, &dir).await?;
     }
     Ok(())
@@ -878,30 +905,43 @@ async fn backup_database(
     step: usize,
     dir: &Path,
 ) -> Result<(), StepEnd> {
-    let conn = ctx.pg_conn();
-    let file = dir.join(format!(
-        "{}-{}-{}.dump",
-        ctx.plan.name,
-        ctx.fecha,
-        dump_label(&conn)
-    ));
-    if ctx.backups.lock().is_ok_and(|b| b.contains(&file)) {
-        ctx.log(
-            step,
-            LogKind::Output,
-            "respaldo de la base ya hecho en esta ejecución",
-        );
-        return Ok(());
-    }
-    let line = pg_dump_command(&conn, &file.to_string_lossy());
-    let cmd = ctx.db_command(&ctx.steps[step], line);
-    run_command(ctx, cmds, step, cmd, ctx.steps[step].step.retries).await?;
-    if !ctx.opts.dry_run
-        && let Ok(mut b) = ctx.backups.lock()
-    {
-        b.push(file);
+    let conns = ctx.backup_conns();
+    for (id, conn) in &conns {
+        let file = dir.join(format!(
+            "{}-{}-{}.dump",
+            ctx.plan.name,
+            ctx.fecha,
+            backup_label(conns.len() > 1, id, conn)
+        ));
+        if ctx.backups.lock().is_ok_and(|b| b.contains(&file)) {
+            ctx.log(
+                step,
+                LogKind::Output,
+                format!("respaldo de la base '{id}' ya hecho en esta ejecución"),
+            );
+            continue;
+        }
+        let line = pg_dump_command(conn, &file.to_string_lossy());
+        let cmd = ctx.db_command(&ctx.steps[step], line, conn);
+        run_command(ctx, cmds, step, cmd, ctx.steps[step].step.retries).await?;
+        if !ctx.opts.dry_run
+            && let Ok(mut b) = ctx.backups.lock()
+        {
+            b.push(file);
+        }
     }
     Ok(())
+}
+
+/// El nombre del respaldo de una base dentro del archivo (`<plan>-<fecha>-<nombre>.dump`). Con
+/// varias bases en el mismo respaldo se antepone el id de la credencial, porque dos credenciales
+/// pueden apuntar a bases que se llaman igual en servidores distintos.
+fn backup_label(many: bool, id: &str, conn: &PgConn) -> String {
+    if many {
+        format!("{id}-{}", dump_label(conn))
+    } else {
+        dump_label(conn)
+    }
 }
 
 enum Answer {
@@ -1004,7 +1044,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
             let vars = ctx.vars(ps, file.map(PathBuf::as_path));
             let line = match (template, file) {
                 (Some(t), _) => vars.render(t),
-                (None, Some(f)) if is_sql => psql_command(&ctx.pg_conn(), &file_name(f)),
+                (None, Some(f)) if is_sql => psql_command(&ctx.step_conn(ps), &file_name(f)),
                 (None, Some(f)) => script_line(&ctx.project.root, f),
                 // un script siempre trae archivo (`prepare_run` lo exige): no se llega aquí
                 (None, None) => continue,
@@ -1113,50 +1153,54 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
     if ctx.ensure_synced(i).await.is_err() {
         return false;
     }
-    let conn = ctx.pg_conn();
     let dir = backup_dir(ctx);
-    let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &dump_label(&conn))
-    else {
-        ctx.log(
-            i,
-            LogKind::Error,
-            format!(
-                "no hay un respaldo de la base en {}: no se puede restaurar",
-                ctx.project.display_path(&dir)
-            ),
-        );
-        return false;
-    };
-    let cmd = ctx.db_command(ps, pg_restore_command(&conn, &file.to_string_lossy()));
-    ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
-    let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
-    let ok = match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
-        Ok(exit) if exit.success() => {
-            ctx.log(
-                i,
-                LogKind::Success,
-                format!("base restaurada desde {}", ctx.project.display_path(&file)),
-            );
-            true
-        }
-        Ok(exit) => {
-            ctx.log(i, LogKind::Error, describe(exit, cmd.timeout));
-            false
-        }
-        Err(e) => {
+    let conns = ctx.backup_conns();
+    let mut all_ok = true;
+    for (id, conn) in &conns {
+        let label = backup_label(conns.len() > 1, id, conn);
+        let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &label) else {
             ctx.log(
                 i,
                 LogKind::Error,
-                format!("No se pudo restaurar la base: {e}"),
+                format!(
+                    "no hay un respaldo de la base '{id}' en {}: no se puede restaurar",
+                    ctx.project.display_path(&dir)
+                ),
             );
-            false
+            all_ok = false;
+            continue;
+        };
+        let cmd = ctx.db_command(ps, pg_restore_command(conn, &file.to_string_lossy()), conn);
+        ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
+        let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
+        match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
+            Ok(exit) if exit.success() => ctx.log(
+                i,
+                LogKind::Success,
+                format!(
+                    "base '{id}' restaurada desde {}",
+                    ctx.project.display_path(&file)
+                ),
+            ),
+            Ok(exit) => {
+                ctx.log(i, LogKind::Error, describe(exit, cmd.timeout));
+                all_ok = false;
+            }
+            Err(e) => {
+                ctx.log(
+                    i,
+                    LogKind::Error,
+                    format!("No se pudo restaurar la base '{id}': {e}"),
+                );
+                all_ok = false;
+            }
         }
-    };
-    if ok {
+    }
+    if all_ok {
         let id = ps.step.id.clone();
         ctx.record(&id, StepState::Pending, Duration::ZERO, 0);
     }
-    ok
+    all_ok
 }
 
 /// Deshace en orden inverso los pasos indicados (los índices vienen en orden de ejecución).

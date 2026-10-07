@@ -978,3 +978,47 @@ fn validate_rejects_a_sql_step_without_a_db_credential() {
     assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
     assert!(format!("{}{}", out(&o), err(&o)).contains("necesita una credencial de tipo db"));
 }
+
+const TWO_DB_CREDS: &str = "[[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n\
+                            [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n";
+
+fn sql_step(id: &str, db: &str) -> String {
+    format!("[[steps]]\nid = \"{id}\"\nname = \"{id}\"\ntype = \"sql\"\nsource = \"x/*.sql\"\n{db}")
+}
+
+#[test]
+fn validate_asks_to_pick_a_database_when_the_plan_has_several_and_accepts_the_choice() {
+    let plan = |db: &str| format!("name = \"instalar\"\n{TWO_DB_CREDS}{}", sql_step("m", db));
+    let fx = Fx::new(&plan(""));
+    fs::create_dir_all(fx.root.join("x")).unwrap();
+    fs::write(fx.root.join("x/1.sql"), "SELECT 1;\n").unwrap();
+    let o = fx.baton(&["validate", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    let text = format!("{}{}", out(&o), err(&o));
+    assert!(text.contains("database = \"<id>\" (app, rep)"), "{text}");
+
+    fs::write(
+        fx.root.join("baton/plans/instalar.toml"),
+        plan("database = \"rep\"\n"),
+    )
+    .unwrap();
+    let o = fx.baton(&["validate", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+}
+
+#[test]
+fn ci_only_asks_for_the_credentials_of_the_databases_the_plan_uses() {
+    // el paso usa `rep`; `app` no se usa y no debe pedirse
+    let plan = format!(
+        "name = \"instalar\"\n{TWO_DB_CREDS}{}",
+        sql_step("m", "database = \"rep\"\n")
+    );
+    let fx = Fx::new(&plan);
+    fs::create_dir_all(fx.root.join("x")).unwrap();
+    fs::write(fx.root.join("x/1.sql"), "SELECT 1;\n").unwrap();
+    let o = fx.baton(&["run", "instalar", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    let e = err(&o);
+    assert!(e.contains("REP_USER") || e.contains("db.env#REP"), "{e}");
+    assert!(!e.contains("APP_USER") && !e.contains("db.env#APP"), "{e}");
+}

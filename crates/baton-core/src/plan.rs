@@ -41,6 +41,37 @@ impl Plan {
     pub fn active_steps(&self) -> impl Iterator<Item = &Step> {
         self.steps.iter().filter(|s| s.enabled)
     }
+
+    /// Las credenciales de tipo `db` que declara el plan, en su orden.
+    pub fn db_credentials(&self) -> impl Iterator<Item = &CredentialReq> {
+        self.credentials
+            .iter()
+            .filter(|c| c.kind == CredentialKind::Db)
+    }
+
+    /// La credencial `db` con la que corre un paso `sql`: la que nombra su `database` o, si no
+    /// nombra ninguna y el plan declara una sola, esa. `None` si no hay o es ambigua (la
+    /// validación lo reporta).
+    pub fn db_for_step(&self, step: &Step) -> Option<&CredentialReq> {
+        match &step.database {
+            Some(id) => self.db_credentials().find(|c| c.id == *id),
+            None => {
+                let mut all = self.db_credentials();
+                let first = all.next()?;
+                all.next().is_none().then_some(first)
+            }
+        }
+    }
+
+    /// Las credenciales `db` cuya base respalda `[backup]` (y restaura un rollback).
+    pub fn backup_dbs(&self) -> Vec<&CredentialReq> {
+        let Some(backup) = &self.backup else {
+            return Vec::new();
+        };
+        self.db_credentials()
+            .filter(|c| backup.database.selects(&c.id))
+            .collect()
+    }
 }
 
 /// Valores por defecto de los toggles de la vista previa. Ambos son opcionales por diseño.
@@ -64,16 +95,68 @@ pub struct BackupSpec {
     pub volumes: Vec<String>,
     /// Por defecto `.baton/backups`.
     pub dir: Option<String>,
-    /// Además de los volúmenes, vuelca la base de la credencial `db` del plan (`pg_dump`), y el
-    /// rollback de un paso `backup` la restaura (v0.3).
+    /// Además de los volúmenes, vuelca bases de datos (`pg_dump`), y el rollback de un paso
+    /// `backup` las restaura (v0.3): `true` para todas las credenciales `db` del plan, o la lista
+    /// de ids de las que se respaldan.
     #[serde(default)]
-    pub database: bool,
+    pub database: DatabaseBackup,
 }
 
 impl BackupSpec {
     /// Sin volúmenes ni base: no hay nada que respaldar.
     pub fn is_empty(&self) -> bool {
-        self.volumes.is_empty() && !self.database
+        self.volumes.is_empty() && !self.database.is_on()
+    }
+}
+
+/// `database = true` / `false`, o `database = ["app", "reportes"]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DatabaseBackup {
+    #[default]
+    Off,
+    /// Todas las credenciales `db` del plan.
+    All,
+    /// Solo estas (ids de `[[credentials]]`).
+    Only(Vec<String>),
+}
+
+impl DatabaseBackup {
+    /// ¿Respalda alguna base? (`database = []` no respalda ninguna).
+    pub fn is_on(&self) -> bool {
+        match self {
+            DatabaseBackup::Off => false,
+            DatabaseBackup::All => true,
+            DatabaseBackup::Only(ids) => !ids.is_empty(),
+        }
+    }
+
+    /// ¿Se respalda la credencial con ese id?
+    pub fn selects(&self, id: &str) -> bool {
+        match self {
+            DatabaseBackup::Off => false,
+            DatabaseBackup::All => true,
+            DatabaseBackup::Only(ids) => ids.iter().any(|i| i == id),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DatabaseBackup {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Ids(Vec<String>),
+        }
+        Ok(
+            match Raw::deserialize(d).map_err(|_| {
+                de::Error::custom("database es true, false o una lista de ids de credenciales db")
+            })? {
+                Raw::Flag(false) => DatabaseBackup::Off,
+                Raw::Flag(true) => DatabaseBackup::All,
+                Raw::Ids(ids) => DatabaseBackup::Only(ids),
+            },
+        )
     }
 }
 
@@ -128,6 +211,9 @@ pub struct Step {
     pub rollback: Option<String>,
     #[serde(default)]
     pub backup_before: bool,
+    /// Solo en pasos `sql`: id de la credencial `db` con la que se conectan. Sin él se usa la
+    /// única del plan; con varias, es obligatorio.
+    pub database: Option<String>,
 }
 
 fn yes() -> bool {

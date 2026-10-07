@@ -295,6 +295,7 @@ impl Builder {
             gate: None,
             rollback: None,
             backup_before: false,
+            database: None,
         }
     }
 
@@ -339,6 +340,7 @@ impl Builder {
             }),
             rollback: None,
             backup_before: false,
+            database: None,
         }
     }
 
@@ -858,6 +860,7 @@ mod tests {
                 gate: None,
                 rollback: None,
                 backup_before: false,
+                database: None,
             }],
         };
         let mut b = Builder::default();

@@ -272,6 +272,7 @@ fn step(
         gate: None,
         rollback: None,
         backup_before: false,
+        database: None,
     }
 }
 

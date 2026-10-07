@@ -13,7 +13,7 @@ use crate::config::{Config, FILE_PROVIDER, LOCAL_TARGET, SecretProvider, Target}
 use crate::issue::{Issue, Seg};
 use crate::path;
 use crate::plan::{
-    Check, CheckKind, Condition, CredentialKind, Gate, GateMode, Plan, Step, StepKind,
+    Check, CheckKind, Condition, DatabaseBackup, Gate, GateMode, Plan, Step, StepKind,
 };
 use crate::secrets::SECRET_VARS;
 use crate::template::{LOG_VARS, STEP_VARS, unknown_placeholders};
@@ -243,16 +243,28 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
                 "la lista de volúmenes está vacía (o activa database = true para respaldar la base)",
             ));
         }
-        if b.database
-            && !plan
-                .credentials
-                .iter()
-                .any(|c| c.kind == CredentialKind::Db)
-        {
-            out.push(Issue::error(
+        match &b.database {
+            DatabaseBackup::All if plan.db_credentials().next().is_none() => {
+                out.push(Issue::error(
+                    path!["backup", "database"],
+                    "database = true necesita una credencial de tipo db en [[credentials]]",
+                ));
+            }
+            DatabaseBackup::Only(ids) if ids.is_empty() => out.push(Issue::error(
                 path!["backup", "database"],
-                "database = true necesita una credencial de tipo db en [[credentials]]",
-            ));
+                "database = [] no respalda ninguna base: pon los ids de las credenciales db, true o quítalo",
+            )),
+            DatabaseBackup::Only(ids) => {
+                for id in ids {
+                    if !plan.db_credentials().any(|c| c.id == *id) {
+                        out.push(Issue::error(
+                            path!["backup", "database"],
+                            format!("'{id}' no es una credencial de tipo db declarada en [[credentials]]"),
+                        ));
+                    }
+                }
+            }
+            _ => {}
         }
         if b.volumes.iter().any(|v| v.trim().is_empty()) {
             out.push(Issue::error(
@@ -378,24 +390,39 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
         }
     }
 
-    // un paso sql se conecta con la credencial `db` del plan: tiene que haber una y solo una
-    let dbs = plan
-        .credentials
-        .iter()
-        .filter(|c| c.kind == CredentialKind::Db)
-        .count();
+    // un paso sql se conecta con una credencial `db`: la que nombra su `database` o, sin él, la
+    // única que declare el plan
+    let ids: Vec<&str> = plan.db_credentials().map(|c| c.id.as_str()).collect();
     for (i, s) in plan.steps.iter().enumerate() {
         if s.kind != StepKind::Sql {
+            if s.database.is_some() {
+                out.push(Issue::error(
+                    path!["steps", i, "database"],
+                    "database solo vale en pasos sql",
+                ));
+            }
             continue;
         }
-        let problem = match dbs {
-            0 => {
+        let problem = match (&s.database, ids.len()) {
+            (Some(id), _) if ids.contains(&id.as_str()) => continue,
+            (Some(id), _) => {
+                let why = if plan.credentials.iter().any(|c| c.id == *id) {
+                    format!("'{id}' no es una credencial de tipo db")
+                } else {
+                    format!("no existe una credencial con id '{id}' en [[credentials]]")
+                };
+                out.push(Issue::error(path!["steps", i, "database"], why));
+                continue;
+            }
+            (None, 0) => {
                 "un paso sql necesita una credencial de tipo db en [[credentials]] (con la conexión a la base)"
+                    .to_string()
             }
-            1 => continue,
-            _ => {
-                "el plan declara varias credenciales db y un paso sql todavía no puede elegir entre ellas: deja solo una"
-            }
+            (None, 1) => continue,
+            (None, _) => format!(
+                "el plan declara varias credenciales db: elige la de este paso con database = \"<id>\" ({})",
+                ids.join(", ")
+            ),
         };
         out.push(Issue::error(path!["steps", i, "type"], problem));
     }
@@ -1310,6 +1337,110 @@ mod tests {
             None,
         );
         assert!(errors(&many).is_empty(), "{:?}", errors(&many));
+    }
+
+    #[test]
+    fn with_several_db_credentials_a_sql_step_picks_one_with_database() {
+        let cred = |id: &str, kind: &str| {
+            format!(
+                "[[credentials]]\nid = \"{id}\"\nkind = \"{kind}\"\nref = \"db.env#{}\"\n",
+                id.to_uppercase()
+            )
+        };
+        let step = |extra: &str| {
+            format!(
+                "[[steps]]\nid = \"m\"\nname = \"M\"\ntype = \"sql\"\nsource = \"db/*.sql\"\n{extra}"
+            )
+        };
+        let plan = |text: String| Plan::parse(&format!("name = \"p\"\n{text}")).unwrap();
+        let two = format!(
+            "{}{}{}",
+            cred("app", "db"),
+            cred("rep", "db"),
+            cred("reg", "docker")
+        );
+
+        // sin elegir, con dos: error que lista los ids
+        let issues = validate_plan(&plan(format!("{two}{}", step(""))), None);
+        assert_error(&issues, "steps[0].type", "database = \"<id>\" (app, rep)");
+        // eligiendo una existente: bien
+        let ok = validate_plan(
+            &plan(format!("{two}{}", step("database = \"rep\"\n"))),
+            None,
+        );
+        assert!(errors(&ok).is_empty(), "{:?}", errors(&ok));
+        // una que no existe, o que no es db
+        let ghost = validate_plan(&plan(format!("{two}{}", step("database = \"x\"\n"))), None);
+        assert_error(
+            &ghost,
+            "steps[0].database",
+            "no existe una credencial con id 'x'",
+        );
+        let wrong = validate_plan(
+            &plan(format!("{two}{}", step("database = \"reg\"\n"))),
+            None,
+        );
+        assert_error(
+            &wrong,
+            "steps[0].database",
+            "'reg' no es una credencial de tipo db",
+        );
+        // con una sola, nombrarla también vale
+        let one = validate_plan(
+            &plan(format!(
+                "{}{}",
+                cred("app", "db"),
+                step("database = \"app\"\n")
+            )),
+            None,
+        );
+        assert!(errors(&one).is_empty(), "{:?}", errors(&one));
+        // y en un paso que no es sql no tiene sentido
+        let cmd = "[[steps]]\nid = \"c\"\nname = \"C\"\ntype = \"comando\"\ncommand = \"true\"\ndatabase = \"app\"\n";
+        let bad = validate_plan(&plan(format!("{two}{cmd}")), None);
+        assert_error(&bad, "steps[0].database", "solo vale en pasos sql");
+    }
+
+    #[test]
+    fn backup_database_accepts_true_false_or_a_list_of_db_credentials() {
+        let base = "[[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP\"\n\
+                    [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP\"\n\
+                    [[credentials]]\nid = \"reg\"\nkind = \"docker\"\nref = \"docker.env#REG\"\n\
+                    [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"backup\"\n";
+        let with = |backup: &str| {
+            validate_plan(
+                &Plan::parse(&format!("name = \"p\"\n{backup}{base}")).unwrap(),
+                None,
+            )
+        };
+        for ok in [
+            "[backup]\ndatabase = true\n",
+            "[backup]\ndatabase = [\"app\"]\n",
+            "[backup]\ndatabase = [\"app\", \"rep\"]\n",
+        ] {
+            assert!(
+                errors(&with(ok)).is_empty(),
+                "{ok}: {:?}",
+                errors(&with(ok))
+            );
+        }
+        assert_error(
+            &with("[backup]\ndatabase = [\"nope\"]\n"),
+            "backup.database",
+            "'nope' no es una credencial de tipo db",
+        );
+        assert_error(
+            &with("[backup]\ndatabase = [\"reg\"]\n"),
+            "backup.database",
+            "'reg' no es una credencial de tipo db",
+        );
+        assert_error(
+            &with("[backup]\ndatabase = []\n"),
+            "backup.database",
+            "no respalda ninguna",
+        );
+        let err = Plan::parse("name = \"p\"\n[backup]\ndatabase = \"si\"\n").unwrap_err();
+        assert!(err.to_string().contains("true, false o una lista"), "{err}");
     }
 
     #[test]

@@ -2368,7 +2368,7 @@ fn rolling_back_a_backup_step_restores_the_last_dump() {
     );
     let logs = all_logs(&events);
     assert!(
-        logs.contains("base restaurada desde .baton/backups/instalar-"),
+        logs.contains("base 'app' restaurada desde .baton/backups/instalar-"),
         "{logs}"
     );
     assert!(!logs.contains("s3cr3to-db"));
@@ -2415,7 +2415,7 @@ fn a_rollback_without_any_dump_fails_and_says_where_it_looked() {
     assert_eq!(outcome(&events), RunOutcome::Failed);
     let logs = all_logs(&events);
     assert!(
-        logs.contains("no hay un respaldo de la base en .baton/backups"),
+        logs.contains("no hay un respaldo de la base 'app' en .baton/backups"),
         "{logs}"
     );
     assert!(pg_calls(&fx).is_empty());
@@ -2436,7 +2436,7 @@ fn the_database_is_dumped_once_per_run_even_with_several_backup_requests() {
         all_logs(&events)
     );
     assert_eq!(pg_calls(&fx).len(), 1);
-    assert!(all_logs(&events).contains("respaldo de la base ya hecho en esta ejecución"));
+    assert!(all_logs(&events).contains("respaldo de la base 'app' ya hecho en esta ejecución"));
 }
 
 #[test]
@@ -2476,4 +2476,192 @@ fn dry_run_lists_the_dump_and_the_restore_without_running_them() {
     assert!(!fx.root().join(".baton/state.json").exists());
     let logs = all_logs(&events);
     assert!(logs.contains("pg_dump -Fc -f"), "{logs}");
+}
+
+// ------------------------------------------------------------ varias bases de datos
+
+const TWO_DBS: &str = "[[credentials]]\nid = \"app\"\nkind = \"db\"\nref = \"db.env#APP_DB\"\n\n\
+                       [[credentials]]\nid = \"rep\"\nkind = \"db\"\nref = \"db.env#REP_DB\"\n\n";
+
+/// Un proyecto con dos credenciales db (`app` y `rep`, usuarios, contraseñas y bases distintos).
+fn two_dbs_fx(files: &[(&str, &str)]) -> Fx {
+    let fx = db_backup_fx(None); // trae psql, pg_dump y pg_restore de mentira y la credencial `app`
+    for (name, body) in files {
+        write_script(&fx, name, body);
+    }
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &"db.env#REP_DB".parse().unwrap(),
+        &[
+            ("user", "lector".to_string()),
+            ("password", "otra-contra-999".to_string()),
+            ("host", "rep.interno".to_string()),
+            ("database", "reportes".to_string()),
+        ],
+    )
+    .unwrap();
+    fx
+}
+
+#[test]
+fn each_sql_step_connects_with_the_database_it_names_and_never_sees_the_other_password() {
+    let fx = two_dbs_fx(&[("a/01.sql", "SELECT 1;\n"), ("r/01.sql", "SELECT 2;\n")]);
+    let p = plan(&format!(
+        "{TWO_DBS}[[steps]]\nid = \"m-app\"\nname = \"App\"\ntype = \"sql\"\nsource = \"a/*.sql\"\ndatabase = \"app\"\n\
+         [[steps]]\nid = \"m-rep\"\nname = \"Rep\"\ntype = \"sql\"\nsource = \"r/*.sql\"\ndatabase = \"rep\"\n"
+    ));
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    assert_eq!(
+        psql_calls(&fx),
+        [
+            "/a|app|db.interno|tienda|-X -v ON_ERROR_STOP=1 -f 01.sql",
+            "/r|lector|rep.interno|reportes|-X -v ON_ERROR_STOP=1 -f 01.sql",
+        ]
+    );
+    // la contraseña que el psql de mentira imprime es la de SU base
+    let logs = all_logs(&events);
+    assert!(
+        !logs.contains("s3cr3to-db") && !logs.contains("otra-contra-999"),
+        "{logs}"
+    );
+}
+
+#[test]
+fn a_sql_step_does_not_receive_the_other_databases_variables() {
+    // el comando explícito imprime las variables que el paso podría ver
+    let fx = two_dbs_fx(&[("r/01.sql", "SELECT 2;\n")]);
+    let p = plan(&format!(
+        "{TWO_DBS}[[steps]]\nid = \"m-rep\"\nname = \"Rep\"\ntype = \"sql\"\nsource = \"r/*.sql\"\ndatabase = \"rep\"\n\
+         command = \"echo propia=[$REP_DB_PASSWORD] ajena=[$APP_DB_PASSWORD]\"\n"
+    ));
+    let events = run(&fx, &p, sql_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("ajena=[]"),
+        "no recibe la contraseña de la otra base: {logs}"
+    );
+    // la propia llega, pero el log la tacha
+    assert!(logs.contains("propia=["), "{logs}");
+    assert!(!logs.contains("otra-contra-999"), "{logs}");
+}
+
+#[test]
+fn backup_database_can_list_the_databases_and_each_gets_its_own_dump_and_restore() {
+    let fx = two_dbs_fx(&[]);
+    let p = plan(&format!(
+        "{TWO_DBS}[backup]\ndatabase = [\"app\", \"rep\"]\n\
+         [[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n\
+         [[steps]]\nid = \"boom\"\nname = \"Boom\"\ntype = \"comando\"\ncommand = \"exit 1\"\n"
+    ));
+    let mut o = db_backup_options(&fx, &p);
+    o.auto_rollback = true;
+    o.interactive = false;
+    let events = run(&fx, &p, o);
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Failed,
+        "{}",
+        all_logs(&events)
+    );
+    let calls = pg_calls(&fx);
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    let dumps: Vec<&String> = calls.iter().filter(|c| c.starts_with("dump|")).collect();
+    assert_eq!(dumps.len(), 2, "{calls:?}");
+    assert!(
+        dumps[0].starts_with("dump|app|tienda|") && dumps[0].ends_with("-app-tienda.dump"),
+        "{dumps:?}"
+    );
+    assert!(
+        dumps[1].starts_with("dump|lector|reportes|") && dumps[1].ends_with("-rep-reportes.dump"),
+        "{dumps:?}"
+    );
+    let restores: Vec<&String> = calls.iter().filter(|c| c.starts_with("restore|")).collect();
+    assert_eq!(restores.len(), 2, "{calls:?}");
+    assert!(
+        restores
+            .iter()
+            .any(|r| r.contains("|app|tienda|") && r.ends_with("-app-tienda.dump")),
+        "{restores:?}"
+    );
+    assert!(
+        restores
+            .iter()
+            .any(|r| r.contains("|lector|reportes|") && r.ends_with("-rep-reportes.dump")),
+        "{restores:?}"
+    );
+}
+
+#[test]
+fn backup_database_with_a_subset_dumps_only_those() {
+    let fx = two_dbs_fx(&[]);
+    let p = plan(&format!(
+        "{TWO_DBS}[backup]\ndatabase = [\"rep\"]\n[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n"
+    ));
+    let events = run(&fx, &p, db_backup_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    let calls = pg_calls(&fx);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    // una sola base: el nombre del archivo no lleva el id
+    assert!(
+        calls[0].starts_with("dump|lector|reportes|") && calls[0].ends_with("-reportes.dump"),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn one_missing_dump_fails_the_restore_but_the_others_are_still_restored() {
+    let fx = two_dbs_fx(&[]);
+    let p = plan(&format!(
+        "{TWO_DBS}[backup]\ndatabase = true\n[[steps]]\nid = \"backup\"\nname = \"Backup\"\ntype = \"backup\"\n"
+    ));
+    let events = run(&fx, &p, db_backup_options(&fx, &p));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "{}",
+        all_logs(&events)
+    );
+    // se pierde el volcado de `rep`
+    for e in fs::read_dir(fx.root().join(".baton/backups")).unwrap() {
+        let path = e.unwrap().path();
+        if path.to_string_lossy().contains("-rep-") {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    fs::remove_file(fx.root().join("_pg")).ok();
+    let mut o = db_backup_options(&fx, &p);
+    o.mode = baton_exec::Mode::Rollback;
+    o.interactive = false;
+    let events = run(&fx, &p, o);
+    let logs = all_logs(&events);
+    assert!(
+        logs.contains("no hay un respaldo de la base 'rep'"),
+        "{logs}"
+    );
+    assert!(logs.contains("base 'app' restaurada desde"), "{logs}");
+    assert_eq!(
+        pg_calls(&fx)
+            .iter()
+            .filter(|c| c.starts_with("restore|"))
+            .count(),
+        1
+    );
 }

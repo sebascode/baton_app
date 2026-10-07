@@ -132,7 +132,7 @@ pub struct PStep {
 fn restores_db(plan: &Plan, step: &Step) -> bool {
     step.kind == StepKind::Backup
         && step.rollback.is_none()
-        && plan.backup.as_ref().is_some_and(|b| b.database)
+        && plan.backup.as_ref().is_some_and(|b| b.database.is_on())
 }
 
 impl PStep {
