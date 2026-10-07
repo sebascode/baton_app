@@ -235,7 +235,7 @@ fn otlp_posts_json_logs_with_the_headers_from_the_environment() {
     );
     assert_eq!(o.status.code(), Some(3), "{}", out(&o));
     let (line, headers, body) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert_eq!(line, format!("POST /v1/logs HTTP/1.1"));
+    assert_eq!(line, "POST /v1/logs HTTP/1.1");
     let has = |h: &str| headers.iter().any(|x| x.eq_ignore_ascii_case(h));
     assert!(has("Content-Type: application/json"), "{headers:?}");
     assert!(has("Authorization: Bearer tok-123"), "{headers:?}");
