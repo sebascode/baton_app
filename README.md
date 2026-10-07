@@ -31,7 +31,13 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 
 ## Instalación
 
-Necesitas Rust 1.88 o superior.
+Con Homebrew (macOS y Linux), compilando desde el código fuente:
+
+```sh
+brew install sebascode/baton/baton
+```
+
+O a mano, con Rust 1.88 o superior:
 
 ```sh
 git clone https://github.com/sebascode/baton_app
