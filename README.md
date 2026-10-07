@@ -4,7 +4,7 @@ Herramienta de terminal para orquestar instalaciones y despliegues. Defines un p
 
 Está pensada para ser simple y amigable: pantallas con teclado, backup y rollback siempre opcionales, y nada sale de tu máquina que no deba.
 
-> Estado: proyecto personal en desarrollo (versión 0.1). Solo se ha probado en Linux y macOS con Apple Silicon.
+> Estado: proyecto personal en desarrollo (versión 0.3). Solo se ha probado en Linux y macOS con Apple Silicon.
 
 ## Qué es
 
@@ -123,6 +123,23 @@ Más detalle con `baton --help` y `man baton`.
 ### Generar un plan con una IA
 
 Si quieres que un asistente (Claude Code, Gemini, DeepSeek u otro) escriba el plan de tu proyecto, pásale [docs/ai-guide.md](docs/ai-guide.md). Explica el formato, las reglas y cómo comprobar el resultado con `baton validate` y `baton run --dry-run`.
+
+## Línea de tiempo
+
+Qué se fue agregando y cuándo (las fechas son las de los commits del repositorio).
+
+| Fecha | Qué llegó |
+|---|---|
+| 2026-09-24 | Inicio. Modelo del plan y de la configuración en TOML, validación con `archivo:línea:columna` (`baton validate`) y todas las pantallas de la terminal con datos de mentira (`baton demo`): vista previa del plan, ejecución, fallo, resumen, editor de pasos, gates, pipeline. |
+| 2026-09-27 | **Ejecución real.** Compose y Dockerfile con timeout, reintentos, rollback, backup de volúmenes, gates manuales, `--resume` y `--dry-run`; log, estado y modo texto para CI (`baton run`). Gates automáticos (healthcheck, HTTP, comando, contenedor corriendo) y un editor que guarda sin perder tus comentarios. |
+| 2026-09-28 | `baton init`, que arma el plan escaneando la carpeta. Credenciales reales con enmascarado, "no volver a preguntar" y carpeta por ambiente. Destinos ssh (con bastion y `rsync`) y docker context, y `baton config` que guarda y prueba conexiones. Logs en JSON y retención. |
+| 2026-10-01 | `baton import`: convierte GitHub Actions, GitLab CI y Azure Pipelines en un plan. Gestores de secretos (Vault, Azure Key Vault). Helpers para scripts bash (`baton select`, `confirm`, `input`), la etiqueta del proyecto en el prompt, `baton start`/`create`, la página de manual y `scripts/install.sh`. |
+| 2026-10-02 | Pasos `script` y `sql` (PostgreSQL), con confirmación ante sentencias destructivas, respaldo de la base y restauración en el rollback. Historial de ejecuciones y visor de logs dentro de la aplicación. |
+| 2026-10-07 | **0.1.0.** CI en Linux y macOS, copiar, renombrar y eliminar planes, licencia MIT, guía para asistentes de IA e instalación con Homebrew. |
+| 2026-10-07 | **0.2.0.** `baton update` y binarios en cada release. `{ambiente}` en los comandos. `baton last` y `baton history`, y un resumen visual en `baton`. Llaves ssh con frase secreta y bastion con llave propia. Exportación de logs a OTLP y syslog. |
+| 2026-10-07 | **0.3.0.** Varias bases de datos por plan y SQLite junto a PostgreSQL. Probar la conexión de una credencial `db`. "Abrir shell" en el destino del paso que falló. `baton db`: consultas de solo lectura contra las bases del plan, en tabla, CSV o JSON. |
+
+Lo que sigue: MySQL y un modo interactivo para `baton db`.
 
 ## Desarrollo
 
