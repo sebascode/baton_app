@@ -4,6 +4,7 @@
 mod gate;
 pub mod prepare;
 mod remote;
+pub use remote::ssh_access;
 pub mod runner;
 pub mod transport;
 

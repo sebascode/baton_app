@@ -377,11 +377,16 @@ impl Ctx {
             self.log(step, LogKind::Output, "dry-run: no se sincroniza");
             return Ok(());
         }
-        let dest = format!("{}@{}:{}/", conn.user, conn.host, conn.remote_dir.display());
+        let dest = format!(
+            "{}:{}/",
+            conn.access.destination(),
+            conn.remote_dir.display()
+        );
         self.log(step, LogKind::Output, format!("sincronizando con {dest}"));
-        let ssh_opts = ssh_opts_for(conn);
+        let ssh_opts = conn.access.rsync_shell();
         let status = tokio::process::Command::new("rsync")
             .envs(self.opts.env.iter().cloned())
+            .envs(conn.access.askpass_env())
             .arg("-az")
             .arg("--delete")
             .arg("--exclude=.baton")
@@ -437,12 +442,13 @@ impl Ctx {
             return;
         }
         for (name, conn) in &self.ssh_conns {
-            let dest = format!("{}@{}:{remote}/", conn.user, conn.host);
+            let dest = format!("{}:{remote}/", conn.access.destination());
             let status = tokio::process::Command::new("rsync")
                 .envs(self.opts.env.iter().cloned())
+                .envs(conn.access.askpass_env())
                 .arg("-az")
                 .arg("-e")
-                .arg(ssh_opts_for(conn))
+                .arg(conn.access.rsync_shell())
                 .arg(log_path)
                 .arg(&dest)
                 .status()
@@ -473,19 +479,6 @@ impl Ctx {
 /// `transport_for` nunca debería llegar a usar esto (siempre hay al menos "local"), pero
 /// `Transport` necesita un `&dyn` y no una construcción cada vez.
 static LOCAL_FALLBACK: crate::transport::LocalTransport = crate::transport::LocalTransport;
-
-/// El `-e` de `rsync`: mismo `ssh` (puerto, llave, bastion) que usa `SshTransport` para ese
-/// destino, para que la sincronización y la copia del log entren por la misma conexión.
-fn ssh_opts_for(conn: &SshConn) -> String {
-    let mut opts = format!("ssh -o BatchMode=yes -p {}", conn.port);
-    if let Some(id) = &conn.identity {
-        opts.push_str(&format!(" -i {}", sh_quote(&id.to_string_lossy())));
-    }
-    if let Some(j) = &conn.jump {
-        opts.push_str(&format!(" -J {}", sh_quote(j)));
-    }
-    opts
-}
 
 fn describe(exit: Exit, timeout: Option<Duration>) -> String {
     match exit {
@@ -1302,11 +1295,13 @@ async fn run(
 
     let (transports, ssh_conns) =
         build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
-    let (secrets, redacted) = if opts.dry_run {
+    let (secrets, mut redacted) = if opts.dry_run {
         (Vec::new(), Vec::new())
     } else {
         resolve_credentials(&project, &config, &plan, opts.ambiente.as_deref())
     };
+    // las frases secretas de las llaves ssh tampoco deben verse en nada que se muestre o guarde
+    redacted.extend(ssh_conns.values().flat_map(|c| c.access.secrets()));
     let ctx = Ctx {
         project,
         plan,

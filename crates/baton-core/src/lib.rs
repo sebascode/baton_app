@@ -2,6 +2,7 @@
 //! eventos. No hace IO ni async; todo recibe texto o valores ya cargados.
 
 pub mod ask;
+pub mod askpass;
 pub mod auth_failure;
 pub mod compose;
 pub mod config;

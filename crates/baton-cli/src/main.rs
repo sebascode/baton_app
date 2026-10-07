@@ -360,7 +360,25 @@ impl From<DemoScreen> for Screen {
     }
 }
 
+/// `ssh` nos llama como `SSH_ASKPASS` para pedir la frase secreta de una llave (ver
+/// `baton_core::askpass`): contesta con la frase si es eso lo que pregunta, y se niega si no.
+fn askpass(keys: &str) -> ExitCode {
+    let prompt = std::env::args().nth(1).unwrap_or_default();
+    match baton_core::askpass::answer(keys, &prompt) {
+        Some(phrase) => {
+            println!("{phrase}");
+            ExitCode::SUCCESS
+        }
+        None => ExitCode::FAILURE,
+    }
+}
+
 fn main() -> ExitCode {
+    // La variable solo existe en el entorno de los procesos `ssh` que lanza baton; antes de leer
+    // los argumentos, porque el primero es la pregunta de ssh y no un comando.
+    if let Some(keys) = std::env::var_os(baton_core::askpass::KEYS_VAR) {
+        return askpass(&keys.to_string_lossy());
+    }
     let cli = Cli::parse();
 
     if let Some(Command::Version) = cli.command {

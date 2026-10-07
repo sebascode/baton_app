@@ -201,21 +201,189 @@ pub(crate) fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Ejecuta por ssh con los binarios del sistema (respeta `~/.ssh/config`). El comando llega armado
-/// en un solo argumento (`cd <remoto> && VAR=val sh -c '<línea>'`) porque `ssh` no tiene un
-/// `current_dir`/`env` propios: hay que pedírselo al shell remoto.
+/// Un salto (bastion) hacia un destino ssh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpHost {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    /// Llave del bastion (`-i`). Sin ella se usa `-J`, que entra con el agente o `~/.ssh/config`.
+    pub identity: Option<PathBuf>,
+    pub passphrase: Option<String>,
+}
+
+/// Cómo entrar a un destino ssh: lo comparten `SshTransport`, el `rsync` que sincroniza y la
+/// prueba de conexión, para que todos usen exactamente la misma conexión.
 ///
-/// `BatchMode=yes` hace que falle rápido en vez de quedarse esperando una contraseña o la frase
-/// secreta de una llave: por ahora solo se soportan llaves sin frase secreta o ya cargadas en un
-/// agente (ver CLAUDE.md, limitaciones del hito f).
+/// - **Llave con frase secreta**: `ssh` no puede preguntarla (no hay terminal, y `BatchMode` lo
+///   prohíbe), así que se usa `SSH_ASKPASS` apuntando a este mismo ejecutable, que contesta con la
+///   frase leída de una variable de entorno que existe solo en el proceso de `ssh` (ver
+///   `baton_core::askpass`). Pide OpenSSH 8.4 o más (`SSH_ASKPASS_REQUIRE`).
+/// - **Bastion con llave**: `-i` de `ssh` no llega al salto de `-J`, así que si el bastion tiene
+///   llave (propia o la del destino) se arma un `ProxyCommand` con un `ssh -W` que la lleva.
 #[derive(Debug, Clone)]
-pub struct SshTransport {
+pub struct SshAccess {
     pub host: String,
     pub port: u16,
     pub user: String,
     pub identity: Option<PathBuf>,
-    /// `usuario@host:puerto` del bastion (`-J`), si el destino salta por uno.
-    pub jump: Option<String>,
+    pub passphrase: Option<String>,
+    pub jump: Option<JumpHost>,
+}
+
+/// Una opción dentro de un `ProxyCommand` o del `-e` de `rsync`: tal cual si es simple, entre
+/// comillas simples si no (rsync no entiende el escape `'\''` de `sh_quote` dentro de otra comilla).
+fn quote_plain(s: &str) -> String {
+    let simple = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_./-@:%=,+".contains(c));
+    if simple { s.to_string() } else { sh_quote(s) }
+}
+
+/// Una opción dentro del `-e` de `rsync`, que parte por espacios y entiende comillas simples o
+/// dobles pero no escapes: tal cual si es simple, entre comillas simples, o entre dobles si ya
+/// lleva comillas simples (un `ProxyCommand` con una ruta con espacios).
+fn quote_rsync(s: &str) -> String {
+    if !s.is_empty() && quote_plain(s) == s {
+        s.to_string()
+    } else if s.contains('\'') {
+        format!("\"{s}\"")
+    } else {
+        format!("'{s}'")
+    }
+}
+
+impl SshAccess {
+    pub fn destination(&self) -> String {
+        format!("{}@{}", self.user, self.host)
+    }
+
+    /// ¿Alguna llave de esta conexión tiene frase secreta que contestar?
+    fn has_passphrase(&self) -> bool {
+        self.passphrase.is_some() || self.jump.as_ref().is_some_and(|j| j.passphrase.is_some())
+    }
+
+    /// Opciones comunes (sin destino ni comando). `extra` va antes de las demás.
+    pub fn options(&self, extra: &[&str]) -> Vec<String> {
+        let mut args: Vec<String> = Vec::new();
+        for pair in extra.chunks(2) {
+            args.extend(pair.iter().map(|s| s.to_string()));
+        }
+        args.extend(self.mode_options());
+        args.push("-p".to_string());
+        args.push(self.port.to_string());
+        if let Some(id) = &self.identity {
+            args.push("-i".to_string());
+            args.push(id.to_string_lossy().into_owned());
+        }
+        if let Some(j) = &self.jump {
+            // `-i` no llega al salto de `-J`: si el bastion tiene llave (la misma del destino o
+            // otra) se arma un `ProxyCommand` que la lleve; sin llave, `-J` y lo que tenga el
+            // agente o `~/.ssh/config`.
+            if j.identity.is_some() {
+                args.push("-o".to_string());
+                args.push(format!("ProxyCommand={}", self.proxy_command(j)));
+            } else {
+                args.push("-J".to_string());
+                args.push(format!("{}@{}:{}", j.user, j.host, j.port));
+            }
+        }
+        args
+    }
+
+    /// Sin frases secretas, `BatchMode` (falla rápido en vez de esperar algo que nadie va a
+    /// escribir). Con frases hay que dejar que `ssh` pregunte (al askpass), pero nunca una
+    /// contraseña.
+    fn mode_options(&self) -> Vec<String> {
+        let opts: &[&str] = if self.has_passphrase() {
+            &[
+                "BatchMode=no",
+                "PasswordAuthentication=no",
+                "KbdInteractiveAuthentication=no",
+            ]
+        } else {
+            &["BatchMode=yes"]
+        };
+        opts.iter()
+            .flat_map(|o| ["-o".to_string(), (*o).to_string()])
+            .collect()
+    }
+
+    fn proxy_command(&self, j: &JumpHost) -> String {
+        let mut parts: Vec<String> = vec!["ssh".into()];
+        parts.extend(self.mode_options().iter().map(|s| quote_plain(s)));
+        parts.extend(["-p".into(), j.port.to_string()]);
+        if let Some(id) = &j.identity {
+            parts.extend(["-i".into(), quote_plain(&id.to_string_lossy())]);
+        }
+        parts.extend([
+            "-W".into(),
+            "%h:%p".into(),
+            format!("{}@{}", j.user, j.host),
+        ]);
+        parts.join(" ")
+    }
+
+    /// Variables que `ssh` necesita para contestar las frases secretas; vacío si no hay ninguna.
+    pub fn askpass_env(&self) -> Vec<(String, String)> {
+        let mut keys: Vec<(String, String)> = Vec::new();
+        if let (Some(id), Some(p)) = (&self.identity, &self.passphrase) {
+            keys.push((id.to_string_lossy().into_owned(), p.clone()));
+        }
+        if let Some(j) = &self.jump
+            && let (Some(id), Some(p)) = (&j.identity, &j.passphrase)
+        {
+            keys.push((id.to_string_lossy().into_owned(), p.clone()));
+        }
+        let Ok(exe) = std::env::current_exe() else {
+            return Vec::new();
+        };
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            ("SSH_ASKPASS".into(), exe.to_string_lossy().into_owned()),
+            ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+            (
+                baton_core::askpass::KEYS_VAR.into(),
+                baton_core::askpass::encode(&keys),
+            ),
+        ]
+    }
+
+    /// Lo que va después de `-e` en `rsync`: el mismo `ssh` (puerto, llave, bastion).
+    pub fn rsync_shell(&self) -> String {
+        let mut parts = vec!["ssh".to_string()];
+        let opts = self.options(&[]);
+        let mut it = opts.iter().peekable();
+        while let Some(o) = it.next() {
+            parts.push(quote_rsync(o));
+            // `-o X`, `-p N`, `-i K`, `-J J` llevan su valor aparte
+            if matches!(o.as_str(), "-o" | "-p" | "-i" | "-J")
+                && let Some(v) = it.next()
+            {
+                parts.push(quote_rsync(v));
+            }
+        }
+        parts.join(" ")
+    }
+
+    /// Las frases secretas que no deben aparecer en nada que se muestre o guarde.
+    pub fn secrets(&self) -> Vec<String> {
+        self.passphrase
+            .iter()
+            .chain(self.jump.iter().filter_map(|j| j.passphrase.as_ref()))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Ejecuta por ssh con los binarios del sistema (respeta `~/.ssh/config`). El comando llega armado
+/// en un solo argumento (`cd <remoto> && VAR=val sh -c '<línea>'`) porque `ssh` no tiene un
+/// `current_dir`/`env` propios: hay que pedírselo al shell remoto.
+#[derive(Debug, Clone)]
+pub struct SshTransport {
+    pub access: SshAccess,
     /// Carpeta del destino donde vive el proyecto (ya sincronizada, si corresponde).
     pub remote_dir: PathBuf,
     /// Para traducir `cmd.cwd` (absoluto, local) a una ruta relativa a `remote_dir`.
@@ -227,21 +395,8 @@ pub struct SshTransport {
 
 impl SshTransport {
     fn args(&self, remote_command: &str) -> Vec<String> {
-        let mut args = vec![
-            "-o".to_string(),
-            "BatchMode=yes".to_string(),
-            "-p".to_string(),
-            self.port.to_string(),
-        ];
-        if let Some(id) = &self.identity {
-            args.push("-i".to_string());
-            args.push(id.to_string_lossy().into_owned());
-        }
-        if let Some(j) = &self.jump {
-            args.push("-J".to_string());
-            args.push(j.clone());
-        }
-        args.push(format!("{}@{}", self.user, self.host));
+        let mut args = self.access.options(&[]);
+        args.push(self.access.destination());
         args.push(remote_command.to_string());
         args
     }
@@ -298,11 +453,13 @@ impl Transport for SshTransport {
             // `envs()` sobre lo heredado solo agrega/pisa estas claves (no limpia el resto), así
             // que el proceso local de `ssh` conserva `SSH_AUTH_SOCK` y compañía igual.
             let stdin = Self::secrets_script(cmd);
+            let mut env = cmd.env.clone();
+            env.extend(self.access.askpass_env());
             spawn_and_stream(
                 &self.ssh_bin,
                 &args,
                 None,
-                &cmd.env,
+                &env,
                 stdin.as_deref(),
                 cmd.timeout,
                 on_line,
@@ -450,11 +607,14 @@ mod tests {
 
     fn ssh(root: &std::path::Path, remote_dir: &str) -> SshTransport {
         SshTransport {
-            host: "10.0.4.12".into(),
-            port: 2222,
-            user: "deploy".into(),
-            identity: Some(PathBuf::from("/home/x/.ssh/prod_app")),
-            jump: None,
+            access: SshAccess {
+                host: "10.0.4.12".into(),
+                port: 2222,
+                user: "deploy".into(),
+                identity: Some(PathBuf::from("/home/x/.ssh/prod_app")),
+                passphrase: None,
+                jump: None,
+            },
             remote_dir: PathBuf::from(remote_dir),
             project_root: root.to_path_buf(),
             ssh_bin: "ssh".into(),
@@ -482,7 +642,13 @@ mod tests {
     fn args_include_batch_mode_port_identity_and_jump() {
         let root = PathBuf::from("/x");
         let mut t = ssh(&root, "/opt/stack");
-        t.jump = Some("jump@203.0.113.5:22".to_string());
+        t.access.jump = Some(JumpHost {
+            host: "203.0.113.5".into(),
+            port: 22,
+            user: "jump".into(),
+            identity: None,
+            passphrase: None,
+        });
         let args = t.args("echo hola");
         assert_eq!(
             args,
@@ -501,11 +667,123 @@ mod tests {
         );
     }
 
+    fn access() -> SshAccess {
+        SshAccess {
+            host: "10.0.4.12".into(),
+            port: 2222,
+            user: "deploy".into(),
+            identity: Some(PathBuf::from("/home/x/.ssh/prod_app")),
+            passphrase: None,
+            jump: Some(JumpHost {
+                host: "203.0.113.5".into(),
+                port: 22,
+                user: "jump".into(),
+                identity: Some(PathBuf::from("/home/x/.ssh/bastion key")),
+                passphrase: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_bastion_with_a_key_becomes_a_proxy_command_that_carries_it() {
+        let a = access();
+        let args = a.options(&[]);
+        assert_eq!(
+            args,
+            [
+                "-o",
+                "BatchMode=yes",
+                "-p",
+                "2222",
+                "-i",
+                "/home/x/.ssh/prod_app",
+                "-o",
+                "ProxyCommand=ssh -o BatchMode=yes -p 22 -i '/home/x/.ssh/bastion key' -W %h:%p jump@203.0.113.5",
+            ]
+        );
+        assert!(
+            !args.contains(&"-J".to_string()),
+            "-i no llega al salto de -J"
+        );
+    }
+
+    #[test]
+    fn a_passphrase_lets_ssh_ask_but_never_for_a_password() {
+        let mut a = access();
+        a.passphrase = Some("frase uno".into());
+        let args = a.options(&[]);
+        for o in [
+            "BatchMode=no",
+            "PasswordAuthentication=no",
+            "KbdInteractiveAuthentication=no",
+        ] {
+            assert!(args.contains(&o.to_string()), "{o}: {args:?}");
+        }
+        assert!(!args.contains(&"BatchMode=yes".to_string()));
+        // el ssh del bastion también puede preguntar
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("ProxyCommand=") && a.contains("BatchMode=no")),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn the_askpass_environment_exists_only_when_there_is_a_phrase_and_names_each_key() {
+        let mut a = access();
+        assert!(a.askpass_env().is_empty());
+        a.passphrase = Some("frase uno".into());
+        a.jump.as_mut().unwrap().passphrase = Some("frase dos".into());
+        let env: std::collections::HashMap<_, _> = a.askpass_env().into_iter().collect();
+        assert_eq!(env["SSH_ASKPASS_REQUIRE"], "force");
+        assert!(!env["SSH_ASKPASS"].is_empty());
+        let keys = &env[baton_core::askpass::KEYS_VAR];
+        assert_eq!(
+            baton_core::askpass::answer(keys, "Enter passphrase for key '/home/x/.ssh/prod_app': "),
+            Some("frase uno".into())
+        );
+        assert_eq!(
+            baton_core::askpass::answer(
+                keys,
+                "Enter passphrase for key '/home/x/.ssh/bastion key': "
+            ),
+            Some("frase dos".into())
+        );
+        assert_eq!(a.secrets(), ["frase uno", "frase dos"]);
+    }
+
+    #[test]
+    fn rsync_gets_the_same_connection_as_ssh() {
+        let mut a = access();
+        a.jump = None;
+        assert_eq!(
+            a.rsync_shell(),
+            "ssh -o BatchMode=yes -p 2222 -i /home/x/.ssh/prod_app"
+        );
+        a.jump = Some(JumpHost {
+            host: "203.0.113.5".into(),
+            port: 22,
+            user: "jump".into(),
+            identity: None,
+            passphrase: None,
+        });
+        assert_eq!(
+            a.rsync_shell(),
+            "ssh -o BatchMode=yes -p 2222 -i /home/x/.ssh/prod_app -J jump@203.0.113.5:22"
+        );
+        // el bastion lleva una ruta con espacio: rsync no entiende `'\\''`, así que el valor va
+        // entre comillas dobles y la ruta, entre simples
+        assert_eq!(
+            access().rsync_shell(),
+            "ssh -o BatchMode=yes -p 2222 -i /home/x/.ssh/prod_app -o \"ProxyCommand=ssh -o BatchMode=yes -p 22 -i '/home/x/.ssh/bastion key' -W %h:%p jump@203.0.113.5\""
+        );
+    }
+
     #[test]
     fn without_an_identity_or_a_jump_neither_flag_appears() {
         let root = PathBuf::from("/x");
         let mut t = ssh(&root, "/opt/stack");
-        t.identity = None;
+        t.access.identity = None;
         let args = t.args("echo hola");
         assert!(!args.contains(&"-i".to_string()));
         assert!(!args.contains(&"-J".to_string()));
@@ -538,7 +816,7 @@ sh -c "$last"
         std::fs::create_dir_all(remote.join("services/api")).unwrap();
         let calls = tmp.path().join("_calls");
         let mut t = ssh(&root, &remote.to_string_lossy());
-        t.identity = None;
+        t.access.identity = None;
         t.ssh_bin = fake_ssh_bin(&tmp).to_string_lossy().into_owned();
 
         let mut c = cmd("echo hola; echo mal >&2; exit 7");
@@ -613,7 +891,7 @@ sh -c "$last"
         std::fs::create_dir_all(&remote).unwrap();
         let calls = tmp.path().join("_calls");
         let mut t = ssh(&root, &remote.to_string_lossy());
-        t.identity = None;
+        t.access.identity = None;
         t.ssh_bin = fake_ssh_bin(&tmp).to_string_lossy().into_owned();
 
         let mut c = cmd("printf '%s' \"$TOKEN\"");

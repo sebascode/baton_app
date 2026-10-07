@@ -9,51 +9,76 @@ use baton_store::Project;
 use baton_store::secrets::Resolver;
 
 use crate::prepare::PStep;
-use crate::transport::{ContextTransport, LocalTransport, SshTransport, Transport};
+use crate::transport::{
+    ContextTransport, JumpHost, LocalTransport, SshAccess, SshTransport, Transport,
+};
 
 /// Lo que además de un `Transport` hace falta para sincronizar por `rsync` antes de ejecutar.
 #[derive(Debug, Clone)]
 pub(crate) struct SshConn {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub identity: Option<PathBuf>,
-    /// `usuario@host:puerto` del bastion (`-J`/`-e ssh -J...`), si el destino salta por uno.
-    pub jump: Option<String>,
+    pub access: SshAccess,
     pub remote_dir: PathBuf,
     pub sync: bool,
 }
 
-/// `-i` de `ssh` se aplica a todos los saltos: si el bastion necesita una llave propia distinta
-/// de la del destino final, no se soporta todavía (ver CLAUDE.md, limitaciones del hito f).
-fn jump_of(config: &Config, bastion: &str) -> Option<String> {
-    let Some(Target::Ssh(b)) = config.targets.get(bastion) else {
-        return None;
-    };
-    Some(format!("{}@{}:{}", b.user, b.host, b.port))
-}
-
-fn identity_of(
+/// La llave (`KEY`, una ruta) y su frase secreta (`PASSPHRASE`, opcional) de la credencial de un
+/// destino ssh.
+fn key_of(
     project: &Project,
     config: &Config,
     ambiente: Option<&str>,
     s: &SshTarget,
-) -> Option<PathBuf> {
-    let r = s.credential.as_ref()?;
-    Resolver::new(project, config, ambiente)
-        .resolve(r, "KEY", None)
-        .value
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
+) -> (Option<PathBuf>, Option<String>) {
+    let Some(r) = s.credential.as_ref() else {
+        return (None, None);
+    };
+    let resolver = Resolver::new(project, config, ambiente);
+    let get = |field: &str| {
+        resolver
+            .resolve(r, field, None)
+            .value
+            .filter(|v| !v.is_empty())
+    };
+    (get("KEY").map(PathBuf::from), get("PASSPHRASE"))
+}
+
+/// Cómo entrar a un destino ssh: su llave y, si salta por un bastion, el salto con la llave del
+/// bastion si tiene una propia. Lo usan la ejecución, `rsync` y "probar conexión".
+pub fn ssh_access(
+    project: &Project,
+    config: &Config,
+    ambiente: Option<&str>,
+    target: &SshTarget,
+    bastion: Option<&SshTarget>,
+) -> SshAccess {
+    let (identity, passphrase) = key_of(project, config, ambiente, target);
+    let jump = bastion.map(|b| {
+        let (identity, passphrase) = key_of(project, config, ambiente, b);
+        JumpHost {
+            host: b.host.clone(),
+            port: b.port,
+            user: b.user.clone(),
+            identity,
+            passphrase,
+        }
+    });
+    SshAccess {
+        host: target.host.clone(),
+        port: target.port,
+        user: target.user.clone(),
+        identity,
+        passphrase,
+        jump,
+    }
 }
 
 fn ssh_conn(project: &Project, config: &Config, ambiente: Option<&str>, s: &SshTarget) -> SshConn {
+    let bastion = match s.bastion.as_deref().and_then(|b| config.targets.get(b)) {
+        Some(Target::Ssh(b)) => Some(b),
+        _ => None,
+    };
     SshConn {
-        host: s.host.clone(),
-        port: s.port,
-        user: s.user.clone(),
-        identity: identity_of(project, config, ambiente, s),
-        jump: s.bastion.as_deref().and_then(|b| jump_of(config, b)),
+        access: ssh_access(project, config, ambiente, s, bastion),
         remote_dir: PathBuf::from(s.remote_dir.clone().unwrap_or_default()),
         sync: s.sync,
     }
@@ -83,11 +108,7 @@ pub(crate) fn build_transports(
             Some(Target::Ssh(s)) => {
                 let conn = ssh_conn(project, config, ambiente, s);
                 let t = SshTransport {
-                    host: conn.host.clone(),
-                    port: conn.port,
-                    user: conn.user.clone(),
-                    identity: conn.identity.clone(),
-                    jump: conn.jump.clone(),
+                    access: conn.access.clone(),
                     remote_dir: conn.remote_dir.clone(),
                     project_root: project.root.clone(),
                     ssh_bin: "ssh".to_string(),
@@ -155,7 +176,7 @@ mod tests {
         assert!(transports.contains_key("prod"));
         assert!(transports.contains_key("qa"));
         assert_eq!(conns.len(), 1);
-        assert_eq!(conns["prod"].host, "h");
+        assert_eq!(conns["prod"].access.host, "h");
         assert_eq!(conns["prod"].remote_dir, PathBuf::from("/x"));
     }
 
@@ -176,7 +197,7 @@ mod tests {
         .unwrap();
         let (_, conns) = build_transports(&project, &config, None, &[ps("a", "prod")]);
         assert_eq!(
-            conns["prod"].identity,
+            conns["prod"].access.identity,
             Some(PathBuf::from("/home/x/.ssh/prod_app"))
         );
     }
@@ -191,9 +212,11 @@ mod tests {
         )
         .unwrap();
         let (_, conns) = build_transports(&project, &config, None, &[ps("a", "prod")]);
+        let jump = conns["prod"].access.jump.as_ref().unwrap();
         assert_eq!(
-            conns["prod"].jump.as_deref(),
-            Some("jumper@203.0.113.5:2222")
+            (jump.user.as_str(), jump.host.as_str(), jump.port),
+            ("jumper", "203.0.113.5", 2222)
         );
+        assert_eq!(jump.identity, None, "sin llave propia usa -J");
     }
 }

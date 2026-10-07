@@ -10,7 +10,7 @@ use baton_store::config_edit::{SaveError, save_config};
 use baton_store::{Project, check_config};
 use baton_tui::App;
 use baton_tui::app::Mode;
-use baton_tui::config_view::{TargetItem, TargetStatus, name_of, target_of};
+use baton_tui::config_view::{TargetStatus, name_of, target_of};
 use baton_tui::demo::{Driver, Flow};
 
 /// Por debajo de esto es "ok"; a partir de acá, "lento" (pero conectó).
@@ -59,38 +59,26 @@ impl ConfigDriver {
             }
             Ok(Target::Ssh(ssh)) => {
                 let config = check_config(&self.project).value.unwrap_or_default();
-                let identity = ssh.credential.as_ref().and_then(|r| {
-                    baton_store::secrets::Resolver::new(&self.project, &config, None)
-                        .resolve(r, "KEY", None)
-                        .value
-                        .filter(|v| !v.is_empty())
+                // el bastion es el de la pantalla (puede no estar guardado todavía)
+                let bastion = ssh.bastion.as_ref().and_then(|name| {
+                    c.targets.iter().find(|t| &t.name == name).and_then(|t| {
+                        match target_of(t, &name_of(t)) {
+                            Ok(Target::Ssh(b)) => Some(b),
+                            _ => None,
+                        }
+                    })
                 });
-                let mut args = vec![
-                    "-o".to_string(),
-                    "BatchMode=yes".to_string(),
-                    "-o".to_string(),
-                    "ConnectTimeout=5".to_string(),
-                    "-p".to_string(),
-                    ssh.port.to_string(),
-                ];
-                if let Some(id) = &identity {
-                    args.push("-i".to_string());
-                    args.push(id.clone());
-                }
-                if let Some(bastion_name) = &ssh.bastion
-                    && let Some(j) = c
-                        .targets
-                        .iter()
-                        .find(|t| &t.name == bastion_name)
-                        .and_then(jump_of)
-                {
-                    args.push("-J".to_string());
-                    args.push(j);
-                }
-                args.push(format!("{}@{}", ssh.user, ssh.host));
+                let access =
+                    baton_exec::ssh_access(&self.project, &config, None, &ssh, bastion.as_ref());
+                let mut args = access.options(&["-o", "ConnectTimeout=5"]);
+                args.push(access.destination());
                 args.push("true".to_string());
                 let started = Instant::now();
-                match Command::new("ssh").args(&args).output() {
+                match Command::new("ssh")
+                    .args(&args)
+                    .envs(access.askpass_env())
+                    .output()
+                {
                     Ok(o) if o.status.success() && started.elapsed() < SLOW_AFTER => {
                         TargetStatus::Ok
                     }
@@ -121,14 +109,6 @@ impl ConfigDriver {
             Err(SaveError::Invalid(issues)) => app.notify(&describe_issues(&issues)),
             Err(e) => app.notify(&e.to_string()),
         }
-    }
-}
-
-/// `usuario@host:puerto` de un destino ssh, para el `-J` de otro que salta por él.
-fn jump_of(item: &TargetItem) -> Option<String> {
-    match target_of(item, &name_of(item)) {
-        Ok(Target::Ssh(s)) => Some(format!("{}@{}:{}", s.user, s.host, s.port)),
-        _ => None,
     }
 }
 
