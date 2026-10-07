@@ -183,7 +183,7 @@ fn run_command(line: &str, cwd: &Path, timeout: Duration) -> Result<Option<Strin
             Ok(Some(s)) => break s,
             Ok(None) if started.elapsed() >= timeout => {
                 let _ = Command::new("kill")
-                    .args(["-KILL", &format!("-{}", child.id())])
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();

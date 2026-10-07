@@ -68,7 +68,7 @@ impl GroupKill {
     fn kill(&self) {
         if let Some(pgid) = self.pgid {
             let _ = std::process::Command::new("kill")
-                .args(["-KILL", &format!("-{pgid}")])
+                .args(["-KILL", "--", &format!("-{pgid}")])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();

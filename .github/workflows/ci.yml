@@ -38,7 +38,7 @@ jobs:
 
       - name: Instalar shells (macos)
         if: runner.os == 'macOS'
-        run: brew install fish
+        run: brew install bash fish
 
       - name: Verificar arquitectura
         if: runner.os == 'macOS'
