@@ -122,6 +122,7 @@ dependencies = [
  "baton-tui",
  "clap",
  "inquire",
+ "serde_json",
  "tempfile",
 ]
 
@@ -134,6 +135,7 @@ dependencies = [
  "indexmap",
  "petgraph",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "toml",
 ]

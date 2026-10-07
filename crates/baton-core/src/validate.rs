@@ -134,15 +134,21 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
                 "la exportación está activa pero falta kind (otlp o syslog)",
             ));
         }
-        if export
-            .endpoint
-            .as_deref()
-            .is_none_or(|e| e.trim().is_empty())
-        {
-            out.push(Issue::error(
+        match (export.kind, export.endpoint.as_deref()) {
+            (_, None) => out.push(Issue::error(
                 path!["logs", "export", "endpoint"],
                 "la exportación está activa pero falta endpoint",
-            ));
+            )),
+            (_, Some(e)) if e.trim().is_empty() => out.push(Issue::error(
+                path!["logs", "export", "endpoint"],
+                "la exportación está activa pero falta endpoint",
+            )),
+            (Some(kind), Some(e)) => {
+                if let Err(why) = crate::export::parse_endpoint(kind, e) {
+                    out.push(Issue::error(path!["logs", "export", "endpoint"], why));
+                }
+            }
+            (None, Some(_)) => {}
         }
     }
     out

@@ -129,6 +129,10 @@ pub(crate) struct Ctx {
     /// Valores de esos campos que son secretos (token, contraseña...): se tachan de todo lo que
     /// se muestra o se guarda.
     redacted: Vec<String>,
+    /// Adónde exportar el log al terminar (`[logs.export]`), si está activo y no es un dry-run.
+    export: Option<baton_core::export::Target>,
+    /// Las líneas del log con su hora, mientras haya a dónde exportarlas.
+    records: Mutex<(Vec<baton_core::export::Record>, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +196,25 @@ impl Ctx {
     pub(crate) fn log(&self, step: usize, kind: LogKind, text: impl Into<String>) {
         let text = self.redact(&text.into());
         let at = clock::clock();
+        if self.export.is_some()
+            && let Ok(mut buf) = self.records.lock()
+        {
+            if buf.0.len() < crate::export::MAX_RECORDS {
+                buf.0.push(baton_core::export::Record {
+                    unix_nanos: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_nanos()),
+                    step: self
+                        .steps
+                        .get(step)
+                        .map_or(String::new(), |p| p.step.id.clone()),
+                    kind,
+                    text: text.clone(),
+                });
+            } else {
+                buf.1 += 1;
+            }
+        }
         if let Ok(mut sink) = self.sink.lock()
             && let Some(s) = sink.as_mut()
         {
@@ -414,6 +437,54 @@ impl Ctx {
         }
     }
 
+    /// Manda el log de la ejecución a OTLP o syslog (`[logs.export]`). Un fallo se anota en el
+    /// log; la ejecución ya terminó y no se hace fallar por esto.
+    async fn export_log(&self, log_path: &Path) {
+        let Some(target) = &self.export else {
+            return;
+        };
+        let (mut records, dropped) = self
+            .records
+            .lock()
+            .map(|mut b| (std::mem::take(&mut b.0), b.1))
+            .unwrap_or_default();
+        if records.is_empty() {
+            return;
+        }
+        if dropped > 0 {
+            records.push(baton_core::export::Record {
+                unix_nanos: records.last().map_or(0, |r| r.unix_nanos),
+                step: String::new(),
+                kind: LogKind::Error,
+                text: format!("se omitieron {dropped} líneas más (tope de la exportación)"),
+            });
+        }
+        let res = baton_core::export::Resource {
+            plan: self.plan.name.clone(),
+            run_id: self.fecha.clone(),
+            ambiente: self.opts.ambiente.clone(),
+            host: crate::export::hostname(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        let scratch = log_path.parent().unwrap_or(Path::new("."));
+        match crate::export::send(target, &res, &records, scratch).await {
+            Ok(()) => self.log(
+                0,
+                LogKind::Success,
+                format!(
+                    "log exportado a {} ({} líneas)",
+                    target.label(),
+                    records.len()
+                ),
+            ),
+            Err(e) => self.log(
+                0,
+                LogKind::Error,
+                format!("no se pudo exportar el log a {}: {e}", target.label()),
+            ),
+        }
+    }
+
     /// Al terminar (nunca en dry-run): aplica la retención de `[logs]` a la carpeta del log y,
     /// si `[logs].remote` está puesto, copia el log a cada destino ssh que usó la corrida.
     async fn finalize_log(&self, log_path: &Path) {
@@ -435,6 +506,7 @@ impl Ctx {
                 );
             }
         }
+        self.export_log(log_path).await;
         let Some(remote) = self.config.logs.remote.as_deref() else {
             return;
         };
@@ -1293,6 +1365,10 @@ async fn run(
         state.archive_last_run(&plan.name);
     }
 
+    // la configuración ya se validó al cargarla; si el endpoint no se entiende, no se exporta
+    let export = (!opts.dry_run)
+        .then(|| baton_store::logs::export_target(&config.logs.export))
+        .flatten();
     let (transports, ssh_conns) =
         build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
     let (secrets, mut redacted) = if opts.dry_run {
@@ -1325,6 +1401,8 @@ async fn run(
         warnings: Mutex::new(Vec::new()),
         secrets,
         redacted,
+        export,
+        records: Mutex::new((Vec::new(), 0)),
     };
     // El estado se guarda salvo en dry-run: probar un plan no debe pisar la última ejecución real.
     if let Ok(mut p) = ctx.persist.lock() {

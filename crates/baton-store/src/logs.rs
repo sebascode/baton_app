@@ -13,6 +13,15 @@ use serde::Serialize;
 
 use crate::project::Project;
 
+/// A dónde exportar según `[logs.export]`; `None` si está apagada o el endpoint no se entiende
+/// (la validación de la configuración ya lo reporta como error).
+pub fn export_target(export: &baton_core::config::Export) -> Option<baton_core::export::Target> {
+    if !export.enabled {
+        return None;
+    }
+    baton_core::export::parse_endpoint(export.kind?, export.endpoint.as_deref()?).ok()
+}
+
 /// Resuelve la ruta del log: sustituye `{plan}`, `{fecha}`, `{destino}`, expande `~` y deja las
 /// rutas relativas a la raíz del proyecto.
 pub fn resolve_log_path(

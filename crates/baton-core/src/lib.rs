@@ -8,6 +8,7 @@ pub mod compose;
 pub mod config;
 pub mod credential;
 pub mod events;
+pub mod export;
 pub mod import;
 pub mod issue;
 pub mod locate;

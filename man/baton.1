@@ -382,8 +382,14 @@ format = "text"           # o "json"
 [logs.retention]
 days = 30
 max_size = "500MB"
+[logs.export]
+enabled = false
+kind = "otlp"             # o "syslog"
+endpoint = "http://localhost:4318"
 .RE
 .fi
+.PP
+\fB[logs.export]\fR (apagada por defecto) manda el log de cada ejecución a otro sistema \fBal terminar\fR, nunca en un dry-run. Un fallo al exportar se anota en el log y no hace fallar la ejecución. Con \fBkind = "otlp"\fR envía un \fBPOST\fR OTLP/HTTP con JSON a \fB<endpoint>/v1/logs\fR (con \fBhttps://\fR si el colector lo pide), usando \fBcurl\fR; las cabeceras de autenticación se leen de la variable estándar \fBOTEL_EXPORTER_OTLP_HEADERS\fR (\fBAuthorization=Bearer abc,X\-Org=uno\fR), así el token no vive en \fIconfig.toml\fR, y junto con la URL viajan a \fBcurl\fR por la entrada estándar, no por argumentos. Cada línea del log es un registro con su hora, gravedad (los errores como ERROR, los reintentos como WARN) y atributos \fBbaton.step\fR y \fBbaton.kind\fR; el recurso lleva \fBservice.name=baton\fR, el plan, el id de la ejecución, el ambiente y la máquina. Con \fBkind = "syslog"\fR envía un mensaje RFC 5424 por línea a \fBudp://host:514\fR (o \fBhost:514\fR a secas), \fBtcp://host:514\fR o \fBunix:///dev/log\fR. Lo exportado ya va sin los valores secretos, igual que el log. Se guardan hasta 50000 líneas por ejecución; si hay más se avisa cuántas se omitieron.
 .PP
 Un destino \fBssh\fR usa el binario \fBssh\fR del sistema (respeta \fI~/.ssh/config\fR). Si \fBsync\fR está activo, \fBrsync\fR copia la raíz del proyecto, nunca \fI.baton/\fR, una sola vez por destino y por ejecución. El bastion se traduce a \fB\-J\fR, o, si su credencial tiene una llave (\fBKEY\fR), a un \fBProxyCommand\fR que la usa, así un bastion puede tener una llave distinta de la del destino. Una llave con frase secreta (\fBPASSPHRASE\fR en la credencial, o en la del bastion) funciona sin agente ni terminal: baton se ofrece a \fBssh\fR como programa de contraseñas (\fBSSH_ASKPASS\fR, OpenSSH 8.4 o más) y solo contesta a la pregunta por la frase de esa llave; nunca a una contraseña ni a una confirmación. Solo se soportan llaves, no contraseñas. Un \fBcontext\fR ejecuta con \fBDOCKER_CONTEXT\fR definida.
 .
@@ -579,7 +585,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),
