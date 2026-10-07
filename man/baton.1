@@ -157,6 +157,38 @@ Muestra cómo terminó la última ejecución de un plan: el resultado, una barra
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
+.SS baton db [base]
+Consulta una base de datos del plan (una credencial \fBdb\fR o \fBsqlite\fR) con las credenciales de \fI.baton/\fR y muestra el resultado. \fBbase\fR es el id de la credencial; sin él se usa la única del plan. Sin ninguna consulta lista las bases del plan y cómo consultarlas. La consulta es \fBuna sola sentencia\fR (para varias, usa un paso \fBsql\fR) y viaja por la entrada estándar del motor, nunca en un argumento. Corre en tu máquina con \fBpsql\fR (o \fBdocker exec\fR si la credencial tiene \fBCONTAINER\fR) o \fBsqlite3\fR. Por defecto es de \fBsolo lectura\fR: SQLite abre el archivo en solo lectura y en PostgreSQL se activa \fBdefault_transaction_read_only\fR (un seguro contra accidentes, no una barrera de seguridad). Sale con 0 si todo bien, con 1 si faltan datos de la credencial o el programa, con 2 por un error de uso (consulta vacía o de varias sentencias, base ambigua, consulta destructiva sin confirmar) y con 3 si el motor devolvió un error o no respondió a tiempo.
+.TP
+.BI \-c " consulta" ", " \-\-consulta " consulta"
+La consulta.
+.TP
+.BI \-f " archivo" ", " \-\-archivo " archivo"
+Lee la consulta de un archivo; \fB\-\fR la lee de la entrada estándar (\fBbaton\fR nunca la lee por su cuenta).
+.TP
+.BI \-\-plan " plan"
+Plan del que se toman las credenciales (por defecto, el único del proyecto).
+.TP
+.BI \-\-formato " tabla|csv|json"
+Cómo se muestra el resultado. La tabla alinea los números a la derecha, muestra NULL y recorta las celdas largas; \fBcsv\fR es la salida del motor (con un NULL como campo vacío); \fBjson\fR es un arreglo de objetos con las columnas en orden, los números como números y NULL como \fBnull\fR.
+.TP
+.BI \-\-limite " n"
+Cuántas filas se muestran en la tabla (200 por defecto; 0 las muestra todas). Con \fBcsv\fR y \fBjson\fR siempre salen todas.
+.TP
+.B \-\-completo
+No recorta las celdas largas de la tabla (60 columnas por defecto).
+.TP
+.B \-\-escribir
+Permite modificar datos. Una sentencia destructiva (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR o \fBUPDATE\fR sin \fBWHERE\fR...) además necesita \fB\-\-assume\-yes\fR.
+.TP
+.B \-\-assume\-yes
+Ejecuta una consulta destructiva sin más confirmación.
+.TP
+.BI \-\-ambiente " ambiente"
+Ambiente del que se resuelven las credenciales.
+.TP
+.BI \-\-timeout " duración"
+Cuánto se espera la respuesta (60s por defecto).
 .SS baton history [plan]
 Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Sale con 1 si el plan todavía no se ejecutó.
 .TP

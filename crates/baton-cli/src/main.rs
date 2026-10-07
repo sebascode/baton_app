@@ -3,12 +3,14 @@
 mod ambiente;
 mod ask;
 mod config_run;
+mod db_cmd;
 mod history_cmd;
 mod import;
 mod last;
 mod overview;
 mod pick;
 mod plans_cmd;
+mod proc;
 mod run;
 mod shell_init;
 mod start;
@@ -230,6 +232,41 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+    },
+    /// Consulta una base de datos del plan (credenciales db y sqlite) y muestra el resultado
+    Db {
+        /// Base a consultar (el id de su credencial); sin él, la única del plan
+        base: Option<String>,
+        /// La consulta (una sola sentencia); también con --archivo
+        #[arg(short = 'c', long = "consulta")]
+        consulta: Option<String>,
+        /// Lee la consulta de un archivo (`-`: de la entrada estándar)
+        #[arg(short = 'f', long = "archivo", value_name = "ARCHIVO")]
+        archivo: Option<PathBuf>,
+        /// Plan del que se toman las credenciales (por defecto, el único del proyecto)
+        #[arg(long)]
+        plan: Option<String>,
+        /// Cómo se muestra el resultado
+        #[arg(long, value_enum, default_value_t = db_cmd::Format::Tabla)]
+        formato: db_cmd::Format,
+        /// Cuántas filas se muestran en la tabla (0: todas)
+        #[arg(long, default_value_t = 200, value_name = "N")]
+        limite: usize,
+        /// No recorta las celdas largas de la tabla
+        #[arg(long)]
+        completo: bool,
+        /// Permite modificar datos (por defecto la consulta es de solo lectura)
+        #[arg(long)]
+        escribir: bool,
+        /// Ejecuta una consulta destructiva sin pedir más
+        #[arg(long)]
+        assume_yes: bool,
+        /// Ambiente del que se resuelven las credenciales
+        #[arg(long)]
+        ambiente: Option<String>,
+        /// Cuánto se espera a la respuesta (ej. 30s, 5m)
+        #[arg(long, default_value = "60s")]
+        timeout: String,
     },
     /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
     History {
@@ -566,6 +603,40 @@ fn main() -> ExitCode {
                 Ok(plan) => run::rollback(&project, &plan, ambiente.as_deref()),
                 Err(code) => code,
             }
+        }
+        Command::Db {
+            base,
+            consulta,
+            archivo,
+            plan,
+            formato,
+            limite,
+            completo,
+            escribir,
+            assume_yes,
+            ambiente,
+            timeout,
+        } => {
+            let Ok(timeout) = timeout.parse::<baton_core::units::Dur>() else {
+                eprintln!("error: --timeout '{timeout}' no es una duración (ej. 30s, 5m)");
+                return ExitCode::from(EXIT_USAGE);
+            };
+            db_cmd::run(
+                &project,
+                db_cmd::Args {
+                    credential: base,
+                    plan,
+                    query: consulta,
+                    file: archivo,
+                    format: formato,
+                    limit: limite,
+                    full: completo,
+                    write: escribir,
+                    assume_yes,
+                    ambiente,
+                    timeout: timeout.as_duration(),
+                },
+            )
         }
         Command::History { plan, limit } => {
             match pick::resolve(&project, plan, "history", "consultar") {

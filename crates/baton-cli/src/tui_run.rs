@@ -16,6 +16,8 @@ use baton_store::{Project, check_plan};
 use baton_tui::app::Mode;
 use baton_tui::credentials::{CredField, CredItem, CredStatus, CredentialsState};
 use baton_tui::demo::{Driver, Flow, ShellSession};
+
+use crate::proc::{Finished, Unfinished};
 use baton_tui::gate_view::ScannedService;
 use baton_tui::history_view::{HistoryState, LogFileState};
 use baton_tui::{App, EditorState, Effect, PreviewState, RunRequest, plan_step_infos};
@@ -586,69 +588,14 @@ fn test_connection(
 /// Cuánto se espera a que la base responda antes de dar la prueba por fallida.
 const DB_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Cómo terminó un proceso de prueba.
-struct Finished {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-}
-
-/// Por qué no se pudo obtener un resultado.
-enum Unfinished {
-    NotFound,
-    TimedOut,
-    Other(String),
-}
-
-/// Corre un programa (sin terminal, con `env` extra) y espera hasta `timeout`.
+/// Corre un programa sin terminal (con `env` extra) y espera hasta `timeout`.
 fn run_limited(
     program: &std::ffi::OsStr,
     args: &[String],
     env: &[(String, String)],
     timeout: std::time::Duration,
 ) -> Result<Finished, Unfinished> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
-        .args(args)
-        .envs(env.iter().cloned())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => Unfinished::NotFound,
-            _ => Unfinished::Other(format!("no se pudo ejecutar {}: {e}", program.display())),
-        })?;
-    let started = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) if started.elapsed() < timeout => {
-                std::thread::sleep(std::time::Duration::from_millis(40));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Unfinished::TimedOut);
-            }
-            Err(e) => {
-                return Err(Unfinished::Other(format!(
-                    "no se pudo esperar a la prueba: {e}"
-                )));
-            }
-        }
-    };
-    let out = child.wait_with_output().ok();
-    let text = |bytes: Option<&Vec<u8>>| {
-        bytes
-            .map(|b| String::from_utf8_lossy(b).into_owned())
-            .unwrap_or_default()
-    };
-    Ok(Finished {
-        ok: status.success(),
-        stdout: text(out.as_ref().map(|o| &o.stdout)),
-        stderr: text(out.as_ref().map(|o| &o.stderr)),
-    })
+    crate::proc::run_capture(program, args, env, None, timeout)
 }
 
 /// La primera línea con texto de un mensaje de error.

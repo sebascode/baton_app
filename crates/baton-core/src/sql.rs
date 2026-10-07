@@ -296,6 +296,50 @@ pub fn destructive_statements(sql: &str) -> Vec<Risk> {
     out
 }
 
+/// Cuántas sentencias trae un texto SQL (separadas por `;`, sin contar los blancos, los
+/// comentarios ni lo que va entre comillas o dentro de un bloque `$$ ... $$`).
+pub fn statement_count(sql: &str) -> usize {
+    let orig: Vec<char> = sql.chars().collect();
+    let clean = blank_comments_and_strings(&orig);
+    let mut count = 0;
+    let mut has_text = false;
+    let mut i = 0;
+    while i < clean.len() {
+        let c = clean[i];
+        if c == '$'
+            && let Some(len) = dollar_tag_len(&clean[i..])
+        {
+            // salta hasta el cierre con la misma etiqueta
+            let tag: String = clean[i..i + len].iter().collect();
+            let body = i + len;
+            let close = (body..clean.len().saturating_sub(len - 1))
+                .find(|&j| clean[j..j + len].iter().collect::<String>() == tag);
+            has_text = true;
+            i = close.map_or(clean.len(), |j| j + len);
+            continue;
+        }
+        if c == ';' {
+            if has_text {
+                count += 1;
+            }
+            has_text = false;
+        } else if !c.is_whitespace() {
+            has_text = true;
+        }
+        i += 1;
+    }
+    count + usize::from(has_text)
+}
+
+/// Largo de una etiqueta de bloque (`$$`, `$cuerpo$`) que empieza en `chars[0]`.
+fn dollar_tag_len(chars: &[char]) -> Option<usize> {
+    let end = chars
+        .iter()
+        .skip(1)
+        .position(|c| !(c.is_alphanumeric() || *c == '_'))?;
+    (chars[end + 1] == '$').then_some(end + 2)
+}
+
 /// Línea (desde 1) del primer carácter que no es blanco a partir de `from`.
 fn line_of(clean: &[char], from: usize) -> usize {
     let first = (from..clean.len())
@@ -737,5 +781,27 @@ mod tests {
         assert_eq!(l("/var/lib/mi app.sqlite3"), "mi-app");
         assert_eq!(l("sin_extension"), "sin_extension");
         assert_eq!(l("..db"), "db");
+    }
+
+    #[test]
+    fn counts_statements_ignoring_comments_strings_and_dollar_blocks() {
+        for (sql, n) in [
+            ("", 0),
+            ("   \n ", 0),
+            ("select 1", 1),
+            ("select 1;", 1),
+            ("select 1; select 2", 2),
+            ("select 1;;  ; select 2;", 2),
+            ("select ';' as x", 1),
+            ("select \"a;b\" from t", 1),
+            ("-- uno; dos\nselect 1", 1),
+            ("/* a; b */ select 1; /* c */", 1),
+            ("select 1 -- ; \n; select 2", 2),
+            ("do $$ begin perform 1; perform 2; end $$", 1),
+            ("do $cuerpo$ begin perform 1; end $cuerpo$; select 2", 2),
+            ("select '$$'; select 2", 2),
+        ] {
+            assert_eq!(statement_count(sql), n, "{sql:?}");
+        }
     }
 }

@@ -124,6 +124,7 @@ dependencies = [
  "inquire",
  "serde_json",
  "tempfile",
+ "unicode-width",
 ]
 
 [[package]]

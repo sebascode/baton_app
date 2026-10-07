@@ -83,6 +83,7 @@ baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
+baton db -c "select * from clientes"   # consulta una base del plan (PostgreSQL o SQLite), solo lectura
 baton rollback                # deshace la última ejecución
 baton import pipeline.yml     # convierte GitHub Actions, GitLab CI o Azure Pipelines en un plan
 baton config                  # destinos, logs y credenciales
