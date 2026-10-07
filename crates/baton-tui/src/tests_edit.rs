@@ -616,3 +616,184 @@ fn a_script_step_survives_a_round_trip_through_the_editor() {
         "sin comando declarado queda sin comando"
     );
 }
+
+// ------------------------------------------- cambios sin guardar: indicador y confirmación
+
+fn app_with_editor(plan: &Plan) -> App {
+    App::new(PreviewState::from_plan(plan)).with_editor(editor_for(plan))
+}
+
+/// Entra al editor, agrega un paso nuevo («+ nuevo paso», enter) y queda sin guardar.
+fn add_a_draft_step(app: &mut App) {
+    press(app, KeyCode::Char('e'));
+    let n = editor_of(app).steps.len();
+    editor_of(app).selected = n;
+    editor_of(app).focus_list();
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn a_clean_editor_shows_no_marker_and_leaves_without_asking() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    press(&mut app, KeyCode::Char('e'));
+    assert!(!editor_of(&mut app).is_dirty());
+    assert!(!screen(&app).contains("sin guardar"));
+    press(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Preview(_)), "sale directo");
+}
+
+#[test]
+fn a_new_step_marks_the_editor_and_the_row_as_unsaved() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    add_a_draft_step(&mut app);
+    assert!(editor_of(&mut app).is_dirty());
+    let t = screen(&app);
+    assert!(t.contains("● sin guardar"), "{t}");
+    let n = editor_of(&mut app).steps.len();
+    // el paso nuevo lleva ● en la lista; los que ya estaban guardados, no
+    let rows: Vec<&str> = t.lines().filter(|l| l.contains(" ●")).collect();
+    assert!(rows.iter().any(|l| l.contains(&format!("{n} "))), "{t}");
+    assert!(
+        !t.lines()
+            .any(|l| l.contains("1 ") && l.contains("Base de datos") && l.contains(" ●")),
+        "{t}"
+    );
+}
+
+#[test]
+fn editing_a_field_of_an_existing_step_is_also_unsaved() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    press(&mut app, KeyCode::Char('e'));
+    editor_of(&mut app).open_at(0, false);
+    press(&mut app, KeyCode::Char('x')); // una letra más en el nombre
+    assert!(editor_of(&mut app).is_dirty());
+    // y deshacerlo a mano lo deja limpio otra vez
+    press(&mut app, KeyCode::Backspace);
+    assert!(!editor_of(&mut app).is_dirty());
+}
+
+#[test]
+fn esc_with_unsaved_changes_asks_and_any_other_key_keeps_editing() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    add_a_draft_step(&mut app);
+    assert_eq!(press(&mut app, KeyCode::Esc), None);
+    let t = screen(&app);
+    assert!(t.contains("Hay cambios sin guardar en este plan."), "{t}");
+    assert!(
+        t.contains("[g] guardar y salir")
+            && t.contains("[d] descartar")
+            && t.contains("seguir editando"),
+        "{t}"
+    );
+    assert_eq!(press(&mut app, KeyCode::Char('x')), None);
+    assert!(matches!(app.mode, Mode::Editor(_)), "sigue en el editor");
+    assert!(editor_of(&mut app).is_dirty(), "y no se perdió nada");
+    assert!(!screen(&app).contains("[g] guardar y salir"));
+}
+
+#[test]
+fn save_and_leave_asks_to_save_and_goes_back_once_it_is_saved() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    add_a_draft_step(&mut app);
+    // el paso nuevo necesita un comando para ser válido
+    editor_of(&mut app).set_command("echo hola");
+    press(&mut app, KeyCode::Esc);
+    let effect = press(&mut app, KeyCode::Char('g'));
+    let Some(Effect::SavePlan(steps)) = effect else {
+        panic!("debía pedir guardar: {effect:?}");
+    };
+    assert_eq!(steps.len(), plan.steps.len() + 1);
+    // el driver guarda y responde: se vuelve a la vista del plan con el paso ya en la lista
+    let mut saved = plan.clone();
+    saved.steps = steps;
+    app.apply_saved_plan(&saved, "local", &targets(), &[], "guardado");
+    let Mode::Preview(p) = &app.mode else {
+        panic!("debía volver a la vista del plan");
+    };
+    assert_eq!(p.steps.len(), plan.steps.len() + 1);
+    assert!(
+        p.notice.iter().any(|n| n.contains("guardado")),
+        "{:?}",
+        p.notice
+    );
+}
+
+#[test]
+fn a_rejected_save_keeps_the_editor_open_and_does_not_leave_a_pending_exit() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    add_a_draft_step(&mut app); // sin comando: el driver lo va a rechazar al validar
+    press(&mut app, KeyCode::Esc);
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('g')),
+        Some(Effect::SavePlan(_))
+    ));
+    assert!(editor_of(&mut app).leave_after_save);
+    // el driver responde con el error: sigue en el editor, con el aviso y sin salida pendiente
+    app.notify("el paso necesita un comando");
+    assert!(matches!(app.mode, Mode::Editor(_)));
+    assert!(!editor_of(&mut app).leave_after_save);
+    assert!(editor_of(&mut app).is_dirty());
+    // y un guardado normal (ctrl s) después no saca del editor por sorpresa
+    assert!(matches!(
+        app.handle_key(ctrl('s')),
+        Some(Effect::SavePlan(_))
+    ));
+    let saved = {
+        let mut p = plan.clone();
+        p.steps.push(p.steps[0].clone());
+        p
+    };
+    app.apply_saved_plan(&saved, "local", &targets(), &[], "guardado");
+    assert!(
+        matches!(app.mode, Mode::Editor(_)),
+        "ctrl s guarda y se queda"
+    );
+    assert!(!editor_of(&mut app).is_dirty());
+}
+
+#[test]
+fn discarding_goes_back_and_the_draft_does_not_come_back() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    add_a_draft_step(&mut app);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(press(&mut app, KeyCode::Char('d')), None);
+    assert!(matches!(app.mode, Mode::Preview(_)));
+    // al volver a abrir, el editor se pide de nuevo al driver (no reaparece el borrador)
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('e')),
+        Some(Effect::Edit(_))
+    ));
+}
+
+#[test]
+fn the_demo_editor_never_asks_because_nothing_can_be_saved() {
+    let mut app = crate::fake::app();
+    assert!(app.goto(crate::app::Screen::Editor));
+    press(&mut app, KeyCode::Char('x'));
+    assert!(!editor_of(&mut app).is_dirty());
+    press(&mut app, KeyCode::Esc);
+    assert!(!matches!(app.mode, Mode::Editor(_)), "sale sin preguntar");
+}
+
+#[test]
+fn a_duplicated_step_is_marked_as_unsaved_too() {
+    let plan = example();
+    let mut app = app_with_editor(&plan);
+    press(&mut app, KeyCode::Char('e'));
+    app.handle_key(ctrl('d'));
+    let t = screen(&app);
+    // en la lista estrecha el nombre se trunca, pero la marca ● de la fila se ve
+    assert!(
+        t.lines()
+            .any(|l| l.contains("2 Pre-checks") && l.contains("… ●")),
+        "{t}"
+    );
+    assert!(editor_of(&mut app).is_dirty());
+}

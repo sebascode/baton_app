@@ -11,6 +11,7 @@ pub mod init;
 pub mod load;
 pub mod logs;
 pub mod plan_edit;
+pub mod plan_ops;
 pub mod project;
 pub mod scaffold;
 pub mod secrets;

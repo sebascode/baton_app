@@ -144,7 +144,11 @@ impl Driver for DemoDriver {
                 fake::log_file(),
                 None,
             )),
-            Effect::Edit(_) | Effect::AddGate(_) | Effect::OpenPlan(_) | Effect::SwitchPlan(_) => {}
+            Effect::Edit(_)
+            | Effect::AddGate(_)
+            | Effect::OpenPlan(_)
+            | Effect::SwitchPlan(_)
+            | Effect::PlanOp(_) => {}
         }
         Flow::Continue
     }

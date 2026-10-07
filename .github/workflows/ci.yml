@@ -57,4 +57,6 @@ jobs:
         run: |
           BATON_MAN_DIR="$RUNNER_TEMP/man" scripts/install.sh --dir "$RUNNER_TEMP/bin"
           "$RUNNER_TEMP/bin/baton" version
+          # segunda instalación: deja baton.prev, que es lo que restaura --rollback
+          scripts/install.sh --dir "$RUNNER_TEMP/bin"
           scripts/install.sh --dir "$RUNNER_TEMP/bin" --rollback

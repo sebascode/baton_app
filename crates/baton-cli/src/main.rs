@@ -5,6 +5,7 @@ mod config_run;
 mod import;
 mod overview;
 mod pick;
+mod plans_cmd;
 mod run;
 mod shell_init;
 mod start;
@@ -35,7 +36,7 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BATON_BUILD
     name = "baton",
     version = VERSION,
     about = "Orquesta instalaciones y despliegues definidos en carpetas",
-    after_help = "Primeros pasos:\n  baton init               prepara el proyecto y abre su primer plan para editarlo\n  baton import <archivo>   o arma el plan desde un pipeline de GitHub, GitLab o Azure\n  baton start [plan]       abre un plan: revisarlo, editarlo y ejecutarlo (p cambia de plan)\n  baton run [plan]         ejecuta un plan directo\n  baton create <plan>      crea un plan vacío\n  baton config             destinos, logs y credenciales del proyecto\n  baton                    sin argumentos: muestra el estado del proyecto\n\nPara scripts bash (la pregunta va a la terminal, solo la respuesta a stdout):\n  env=$(baton select \"¿Ambiente?\" dev staging prod)\n  baton confirm \"¿Seguimos?\" --default no && echo listo\n  (también multiselect e input; sin terminal se responde con BATON_<NOMBRE> o --default)"
+    after_help = "Primeros pasos:\n  baton init               prepara el proyecto y abre su primer plan para editarlo\n  baton import <archivo>   o arma el plan desde un pipeline de GitHub, GitLab o Azure\n  baton start [plan]       abre un plan: revisarlo, editarlo y ejecutarlo (p cambia de plan)\n  baton run [plan]         ejecuta un plan directo\n  baton create <plan>      crea un plan vacío\n  baton copy|rename|delete administra los planes (copiar, renombrar, eliminar)\n  baton config             destinos, logs y credenciales del proyecto\n  baton                    sin argumentos: muestra el estado del proyecto\n\nPara scripts bash (la pregunta va a la terminal, solo la respuesta a stdout):\n  env=$(baton select \"¿Ambiente?\" dev staging prod)\n  baton confirm \"¿Seguimos?\" --default no && echo listo\n  (también multiselect e input; sin terminal se responde con BATON_<NOMBRE> o --default)"
 )]
 struct Cli {
     /// Carpeta del proyecto (por defecto, la actual o la primera superior que sea un proyecto baton)
@@ -177,6 +178,28 @@ enum Command {
     Create {
         /// Nombre del plan
         plan: String,
+    },
+    /// Copia un plan con otro nombre (no copia su historial de ejecuciones)
+    Copy {
+        /// Plan de origen
+        plan: String,
+        /// Nombre de la copia
+        nuevo: String,
+    },
+    /// Cambia el nombre de un plan (conserva su historial de ejecuciones)
+    Rename {
+        /// Plan actual
+        plan: String,
+        /// Nombre nuevo
+        nuevo: String,
+    },
+    /// Elimina un plan y su estado (los logs ya escritos no se tocan)
+    Delete {
+        /// Plan a eliminar
+        plan: String,
+        /// No pregunta (necesario sin terminal)
+        #[arg(long)]
+        yes: bool,
     },
     /// Deshace lo que hizo la última ejecución de un plan (corre los `rollback` de sus pasos)
     Rollback {
@@ -487,6 +510,9 @@ fn main() -> ExitCode {
             Ok(plan) => run::rollback(&project, &plan),
             Err(code) => code,
         },
+        Command::Copy { plan, nuevo } => plans_cmd::copy(&project, &plan, &nuevo),
+        Command::Rename { plan, nuevo } => plans_cmd::rename(&project, &plan, &nuevo),
+        Command::Delete { plan, yes } => plans_cmd::delete(&project, &plan, yes),
         Command::Start { plan } => match pick::resolve(&project, plan, "start", "abrir") {
             Ok(plan) => start::open(&project, &plan, false),
             Err(code) => code,

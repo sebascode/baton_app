@@ -15,6 +15,7 @@ pub mod forms;
 pub mod gate_view;
 pub mod history_view;
 pub mod pipeline_view;
+pub mod plan_prompt;
 pub mod preview;
 pub mod run;
 pub mod run_view;

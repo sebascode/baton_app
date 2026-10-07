@@ -51,6 +51,8 @@ pub enum Screen {
     Pipeline,
 }
 
+// `Preview` es la pantalla en la que se pasa casi todo el tiempo: se guarda sin caja a propósito.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Mode {
     Preview(PreviewState),
@@ -93,6 +95,9 @@ pub enum Effect {
     /// Pasar a otro plan del proyecto (selector de la vista previa). Quien atiende reemplaza la
     /// aplicación entera con la del plan elegido, o responde con `notify` si no puede.
     SwitchPlan(String),
+    /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja). Quien atiende lo hace en
+    /// disco y responde con `plans_changed` (o `notify` si no pudo).
+    PlanOp(crate::plan_prompt::PlanRequest),
     /// Guardar los pasos editados en el plan (el editor ya comprobó que los campos se entienden).
     /// Quien atiende responde con `apply_saved_plan` o `notify`.
     SavePlan(Vec<Step>),
@@ -305,6 +310,7 @@ impl App {
         message: &str,
     ) {
         let mut fresh = EditorState::from_plan(plan, targets, default_target, counts);
+        let mut leave = false;
         let editor_slot: Option<&mut Box<EditorState>> = match &mut self.mode {
             Mode::Editor(e) => Some(e),
             _ => self.stash.editor.as_mut(),
@@ -317,7 +323,13 @@ impl App {
                     .get(fresh.selected)
                     .is_some_and(|s| s.gate.is_some());
             fresh.notice = Some(message.to_string());
+            leave = slot.leave_after_save;
             **slot = fresh;
+        }
+        // se eligió "guardar y salir": ya quedó guardado, se vuelve a la vista del plan
+        if leave && matches!(self.mode, Mode::Editor(_)) {
+            self.back_to_preview();
+            self.notify(message);
         }
         let preview = match &mut self.mode {
             Mode::Preview(p) => Some(p),
@@ -380,11 +392,31 @@ impl App {
     }
 
     /// Muestra un aviso de una línea en la pantalla actual, si admite avisos.
+    /// Respuesta a `Effect::PlanOp`: la lista de planes del proyecto cambió. `current` es el nuevo
+    /// nombre del plan abierto si se renombró.
+    pub fn plans_changed(&mut self, plans: Vec<String>, current: Option<&str>, message: &str) {
+        match &mut self.mode {
+            Mode::Preview(p) => {
+                p.set_plans(plans);
+                if let Some(name) = current {
+                    p.set_current_plan(name);
+                }
+            }
+            Mode::Config(c) => c.set_plans(plans),
+            _ => {}
+        }
+        self.notify(message);
+    }
+
     pub fn notify(&mut self, message: &str) {
         match &mut self.mode {
             Mode::Credentials(c) => c.notice = Some(message.into()),
             Mode::Config(c) => c.notice = Some(message.into()),
-            Mode::Editor(e) => e.notice = Some(message.into()),
+            Mode::Editor(e) => {
+                // un guardado que falló no debe dejar pendiente un "guardar y salir"
+                e.leave_after_save = false;
+                e.notice = Some(message.into());
+            }
             Mode::Preview(p) => p.notice = message.lines().map(String::from).collect(),
             Mode::History(h) => h.notice = Some(message.into()),
             Mode::LogFile(_) | Mode::Pipeline(_) | Mode::Run(_) => {}
@@ -429,6 +461,7 @@ impl App {
                 PreviewAction::History => Some(Effect::OpenHistory),
                 PreviewAction::LastLog => Some(Effect::OpenLog(0)),
                 PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
+                PreviewAction::PlanOp(req) => Some(Effect::PlanOp(req)),
                 PreviewAction::Quit => Some(Effect::Quit),
             },
             Mode::Pipeline(r) => match r.handle_key(key)? {
@@ -470,18 +503,27 @@ impl App {
                     }
                 },
                 ConfigAction::OpenPlan(name) => Some(Effect::OpenPlan(name)),
+                ConfigAction::PlanOp(req) => Some(Effect::PlanOp(req)),
             },
             Mode::Editor(e) => match e.handle_key(key)? {
                 EditorAction::Back => self.back_to_preview(),
+                EditorAction::Discard => {
+                    let out = self.back_to_preview();
+                    // el borrador descartado no debe reaparecer al volver a abrir el editor
+                    self.stash.editor = None;
+                    out
+                }
                 EditorAction::TestStep(i) => Some(Effect::TestStep(i)),
                 EditorAction::Rescan => Some(Effect::Rescan),
                 EditorAction::Save if !e.can_save => {
+                    e.leave_after_save = false;
                     e.notice = Some(NOT_SAVED.into());
                     None
                 }
                 EditorAction::Save => match e.to_steps() {
                     Ok(steps) => Some(Effect::SavePlan(steps)),
                     Err(errors) => {
+                        e.leave_after_save = false;
                         e.notice = Some(errors.join("; "));
                         None
                     }

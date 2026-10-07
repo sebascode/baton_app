@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
 use crate::forms::{Field, Form, label_width, render_fields};
+use crate::plan_prompt::{PlanOp, PlanPrompt, PlanRequest, PromptOutcome};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, truncate};
 
@@ -153,6 +154,8 @@ pub enum ConfigAction {
     Test(usize),
     Save,
     OpenPlan(String),
+    /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja).
+    PlanOp(PlanRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +171,8 @@ pub struct ConfigState {
     pub cred_refs: Vec<CredRefInfo>,
     pub plans: Vec<String>,
     pub list_cursor: usize,
+    /// Caja de copiar, renombrar o eliminar el plan elegido en la pestaña Planes.
+    pub prompt: Option<PlanPrompt>,
     /// La configuración tal como se cargó: `version` y `defaults` (nada editable aquí) salen de
     /// acá al guardar, sin tocarlos.
     base: Config,
@@ -406,6 +411,7 @@ impl ConfigState {
             cred_refs,
             plans,
             list_cursor: 0,
+            prompt: None,
             notice: None,
             base: config.clone(),
         }
@@ -484,8 +490,32 @@ impl ConfigState {
         self.targets[self.cursor].form.focus = 0;
     }
 
+    /// Una lista nueva de planes (después de copiar, renombrar o eliminar).
+    pub fn set_plans(&mut self, plans: Vec<String>) {
+        self.plans = plans;
+        self.prompt = None;
+        self.list_cursor = self.list_cursor.min(self.plans.len().saturating_sub(1));
+    }
+
+    fn prompt_key(&mut self, key: KeyEvent) -> Option<ConfigAction> {
+        match self.prompt.as_mut()?.handle_key(key) {
+            PromptOutcome::Open => None,
+            PromptOutcome::Cancel => {
+                self.prompt = None;
+                None
+            }
+            PromptOutcome::Submit(req) => {
+                self.prompt = None;
+                Some(ConfigAction::PlanOp(req))
+            }
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<ConfigAction> {
         self.notice = None;
+        if self.prompt.is_some() {
+            return self.prompt_key(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('s') if ctrl => return Some(ConfigAction::Save),
@@ -564,6 +594,16 @@ impl ConfigState {
                 }
                 _ => {}
             },
+            KeyCode::Char(c @ ('c' | 'r' | 'd')) if self.tab == ConfigTab::Planes => {
+                if let Some(name) = self.plans.get(self.list_cursor) {
+                    let op = match c {
+                        'c' => PlanOp::Copy,
+                        'r' => PlanOp::Rename,
+                        _ => PlanOp::Delete,
+                    };
+                    self.prompt = Some(PlanPrompt::new(op, name));
+                }
+            }
             KeyCode::Char('a') if self.tab == ConfigTab::Destinos => self.add_target(),
             KeyCode::Char('t') if self.tab == ConfigTab::Destinos => {
                 return Some(ConfigAction::Test(self.cursor));
@@ -603,6 +643,9 @@ impl ConfigState {
                 ("tab", "sección"),
                 ("↑↓", "elegir"),
                 ("enter", "editar plan"),
+                ("c", "copiar"),
+                ("r", "renombrar"),
+                ("d", "eliminar"),
                 ("esc", "volver"),
             ],
         }
@@ -654,6 +697,9 @@ impl ConfigState {
             .render(Rect::new(inner.x + 1, notice_y, content_w, 1), buf);
         }
         widgets::render_shortcuts(buf, Rect::new(inner.x + 1, sc_y, content_w, sc_h), &items);
+        if let Some(p) = &self.prompt {
+            p.render(buf, body);
+        }
     }
 
     fn render_tabs(&self, buf: &mut Buffer, area: Rect) {

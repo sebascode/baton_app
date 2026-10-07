@@ -129,6 +129,8 @@ pub enum EditorAction {
     /// Escanear el origen del gate abierto.
     Rescan,
     Save,
+    /// Salir descartando los cambios sin guardar (el borrador se olvida).
+    Discard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +161,13 @@ pub struct EditorState {
     pub can_save: bool,
     /// Destino de los pasos que no declaran uno.
     pub default_target: String,
+    /// Los pasos tal como están en el plan guardado: lo que se compara para saber si hay cambios
+    /// sin guardar. `None` en la demo (no se guarda nada).
+    baseline: Option<Vec<Step>>,
+    /// Esperando decidir qué hacer con los cambios sin guardar al salir.
+    pub(crate) confirm_leave: bool,
+    /// Al terminar de guardar, salir (se eligió "guardar y salir").
+    pub(crate) leave_after_save: bool,
 }
 
 impl EditorState {
@@ -191,7 +200,45 @@ impl EditorState {
             test: None,
             can_save: false,
             default_target: "local".into(),
+            baseline: None,
+            confirm_leave: false,
+            leave_after_save: false,
         }
+    }
+
+    /// Hay cambios que no están en el plan guardado (un paso nuevo, un campo editado, uno borrado).
+    /// Un campo que todavía no se entiende cuenta como cambio. En la demo nunca hay.
+    pub fn is_dirty(&self) -> bool {
+        let Some(base) = &self.baseline else {
+            return false;
+        };
+        match self.to_steps() {
+            Ok(steps) => steps != *base,
+            Err(_) => true,
+        }
+    }
+
+    /// `esc`: sale si no hay nada sin guardar; si lo hay, pregunta antes.
+    fn request_back(&mut self) -> Option<EditorAction> {
+        if self.is_dirty() {
+            self.confirm_leave = true;
+            None
+        } else {
+            Some(EditorAction::Back)
+        }
+    }
+
+    /// Escribe el comando del paso seleccionado (para las pruebas).
+    #[cfg(test)]
+    pub(crate) fn set_command(&mut self, command: &str) {
+        if let Some(d) = self.steps.get_mut(self.selected) {
+            d.form.fields[F_COMMAND].set_text(command);
+        }
+    }
+
+    /// Un paso que todavía no está en el plan guardado (nuevo o duplicado: sin id todavía).
+    fn is_draft(&self, i: usize) -> bool {
+        self.baseline.is_some() && self.steps.get(i).is_some_and(|d| d.step_id.is_empty())
     }
 
     /// El editor de un plan real. `counts[i]` es cuántos archivos coinciden con el origen del
@@ -244,6 +291,7 @@ impl EditorState {
         let mut e = EditorState::new(&plan.name, &names, specs);
         e.can_save = true;
         e.default_target = default_target.to_string();
+        e.baseline = e.to_steps().ok();
         e
     }
 
@@ -493,6 +541,18 @@ impl EditorState {
             return self.handle_gate_key(key);
         }
         self.notice = None;
+        // salir con cambios sin guardar: `g` guarda y sale, `d` descarta, cualquier otra sigue editando
+        if self.confirm_leave {
+            self.confirm_leave = false;
+            return match key.code {
+                KeyCode::Char('g') => {
+                    self.leave_after_save = true;
+                    Some(EditorAction::Save)
+                }
+                KeyCode::Char('d') => Some(EditorAction::Discard),
+                _ => None,
+            };
+        }
         // borrar un paso pide confirmación: solo `s` o `y` lo confirman y cualquier otra tecla cancela
         if self.confirm_step_removal {
             self.confirm_step_removal = false;
@@ -705,7 +765,7 @@ impl EditorState {
             }
             // `b` de borrar (en la tarjeta del gate, `x` quita el gate; son cosas distintas)
             KeyCode::Char('b') | KeyCode::Delete => self.ask_to_remove_step(),
-            KeyCode::Esc | KeyCode::Char('q') => return Some(EditorAction::Back),
+            KeyCode::Esc | KeyCode::Char('q') => return self.request_back(),
             _ => {}
         }
         None
@@ -717,7 +777,7 @@ impl EditorState {
             return None;
         }
         if key.code == KeyCode::Esc {
-            return Some(EditorAction::Back);
+            return self.request_back();
         }
         let last = self.field_count() - 1;
         let step = &mut self.steps[self.selected];
@@ -785,6 +845,13 @@ impl EditorState {
         if self.confirm_gate_removal || self.confirm_step_removal {
             return vec![("s", "sí"), ("n", "no")];
         }
+        if self.confirm_leave {
+            return vec![
+                ("g", "guardar y salir"),
+                ("d", "descartar"),
+                ("otra tecla", "seguir editando"),
+            ];
+        }
         let mut items = vec![
             ("tab", "campo"),
             ("ctrl g", "configurar gate"),
@@ -817,10 +884,19 @@ impl EditorState {
         let inner = frame(
             buf,
             area,
-            vec![Span::styled(
-                format!("✎ Editar paso · plan {}", self.plan),
-                theme::bold(),
-            )],
+            {
+                let mut title = vec![Span::styled(
+                    format!("✎ Editar paso · plan {}", self.plan),
+                    theme::bold(),
+                )];
+                if self.is_dirty() {
+                    title.push(Span::styled(
+                        "  ● sin guardar",
+                        Style::new().fg(theme::WARN),
+                    ));
+                }
+                title
+            },
             vec![Span::styled(
                 format!(
                     "paso {} de {}",
@@ -838,7 +914,9 @@ impl EditorState {
         let step_prompt = self
             .confirm_step_removal
             .then(|| self.step_removal_prompt());
-        let prompt = if self.confirm_gate_removal {
+        let prompt = if self.confirm_leave {
+            Some("Hay cambios sin guardar en este plan.")
+        } else if self.confirm_gate_removal {
             Some(crate::gate_view::REMOVE_PROMPT)
         } else {
             step_prompt.as_deref()
@@ -908,10 +986,13 @@ impl EditorState {
                 } else {
                     Style::new()
                 };
-                spans.push(Span::styled(
-                    truncate(&text, area.width as usize - 2),
-                    style,
-                ));
+                // un paso que aún no está guardado lleva `●` al final (borrador)
+                let draft = self.is_draft(i);
+                let room = area.width as usize - 2 - if draft { 2 } else { 0 };
+                spans.push(Span::styled(truncate(&text, room), style));
+                if draft {
+                    spans.push(Span::styled(" ●", Style::new().fg(theme::WARN)));
+                }
             }
             Line::from(spans).render(row, buf);
         }

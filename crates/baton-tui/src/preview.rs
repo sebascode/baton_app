@@ -10,6 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use crate::plan_prompt::{PlanOp, PlanPrompt, PlanRequest, PromptOutcome};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, spans_width, truncate};
 
@@ -63,6 +64,8 @@ pub enum PreviewAction {
     Pipeline,
     /// Pasar a otro plan del proyecto.
     SwitchPlan(String),
+    /// Copiar, renombrar o eliminar un plan (ya confirmado en la caja).
+    PlanOp(PlanRequest),
     Quit,
 }
 
@@ -81,6 +84,8 @@ pub struct PreviewState {
     pub plans: Vec<String>,
     /// Selector de planes abierto: posición del cursor.
     pub switcher: Option<usize>,
+    /// Caja de copiar, renombrar o eliminar el plan elegido en el selector.
+    pub prompt: Option<Box<PlanPrompt>>,
     /// Cómo terminó la última ejecución (la franja de estado de arriba); `None` si nunca se ejecutó.
     pub last_run: Option<LastRunBanner>,
 }
@@ -175,6 +180,7 @@ impl PreviewState {
             notice: Vec::new(),
             plans: Vec::new(),
             switcher: None,
+            prompt: None,
             last_run: None,
         }
     }
@@ -183,6 +189,7 @@ impl PreviewState {
     pub fn refresh_after_run(&mut self) {
         self.notice.clear();
         self.switcher = None;
+        self.prompt = None;
     }
 
     /// Deja el cursor en el paso con ese id (el que falló), si existe.
@@ -192,8 +199,54 @@ impl PreviewState {
         }
     }
 
+    /// El selector de planes se ofrece si el proyecto tiene planes (en la demo, no): con uno solo
+    /// sirve igual para renombrarlo o copiarlo.
     fn can_switch(&self) -> bool {
-        self.plans.len() > 1
+        !self.plans.is_empty()
+    }
+
+    /// Una lista nueva de planes (después de copiar, renombrar o eliminar): el cursor del selector
+    /// se mantiene dentro de la lista.
+    pub fn set_plans(&mut self, plans: Vec<String>) {
+        self.plans = plans;
+        self.prompt = None;
+        if let Some(c) = self.switcher {
+            self.switcher = Some(c.min(self.plans.len().saturating_sub(1)));
+        }
+    }
+
+    /// El plan en el que se está pasó a llamarse así (se renombró).
+    pub fn set_current_plan(&mut self, name: &str) {
+        self.plan = name.to_string();
+    }
+
+    fn prompt_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
+        let prompt = self.prompt.as_mut()?;
+        match prompt.handle_key(key) {
+            PromptOutcome::Open => None,
+            PromptOutcome::Cancel => {
+                self.prompt = None;
+                None
+            }
+            PromptOutcome::Submit(req) => {
+                self.prompt = None;
+                Some(PreviewAction::PlanOp(req))
+            }
+        }
+    }
+
+    fn open_prompt(&mut self, op: PlanOp) {
+        let Some(name) = self.switcher.and_then(|c| self.plans.get(c)) else {
+            return;
+        };
+        if op == PlanOp::Delete && *name == self.plan {
+            self.notice = vec![
+                "no se puede eliminar el plan abierto: cambia a otro plan primero (o usa baton delete)"
+                    .to_string(),
+            ];
+            return;
+        }
+        self.prompt = Some(Box::new(PlanPrompt::new(op, name)));
     }
 
     /// Teclas del pie: `p` solo aparece si hay otros planes.
@@ -201,7 +254,7 @@ impl PreviewState {
         let mut items = SHORTCUTS.to_vec();
         let at = items.len() - 1; // antes de "ejecutar"
         if self.can_switch() {
-            items.insert(items.len() - 1, ("p", "cambiar de plan"));
+            items.insert(items.len() - 1, ("p", "planes"));
         }
         // lo de la última ejecución solo aparece si hay una
         if let Some(b) = &self.last_run {
@@ -228,6 +281,9 @@ impl PreviewState {
                 // elegir el plan en el que ya se está solo cierra el selector
                 return (*chosen != self.plan).then(|| PreviewAction::SwitchPlan(chosen.clone()));
             }
+            KeyCode::Char('c') => self.open_prompt(PlanOp::Copy),
+            KeyCode::Char('r') => self.open_prompt(PlanOp::Rename),
+            KeyCode::Char('d') => self.open_prompt(PlanOp::Delete),
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => self.switcher = None,
             _ => {}
         }
@@ -273,6 +329,9 @@ impl PreviewState {
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
         self.notice.clear();
+        if self.prompt.is_some() {
+            return self.prompt_key(key);
+        }
         if self.switcher.is_some() {
             return self.switcher_key(key);
         }
@@ -392,7 +451,10 @@ impl PreviewState {
             Rect::new(inner.x + 1, sc_y, content_w, sc_h),
             &shortcuts,
         );
-        if self.switcher.is_some() {
+        // la caja de copiar, renombrar o eliminar reemplaza al selector mientras está abierta
+        if let Some(p) = &self.prompt {
+            p.render(buf, list);
+        } else if self.switcher.is_some() {
             self.render_switcher(buf, list);
         }
     }
@@ -429,7 +491,7 @@ impl PreviewState {
             .len()
             .min(over.height.saturating_sub(4) as usize)
             .max(1);
-        let hint = "↑↓ elegir · enter abrir · esc cerrar";
+        let hint = "↑↓ · enter abrir · c copiar · r renombrar · d eliminar · esc";
         let widest = self
             .plans
             .iter()

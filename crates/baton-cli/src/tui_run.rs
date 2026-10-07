@@ -154,6 +154,47 @@ impl RunDriver {
         }
     }
 
+    /// Copiar, renombrar o eliminar un plan desde el selector. Renombrar el plan abierto recarga
+    /// la pantalla con el nombre nuevo (y, como al cambiar de plan, se niega si el editor tiene
+    /// cambios sin guardar); eliminar el plan abierto no se permite.
+    fn plan_op(&mut self, app: &mut App, req: &baton_tui::plan_prompt::PlanRequest) {
+        use baton_tui::plan_prompt::PlanRequest;
+        let current = self.plan.name.clone();
+        let touches_current = match req {
+            PlanRequest::Rename { from, .. } => *from == current,
+            PlanRequest::Delete { plan } => *plan == current,
+            PlanRequest::Copy { .. } => false,
+        };
+        if matches!(req, PlanRequest::Delete { .. }) && touches_current {
+            return app.notify("no se puede eliminar el plan abierto: cambia a otro plan primero");
+        }
+        if touches_current && let Some(edited) = app.editor_steps() {
+            match edited {
+                Ok(steps) if steps == self.plan.steps => {}
+                _ => {
+                    return app.notify(
+                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de renombrar el plan",
+                    );
+                }
+            }
+        }
+        match crate::plans_cmd::apply(&self.project, req) {
+            Ok((message, new_name)) => {
+                if touches_current && let Some(name) = new_name {
+                    let checked = check_plan(&self.project, &name, Some(&self.config));
+                    if let Some(plan) = checked.value {
+                        self.plan = plan;
+                        *app = self.initial_app();
+                        app.notify(&message);
+                        return;
+                    }
+                }
+                app.plans_changed(self.project.list_plans(), None, &message);
+            }
+            Err(e) => app.notify(&e),
+        }
+    }
+
     /// Credenciales que el plan necesita, resueltas contra `.baton/credentials/` y `state.json`.
     /// `None` si no necesita ninguna (no se muestra la pantalla).
     fn build_credentials(&mut self) -> Option<CredentialsState> {
@@ -593,6 +634,7 @@ impl Driver for RunDriver {
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::OpenHistory => self.open_history(app),
             Effect::OpenLog(i) => self.open_log(app, i),
+            Effect::PlanOp(req) => self.plan_op(app, &req),
             Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}
         }
         Flow::Continue

@@ -104,6 +104,17 @@ Fuerzan hacer (o no hacer) backup, por encima de lo que diga el plan.
 Ambiente del que se resuelven las credenciales.
 .SS baton create plan
 Crea el archivo de un plan vacío y nada más (no lo abre ni toca \fI.baton/\fR). No pisa un plan existente. El nombre se normaliza a minúsculas, números, \fB\-\fR y \fB_\fR, y se avisa si cambió.
+.SS baton copy plan nuevo
+Copia un plan con otro nombre: el archivo se duplica y solo cambia su línea \fBname\fR (los comentarios y el formato se conservan). La copia empieza sin historial de ejecuciones. No pisa un plan existente.
+.SS baton rename plan nuevo
+Cambia el nombre de un plan: renombra el archivo, ajusta su línea \fBname\fR y traslada su estado e historial de \fI.baton/state.json\fR al nombre nuevo. Los logs ya escritos no se renombran (el historial sigue apuntando a ellos).
+.SS baton delete plan
+Elimina el archivo de un plan y su estado en \fI.baton/state.json\fR; los logs y respaldos que dejó no se tocan. En una terminal pide confirmar; sin terminal exige \fB\-\-yes\fR.
+.TP
+.B \-\-yes
+No pregunta.
+.PP
+Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
 .SS baton init [plan]
 Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR, \fIDockerfile\fR y scripts \fI*.sh\fR y archivos \fI*.sql\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma los pasos: \fIbuild\fR (los Dockerfile), \fIservicios\fR (los compose) y un paso \fBscript\fR por cada script. Los scripts se ordenan por su nombre: los de preparación van antes de \fIbuild\fR, los de verificación (\fIsmoke\fR, \fIverif\fR, \fIhealth\fR...) después de \fIservicios\fR, y los que por su nombre parecen destructivos (\fIlimpiar\fR, \fIclean\fR, \fIdown\fR...) quedan al final y \fBdesactivados\fR. Los \fI.sql\fR se proponen como un paso \fBsql\fR por carpeta, \fBdesactivado\fR (suelen ser el \fIinit.sql\fR que el contenedor de la base ya carga al arrancar), junto con la credencial \fBdb\fR que ese paso necesita. Un script dentro de una carpeta con Dockerfile se ignora (es de la imagen), y con más de 12 scripts se agrupan por carpeta. El orden es una suposición: se ajusta en el plan. El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
 .TP
@@ -141,7 +152,7 @@ Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso 
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
-Abre la configuración del proyecto, con pestañas \fBDestinos\fR, \fBLogs\fR, \fBCredenciales\fR y \fBPlanes\fR. Permite probar la conexión de un destino y guardar con \fBctrl s\fR. \fBenter\fR sobre un plan, en la pestaña Planes, lo abre. Necesita una terminal.
+Abre la configuración del proyecto, con pestañas \fBDestinos\fR, \fBLogs\fR, \fBCredenciales\fR y \fBPlanes\fR. Permite probar la conexión de un destino y guardar con \fBctrl s\fR. \fBenter\fR sobre un plan, en la pestaña Planes, lo abre; \fBc\fR lo copia, \fBr\fR lo renombra y \fBd\fR lo elimina. Necesita una terminal.
 .SS baton demo
 Recorre todas las pantallas con datos de mentira, sin tocar ningún proyecto. Sirve para conocer baton y para mostrarlo.
 .TP
@@ -313,7 +324,7 @@ Un paso \fBsql\fR ejecuta archivos \fB.sql\fR contra PostgreSQL, uno por uno y e
 .PP
 Antes de ejecutar un paso \fBsql\fR, baton revisa los archivos buscando sentencias destructivas (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR o \fBUPDATE\fR sin \fBWHERE\fR, \fBALTER ... DROP\fR; los comentarios y los textos entre comillas no cuentan, pero el cuerpo de un bloque \fB$$ ... $$\fR sí) y las deja en el log. En una terminal pide confirmar. Sin terminal la ejecución se rechaza antes de empezar salvo con \fB\-\-assume\-yes\fR, y con \fB\-\-dry\-run\fR solo se listan. Es una revisión por palabras, no un análisis completo: sirve de red de seguridad, no de garantía.
 .PP
-Con \fBdatabase = true\fR en \fB[backup]\fR, un paso \fBbackup\fR (o \fBbackup_before\fR) además vuelca la base con \fBpg_dump \-Fc\fR a \fI<plan>\-<fecha>\-<base>.dump\fR en la carpeta de backups (una sola vez por ejecución, aunque varios pasos lo pidan), y el rollback de un paso \fBbackup\fR sin \fBrollback\fR propio \fBrestaura el último volcado\fR con \fBpg_restore \-\-clean \-\-if\-exists\fR. Eso incluye \fBbaton rollback\fR, que usa el volcado de la ejecución anterior. Restaurar reemplaza el contenido actual de la base: es el rollback que tú eliges en la pantalla de fallo, o el que \fBauto_rollback\fR aplica al abortar. Un \fBrollback\fR declarado en el paso manda sobre la restauración.
+Con \fBdatabase = true\fR en \fB[backup]\fR, un paso \fBbackup\fR (o \fBbackup_before\fR) además vuelca la base con \fBpg_dump \-Fc\fR a \fI<plan>\-<fecha>\-<base>.dump\fR en la carpeta de backups (una sola vez por ejecución, aunque varios pasos lo pidan), y el rollback de un paso \fBbackup\fR sin \fBrollback\fR propio \fBrestaura el último volcado\fR con \fBpg_restore \-\-clean \-\-if\-exists\fR. Eso incluye \fBbaton rollback\fR, que usa el volcado de la ejecución anterior. Restaurar reemplaza el contenido actual de la base: es el rollback que tú eliges en la pantalla de fallo, o el que \fBauto_rollback\fR aplica al abortar. Un \fBrollback\fR declarado en el paso manda sobre la restauración. La restauración solo reemplaza los objetos que existían al hacer el volcado: lo que el plan creó después (tablas nuevas, por ejemplo) no se elimina.
 .PP
 Los checks de un gate son \fBhealthcheck\fR, \fBhttp\fR, \fBcommand\fR y \fBrunning\fR. Al escanear un origen, cada servicio infiere su check: el \fBhealthcheck\fR del compose si existe; si no, HTTP contra el primer puerto; si no, contenedor arriba durante un tiempo mínimo. Un servicio nuevo nunca se activa solo.
 .PP
@@ -418,7 +429,7 @@ Log de la última ejecución (solo si el plan ya se ejecutó).
 Reanudar: ejecuta como \fBenter\fR, pero salta los pasos que terminaron bien en la última ejecución (solo si hay alguno hecho y otros pendientes).
 .TP
 .B p
-Cambiar de plan (solo si hay más de uno). Se niega si el editor tiene cambios sin guardar.
+Lista de planes: \fBenter\fR abre el elegido (se niega si el editor tiene cambios sin guardar), \fBc\fR lo copia, \fBr\fR lo renombra y \fBd\fR lo elimina (pide confirmar con \fBs\fR). Copiar y renombrar piden el nombre nuevo en una caja. No se puede eliminar el plan abierto, y renombrar el abierto también exige el editor sin cambios.
 .TP
 .B enter
 Ejecutar.
@@ -446,7 +457,7 @@ Borrar el paso (pide confirmación; los pasos que dependían de él dejan de dep
 Configurar el gate. En su tabla de checks, \fBb\fR borra el check elegido (pide confirmación) y \fBx\fR quita el gate entero.
 .TP
 .B esc
-Volver a la vista del plan.
+Volver a la vista del plan. Nada llega al archivo hasta \fBctrl s\fR: mientras haya cambios sin guardar el título muestra \fB● sin guardar\fR y los pasos nuevos o duplicados llevan \fB●\fR al final de su fila. Si se sale con cambios pendientes, pregunta: \fBg\fR guarda y sale, \fBd\fR descarta el borrador y cualquier otra tecla sigue editando.
 .SS Durante la ejecución
 .TP
 .B p

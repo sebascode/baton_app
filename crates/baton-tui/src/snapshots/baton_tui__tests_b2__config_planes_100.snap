@@ -22,7 +22,7 @@ expression: "screen(&app, 100, 24)"
 │                                                                                                  │
 │                                                                                                  │
 │                                                                                                  │
-│                                                                                                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [tab] sección  [↑↓] elegir  [enter] editar plan  [esc] volver                                    │
+│ [tab] sección  [↑↓] elegir  [enter] editar plan  [c] copiar  [r] renombrar  [d] eliminar         │
+│ [esc] volver                                                                                     │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -153,6 +153,10 @@ impl Driver for ConfigDriver {
             Effect::Quit => return Flow::Quit,
             Effect::SaveConfig(config) => self.save(app, *config),
             Effect::TestTarget(i) => self.test_target(app, i),
+            Effect::PlanOp(req) => match crate::plans_cmd::apply(&self.project, &req) {
+                Ok((message, _)) => app.plans_changed(self.project.list_plans(), None, &message),
+                Err(e) => app.notify(&e),
+            },
             Effect::OpenPlan(plan) => {
                 self.open_plan = Some(plan);
                 return Flow::Quit;

@@ -1504,3 +1504,68 @@ fn an_empty_optional_field_does_not_block_confirming_a_credential() {
     assert_eq!(c.notice.as_deref(), Some("falta completar: usuario"));
     assert_eq!(c.editing, Some(0));
 }
+
+// ------------------------------------------- planes: copiar, renombrar y eliminar
+
+#[test]
+fn the_plans_tab_copies_renames_and_deletes_the_selected_plan() {
+    use crate::plan_prompt::PlanRequest;
+    let mut app = App::config_only(config_state());
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab); // Planes
+    let first = config(&mut app).plans[0].clone();
+    let t = screen(&app, 100, 24);
+    assert!(
+        t.contains("[c] copiar") && t.contains("[r] renombrar") && t.contains("[d] eliminar"),
+        "{t}"
+    );
+
+    // copiar el seleccionado: el nombre propuesto sale de él, y escribir va a la caja
+    assert_eq!(press(&mut app, KeyCode::Char('c')), None);
+    assert!(screen(&app, 100, 24).contains(&format!("Copiar plan «{first}»")));
+    type_str(&mut app, "2");
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::PlanOp(PlanRequest::Copy {
+            from: first.clone(),
+            to: format!("{first}-copia2")
+        }))
+    );
+
+    // eliminar pide confirmar; solo `s` lo hace
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(press(&mut app, KeyCode::Esc), None);
+    assert!(config(&mut app).prompt.is_none());
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('s')),
+        Some(Effect::PlanOp(PlanRequest::Delete {
+            plan: first.clone()
+        }))
+    );
+
+    // la respuesta del driver actualiza la lista y deja el cursor dentro
+    let n = config(&mut app).plans.len();
+    config(&mut app).list_cursor = n - 1;
+    app.plans_changed(vec![first.clone()], None, "plan eliminado");
+    assert_eq!(config(&mut app).plans, [first]);
+    assert_eq!(config(&mut app).list_cursor, 0);
+    assert!(screen(&app, 100, 24).contains("plan eliminado"));
+}
+
+#[test]
+fn plan_keys_do_nothing_on_other_tabs_or_without_plans() {
+    let mut app = App::config_only(config_state());
+    press(&mut app, KeyCode::Char('c')); // Destinos
+    assert!(config(&mut app).prompt.is_none());
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    app.plans_changed(Vec::new(), None, "");
+    press(&mut app, KeyCode::Char('r'));
+    assert!(
+        config(&mut app).prompt.is_none(),
+        "sin planes no hay nada que renombrar"
+    );
+}

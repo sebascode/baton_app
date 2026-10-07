@@ -178,6 +178,7 @@ pub fn preview() -> PreviewState {
         notice: Vec::new(),
         plans: Vec::new(),
         switcher: None,
+        prompt: None,
         last_run: None,
     }
 }

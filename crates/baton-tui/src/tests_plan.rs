@@ -267,16 +267,23 @@ fn enter_with_every_step_disabled_says_so_instead_of_doing_nothing() {
 }
 
 #[test]
-fn p_is_only_offered_when_there_are_other_plans() {
+fn p_is_offered_when_the_project_has_plans_but_not_in_the_demo() {
     let plan = empty_plan();
-    let alone = App::new(preview_of(&plan, &["vacio"]));
-    assert!(!shown(&alone, 110, 20).contains("cambiar de plan"));
-    let mut p = preview_of(&plan, &["vacio"]);
+    let demo = App::new(preview_of(&plan, &[]));
+    assert!(!shown(&demo, 110, 20).contains("[p] planes"));
+    let mut p = preview_of(&plan, &[]);
     assert_eq!(p.handle_key(key(KeyCode::Char('p'))), None);
-    assert_eq!(p.switcher, None, "con un solo plan no hay selector");
+    assert_eq!(p.switcher, None, "sin lista de planes no hay selector");
+
+    // con uno solo también: sirve para renombrarlo o copiarlo
+    let alone = App::new(preview_of(&plan, &["vacio"]));
+    assert!(shown(&alone, 110, 20).contains("[p] planes"));
+    let mut p = preview_of(&plan, &["vacio"]);
+    p.handle_key(key(KeyCode::Char('p')));
+    assert_eq!(p.switcher, Some(0));
 
     let several = App::new(preview_of(&plan, &["instalar", "vacio"]));
-    assert!(shown(&several, 110, 20).contains("[p] cambiar de plan"));
+    assert!(shown(&several, 110, 20).contains("[p] planes"));
 }
 
 #[test]
@@ -287,7 +294,7 @@ fn the_switcher_opens_on_the_current_plan_and_picks_another() {
     let t = shown(&app, 100, 24);
     assert!(t.contains("Cambiar de plan"), "{t}");
     assert!(t.contains("● instalar") || t.contains(" ● instalar"), "{t}");
-    assert!(t.contains("esc cerrar"), "{t}");
+    assert!(t.contains("c copiar · r renombrar · d eliminar"), "{t}");
 
     // abre en el plan actual (posición 1); bajar lleva a "zeta"
     app.handle_key(key(KeyCode::Down));
@@ -330,4 +337,112 @@ fn run_now_asks_for_the_run_without_pressing_enter() {
     // un plan sin pasos activos no ejecuta nada
     let mut empty = App::new(PreviewState::from_plan(&empty_plan()));
     assert_eq!(empty.run_now(), None);
+}
+
+// ------------------------------------------------- copiar, renombrar y eliminar planes
+
+use crate::plan_prompt::PlanRequest;
+
+fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+}
+
+#[test]
+fn copying_a_plan_from_the_switcher_asks_for_a_name_and_emits_the_effect() {
+    let plan = Plan::parse(PLAN).unwrap(); // "instalar"
+    let mut app = App::new(preview_of(&plan, &["desinstalar", "instalar"]));
+    app.handle_key(key(KeyCode::Char('p')));
+    app.handle_key(key(KeyCode::Up)); // «desinstalar»
+    assert_eq!(app.handle_key(key(KeyCode::Char('c'))), None);
+    let t = shown(&app, 100, 24);
+    assert!(
+        t.contains("Copiar plan «desinstalar»") && t.contains("desinstalar-copia"),
+        "{t}"
+    );
+    // las teclas van al nombre, no a la lista de pasos
+    type_text(&mut app, "x");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::PlanOp(PlanRequest::Copy {
+            from: "desinstalar".into(),
+            to: "desinstalar-copiax".into()
+        }))
+    );
+    assert!(
+        !shown(&app, 100, 24).contains("Copiar plan"),
+        "la caja se cierra"
+    );
+}
+
+#[test]
+fn renaming_and_cancelling_work_from_the_switcher() {
+    let plan = Plan::parse(PLAN).unwrap();
+    let mut app = App::new(preview_of(&plan, &["instalar"]));
+    app.handle_key(key(KeyCode::Char('p')));
+    app.handle_key(key(KeyCode::Char('r')));
+    assert!(shown(&app, 100, 24).contains("Renombrar plan «instalar»"));
+    app.handle_key(key(KeyCode::Esc)); // cancela la caja, el selector sigue
+    assert!(shown(&app, 100, 24).contains("Cambiar de plan"));
+    app.handle_key(key(KeyCode::Char('r')));
+    for _ in 0.."instalar".len() {
+        app.handle_key(key(KeyCode::Backspace));
+    }
+    type_text(&mut app, "nuevo");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::PlanOp(PlanRequest::Rename {
+            from: "instalar".into(),
+            to: "nuevo".into()
+        }))
+    );
+}
+
+#[test]
+fn deleting_asks_for_confirmation_and_never_the_open_plan() {
+    let plan = Plan::parse(PLAN).unwrap(); // abierto: "instalar"
+    let mut app = App::new(preview_of(&plan, &["desinstalar", "instalar"]));
+    app.handle_key(key(KeyCode::Char('p'))); // abre sobre «instalar»
+    app.handle_key(key(KeyCode::Char('d')));
+    let t = shown(&app, 110, 24);
+    assert!(t.contains("no se puede eliminar el plan abierto"), "{t}");
+    assert!(!t.contains("Eliminar plan"), "{t}");
+
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(shown(&app, 100, 24).contains("Eliminar plan «desinstalar»"));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Char('n'))),
+        None,
+        "cualquier otra tecla cancela"
+    );
+    app.handle_key(key(KeyCode::Char('d')));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Char('s'))),
+        Some(Effect::PlanOp(PlanRequest::Delete {
+            plan: "desinstalar".into()
+        }))
+    );
+}
+
+#[test]
+fn plans_changed_refreshes_the_list_the_current_name_and_shows_the_message() {
+    let plan = Plan::parse(PLAN).unwrap();
+    let mut app = App::new(preview_of(&plan, &["desinstalar", "instalar", "zeta"]));
+    app.handle_key(key(KeyCode::Char('p')));
+    app.handle_key(key(KeyCode::Down)); // «zeta»
+    app.plans_changed(vec!["instalar".into()], None, "plan 'zeta' eliminado");
+    let t = shown(&app, 100, 24);
+    assert!(t.contains("plan 'zeta' eliminado"), "{t}");
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(
+        !shown(&app, 100, 24).contains("Eliminar plan «zeta»"),
+        "el cursor volvió a caer dentro de la lista"
+    );
+    app.plans_changed(vec!["tienda".into()], Some("tienda"), "renombrado");
+    let crate::app::Mode::Preview(p) = &app.mode else {
+        panic!("debía seguir en la vista del plan");
+    };
+    assert_eq!(p.plan, "tienda");
 }
