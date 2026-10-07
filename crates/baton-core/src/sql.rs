@@ -67,6 +67,48 @@ fn docker_envs(conn: &PgConn) -> String {
         .collect()
 }
 
+/// La prueba de conexión: un `select` trivial que devuelve base, usuario y versión. Devuelve el
+/// programa y sus argumentos (no una línea de shell: se ejecuta directo). Las variables de `libpq`
+/// van en el entorno del proceso, así que ni la contraseña ni nada de la conexión está en los
+/// argumentos; con contenedor, `docker exec -e PGUSER ...` las toma de ese entorno.
+pub fn pg_ping_command(conn: &PgConn) -> (String, Vec<String>) {
+    let psql = [
+        "psql",
+        "-X",
+        "-tA",
+        "-F",
+        "|",
+        "-c",
+        "select current_database(), current_user, split_part(version(), ' ', 2)",
+    ]
+    .map(String::from);
+    match &conn.container {
+        None => ("psql".to_string(), psql[1..].to_vec()),
+        Some(container) => {
+            let mut args = vec!["exec".to_string()];
+            for (name, _) in &conn.env {
+                args.push("-e".to_string());
+                args.push(name.clone());
+            }
+            args.push(container.clone());
+            args.extend(psql);
+            ("docker".to_string(), args)
+        }
+    }
+}
+
+/// Lo que respondió la prueba: `tienda|app|16.4` pasa a `conectado a tienda como app (PostgreSQL 16.4)`.
+pub fn pg_ping_summary(stdout: &str) -> Option<String> {
+    let line = stdout.lines().find(|l| !l.trim().is_empty())?;
+    let mut parts = line.trim().split('|');
+    let (db, user) = (parts.next()?, parts.next()?);
+    let version = parts.next().filter(|v| !v.is_empty());
+    Some(match version {
+        Some(v) => format!("conectado a {db} como {user} (PostgreSQL {v})"),
+        None => format!("conectado a {db} como {user}"),
+    })
+}
+
 /// Volcado de la base (formato personalizado de `pg_dump`, el que entiende `pg_restore`) a `file`,
 /// una ruta que el comando puede usar tal cual (corre en la raíz del proyecto).
 pub fn pg_dump_command(conn: &PgConn, file: &str) -> String {
@@ -492,5 +534,56 @@ mod tests {
             "docker exec -i -e PGUSER -e PGPASSWORD 'mi-postgres' psql -X -v ON_ERROR_STOP=1 < 'it'\\''s.sql'"
         );
         assert!(!line.contains("s3cr3to"), "el valor nunca va en el comando");
+    }
+
+    #[test]
+    fn the_ping_runs_psql_directly_and_keeps_the_connection_out_of_the_arguments() {
+        let r: CredentialRef = "db.env#DB".parse().unwrap();
+        let conn = pg_conn(
+            &r,
+            &[
+                ("DB_USER".into(), "app".into()),
+                ("DB_PASSWORD".into(), "s3creto".into()),
+                ("DB_HOST".into(), "10.0.0.5".into()),
+            ],
+        );
+        let (program, args) = pg_ping_command(&conn);
+        assert_eq!(program, "psql");
+        assert_eq!(args[..3], ["-X", "-tA", "-F"]);
+        assert!(!args.join(" ").contains("s3creto") && !args.join(" ").contains("10.0.0.5"));
+    }
+
+    #[test]
+    fn the_ping_in_a_container_passes_the_variables_by_name() {
+        let r: CredentialRef = "db.env#DB".parse().unwrap();
+        let conn = pg_conn(
+            &r,
+            &[
+                ("DB_USER".into(), "app".into()),
+                ("DB_PASSWORD".into(), "s3creto".into()),
+                ("DB_CONTAINER".into(), "mi-db".into()),
+            ],
+        );
+        let (program, args) = pg_ping_command(&conn);
+        assert_eq!(program, "docker");
+        assert_eq!(
+            args[..7],
+            ["exec", "-e", "PGUSER", "-e", "PGPASSWORD", "mi-db", "psql"]
+        );
+        assert!(!args.join(" ").contains("s3creto"));
+    }
+
+    #[test]
+    fn the_ping_answer_becomes_a_sentence() {
+        assert_eq!(
+            pg_ping_summary("tienda|app|16.4\n").as_deref(),
+            Some("conectado a tienda como app (PostgreSQL 16.4)")
+        );
+        assert_eq!(
+            pg_ping_summary("\ntienda|app|\n").as_deref(),
+            Some("conectado a tienda como app")
+        );
+        assert_eq!(pg_ping_summary(""), None);
+        assert_eq!(pg_ping_summary("sin separadores"), None);
     }
 }

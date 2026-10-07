@@ -285,7 +285,7 @@ impl RunDriver {
         let (Some(item), Some(req)) = (c.items.get(i), self.cred_reqs.get(i)) else {
             return;
         };
-        let (ok, message) = test_connection(req.kind, item);
+        let (ok, message) = test_connection(req.kind, &req.reference, item);
         c.set_test_result(i, ok, &message);
     }
 
@@ -534,10 +534,14 @@ fn credentials_tree(files: &[String], ambiente: Option<&str>) -> Vec<String> {
     out
 }
 
-/// Prueba de conexión con los datos que hay en pantalla. Solo docker es real por ahora (usa
-/// `docker login`, que no imprime el token en ningún caso); el resto queda simulado hasta que
-/// tengan con qué probarse de verdad.
-fn test_connection(kind: CredentialKind, item: &CredItem) -> (bool, String) {
+/// Prueba de conexión con los datos que hay en pantalla. Docker (`docker login`, que no imprime
+/// el token en ningún caso) y las bases de datos (`psql`, directo o con `docker exec`) son
+/// reales; ssh, git y otro no tienen todavía con qué probarse.
+fn test_connection(
+    kind: CredentialKind,
+    reference: &baton_core::CredentialRef,
+    item: &CredItem,
+) -> (bool, String) {
     let value_of = |key: &str| -> String {
         baton_core::fields_for(kind)
             .iter()
@@ -559,14 +563,113 @@ fn test_connection(kind: CredentialKind, item: &CredItem) -> (bool, String) {
             }
         }
         CredentialKind::Ssh => (false, "probar conexión ssh llega en el hito f".to_string()),
-        CredentialKind::Db => (
-            false,
-            "probar conexión de base de datos llega en v0.3".to_string(),
-        ),
+        CredentialKind::Db => {
+            let resolved: Vec<(String, String)> = baton_core::fields_for(kind)
+                .iter()
+                .enumerate()
+                .filter_map(|(i, spec)| {
+                    item.fields
+                        .get(i)
+                        .map(|f| (reference.variable(spec.key), f.value.value()))
+                })
+                .collect();
+            db_ping(reference, &resolved, None, DB_PING_TIMEOUT)
+        }
         CredentialKind::Git | CredentialKind::Otro => {
             (false, "sin prueba automática todavía".to_string())
         }
     }
+}
+
+/// Cuánto se espera a que la base responda antes de dar la prueba por fallida.
+const DB_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Conecta a la base con los valores dados (`PREFIJO_CAMPO`) y corre un `select` trivial. La
+/// contraseña viaja por el entorno del proceso, nunca en un argumento, y se tacha de cualquier
+/// mensaje. `program` reemplaza a `psql`/`docker` (para probar con uno de mentira).
+fn db_ping(
+    reference: &baton_core::CredentialRef,
+    resolved: &[(String, String)],
+    program: Option<&std::path::Path>,
+    timeout: std::time::Duration,
+) -> (bool, String) {
+    use std::process::{Command, Stdio};
+    let conn = baton_core::sql::pg_conn(reference, resolved);
+    if !conn.env.iter().any(|(n, _)| n == "PGUSER") {
+        return (false, "falta el usuario para probar".to_string());
+    }
+    let (default_program, args) = baton_core::sql::pg_ping_command(&conn);
+    let program = program.map_or_else(
+        || std::ffi::OsString::from(&default_program),
+        |p| p.as_os_str().to_owned(),
+    );
+    let mut child = match Command::new(&program)
+        .args(&args)
+        .envs(conn.env.iter().cloned())
+        .env("PGCONNECT_TIMEOUT", "5")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (
+                false,
+                if conn.container.is_some() {
+                    "no se encontró docker en el PATH".to_string()
+                } else {
+                    "no se encontró psql en el PATH (o define un contenedor para usar docker exec)"
+                        .to_string()
+                },
+            );
+        }
+        Err(e) => return (false, format!("no se pudo ejecutar {default_program}: {e}")),
+    };
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return (
+                    false,
+                    format!("la base no respondió en {} s", timeout.as_secs().max(1)),
+                );
+            }
+            Err(e) => return (false, format!("no se pudo esperar a la prueba: {e}")),
+        }
+    };
+    let out = child.wait_with_output().ok();
+    let text = |bytes: Option<&Vec<u8>>| {
+        bytes
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default()
+    };
+    if status.success() {
+        let stdout = text(out.as_ref().map(|o| &o.stdout));
+        return (
+            true,
+            baton_core::sql::pg_ping_summary(&stdout).unwrap_or_else(|| "conectado".to_string()),
+        );
+    }
+    let passwords: Vec<String> = conn
+        .env
+        .iter()
+        .filter(|(n, _)| n == "PGPASSWORD")
+        .map(|(_, v)| v.clone())
+        .collect();
+    let stderr = baton_core::mask::redact(&text(out.as_ref().map(|o| &o.stderr)), &passwords);
+    let first = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("la conexión falló");
+    (false, first.trim_start_matches("psql: error: ").to_string())
 }
 
 fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
@@ -729,6 +832,162 @@ impl Driver for RunDriver {
 mod tests {
     use super::*;
     use baton_core::plan::CredentialKind;
+
+    /// Un `psql` de mentira con el cuerpo dado, y la referencia `db.env#DB`.
+    fn fake_psql(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("psql");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, path)
+    }
+
+    fn ping(program: &std::path::Path, extra: &[(&str, &str)]) -> (bool, String) {
+        let reference: baton_core::CredentialRef = "db.env#DB".parse().unwrap();
+        let mut resolved = vec![
+            ("DB_USER".to_string(), "app".to_string()),
+            ("DB_PASSWORD".to_string(), "contrasena-secreta".to_string()),
+        ];
+        resolved.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        // con varias pruebas en paralelo, otro hilo puede estar escribiendo un ejecutable justo
+        // cuando este hace `fork`: el sistema contesta "Text file busy" y basta con reintentar
+        for _ in 0..50 {
+            let r = db_ping(
+                &reference,
+                &resolved,
+                Some(program),
+                std::time::Duration::from_secs(5),
+            );
+            if !r.1.contains("busy") && !r.1.contains("ocupado") {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unreachable!("el archivo siguió ocupado")
+    }
+
+    #[test]
+    fn a_reachable_database_reports_where_it_connected() {
+        // el psql de mentira comprueba que la conexión llegó por el entorno y no por argumentos
+        let (_d, psql) = fake_psql(
+            r#"[ "$PGUSER" = app ] && [ "$PGPASSWORD" = contrasena-secreta ] || { echo "sin entorno" >&2; exit 2; }
+case "$*" in *contrasena*) echo "contrasena en argumentos" >&2; exit 3;; esac
+echo "tienda|app|16.4""#,
+        );
+        assert_eq!(
+            ping(&psql, &[]),
+            (
+                true,
+                "conectado a tienda como app (PostgreSQL 16.4)".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_refused_connection_shows_the_first_line_without_the_password() {
+        let (_d, psql) = fake_psql(
+            r#"echo 'psql: error: connection to server failed: FATAL: password authentication failed (contrasena-secreta)' >&2
+echo '        Is the server running?' >&2
+exit 2"#,
+        );
+        let (ok, msg) = ping(&psql, &[]);
+        assert!(!ok);
+        assert!(
+            msg.starts_with("connection to server failed: FATAL"),
+            "{msg}"
+        );
+        assert!(!msg.contains("contrasena-secreta"), "{msg}");
+    }
+
+    #[test]
+    fn a_database_that_does_not_answer_gives_up() {
+        let (_d, psql) = fake_psql("sleep 5");
+        let reference: baton_core::CredentialRef = "db.env#DB".parse().unwrap();
+        let started = std::time::Instant::now();
+        let (ok, msg) = db_ping(
+            &reference,
+            &[("DB_USER".into(), "app".into())],
+            Some(&psql),
+            std::time::Duration::from_millis(300),
+        );
+        assert!(!ok);
+        assert!(msg.contains("no respondió"), "{msg}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn without_a_user_or_without_psql_it_says_what_is_missing() {
+        let reference: baton_core::CredentialRef = "db.env#DB".parse().unwrap();
+        let t = std::time::Duration::from_secs(1);
+        assert_eq!(
+            db_ping(&reference, &[], None, t),
+            (false, "falta el usuario para probar".to_string())
+        );
+        let missing = std::path::Path::new("/no/existe/psql");
+        let user = [("DB_USER".to_string(), "app".to_string())];
+        let (ok, msg) = db_ping(&reference, &user, Some(missing), t);
+        assert!(!ok && msg.contains("no se encontró psql"), "{msg}");
+        let with_container = [
+            ("DB_USER".to_string(), "app".to_string()),
+            ("DB_CONTAINER".to_string(), "mi-db".to_string()),
+        ];
+        let (ok, msg) = db_ping(&reference, &with_container, Some(missing), t);
+        assert!(!ok && msg.contains("no se encontró docker"), "{msg}");
+    }
+
+    /// Contra un PostgreSQL de verdad en un contenedor (necesita `podman`; `docker` también
+    /// serviría cambiando el programa). Se corre a mano:
+    /// `cargo test -p baton --bin baton real_postgres -- --ignored`.
+    #[test]
+    #[ignore = "necesita podman y la imagen postgres:16-alpine"]
+    fn real_postgres_in_a_container() {
+        use std::process::Command;
+        let name = format!("baton-ping-{}", std::process::id());
+        let started = Command::new("podman")
+            .args(["run", "-d", "--rm", "--name", &name])
+            .args(["-e", "POSTGRES_PASSWORD=pw", "postgres:16-alpine"])
+            .status()
+            .unwrap();
+        assert!(started.success());
+        struct Stop(String);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                let _ = Command::new("podman").args(["rm", "-f", &self.0]).output();
+            }
+        }
+        let _stop = Stop(name.clone());
+        for _ in 0..60 {
+            let ready = Command::new("podman")
+                .args(["exec", &name, "pg_isready", "-U", "postgres"])
+                .output()
+                .unwrap();
+            if ready.status.success() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let reference: baton_core::CredentialRef = "db.env#DB".parse().unwrap();
+        let podman = std::path::Path::new("/usr/bin/podman");
+        let t = std::time::Duration::from_secs(20);
+        let creds = |user: &str| {
+            vec![
+                ("DB_USER".to_string(), user.to_string()),
+                ("DB_PASSWORD".to_string(), "pw".to_string()),
+                ("DB_CONTAINER".to_string(), name.clone()),
+            ]
+        };
+        let (ok, msg) = db_ping(&reference, &creds("postgres"), Some(podman), t);
+        assert!(ok, "{msg}");
+        assert!(
+            msg.starts_with("conectado a postgres como postgres (PostgreSQL 16."),
+            "{msg}"
+        );
+        let (ok, msg) = db_ping(&reference, &creds("nadie"), Some(podman), t);
+        assert!(!ok);
+        assert!(msg.contains("nadie"), "el error nombra al usuario: {msg}");
+        assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
+    }
 
     fn shell_fixture(extra_config: &str) -> (Project, Config, Plan) {
         let project = Project::at("/proyecto");
