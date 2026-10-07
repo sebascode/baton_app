@@ -46,7 +46,10 @@ else
   echo "compilando (release)..."
   (cd "$root" && cargo build --release --locked -p baton)
   if [ -x "$dest/baton" ]; then
-    cp -f "$dest/baton" "$dest/baton.prev"
+    # rm antes de copiar: en macOS sobrescribir un binario en su sitio puede dejarlo con la firma
+    # invalidada (el sistema lo mata al ejecutarlo); un archivo nuevo no tiene ese problema.
+    rm -f "$dest/baton.prev"
+    cp "$dest/baton" "$dest/baton.prev"
   fi
   place "$root/target/release/baton"
   echo "instalado en $dest/baton"
@@ -54,10 +57,16 @@ fi
 
 # La página de manual (`man baton`). `~/.local/share/man` ya está en el MANPATH de man-db.
 install_man() {
-  local man_dir="${BATON_MAN_DIR:-$HOME/.local/share/man}/man1"
+  local man_base="${BATON_MAN_DIR:-$HOME/.local/share/man}"
+  local man_dir="$man_base/man1"
   if [ -f "$root/man/baton.1" ] && mkdir -p "$man_dir" 2>/dev/null; then
     cp "$root/man/baton.1" "$man_dir/baton.1" && chmod 644 "$man_dir/baton.1"
     echo "manual instalado en $man_dir/baton.1 (man baton)"
+    # man-db (Linux) ya busca en ~/.local/share/man; el man de macOS no
+    if command -v manpath >/dev/null 2>&1 &&
+      ! manpath 2>/dev/null | tr ':' '\n' | grep -qxF "$man_base"; then
+      echo "aviso: $man_base no está en el MANPATH; agrega a tu shell: export MANPATH=\"$man_base:\$(manpath)\"" >&2
+    fi
   fi
 }
 if [ "$rollback" = 0 ]; then

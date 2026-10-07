@@ -52,3 +52,9 @@ jobs:
 
       - name: test
         run: cargo test --workspace
+
+      - name: install.sh
+        run: |
+          BATON_MAN_DIR="$RUNNER_TEMP/man" scripts/install.sh --dir "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/baton" version
+          scripts/install.sh --dir "$RUNNER_TEMP/bin" --rollback
