@@ -194,6 +194,122 @@ pub fn to_json(table: &Table) -> String {
     format!("[\n{}\n]", rows.join(",\n"))
 }
 
+// ------------------------------------------------------------ consola interactiva
+
+/// Lo que se puede escribir en la consola interactiva además de una consulta: líneas que
+/// empiezan con `\`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Meta {
+    Quit,
+    Help,
+    /// Las bases del plan.
+    Bases,
+    Tables,
+    Columns(String),
+    /// Sin argumento muestra el valor actual.
+    Format(Option<String>),
+    Limit(Option<String>),
+    /// Alterna recortar las celdas largas.
+    Full,
+    Write,
+    ReadOnly,
+    Unknown(String),
+}
+
+/// Interpreta una línea que empieza con `\` (`\q`, `\tablas`, `\columnas clientes`...).
+pub fn parse_meta(line: &str) -> Meta {
+    let line = line.trim().trim_end_matches(';');
+    let mut words = line.trim_start_matches('\\').split_whitespace();
+    let name = words.next().unwrap_or_default().to_lowercase();
+    let arg = words.next().map(str::to_string);
+    match name.as_str() {
+        "q" | "salir" | "quit" => Meta::Quit,
+        "?" | "ayuda" | "h" => Meta::Help,
+        "bases" => Meta::Bases,
+        "tablas" | "dt" => Meta::Tables,
+        "columnas" | "d" => match arg {
+            Some(t) => Meta::Columns(t),
+            None => Meta::Unknown("\\columnas necesita el nombre de una tabla".to_string()),
+        },
+        "formato" => Meta::Format(arg),
+        "limite" | "límite" => Meta::Limit(arg),
+        "completo" => Meta::Full,
+        "escribir" => Meta::Write,
+        "lectura" | "solo-lectura" => Meta::ReadOnly,
+        other => Meta::Unknown(format!(
+            "comando desconocido: \\{other} (\\? muestra la ayuda)"
+        )),
+    }
+}
+
+/// Las tablas y vistas de la base (sin las del sistema).
+pub fn tables_query(kind: crate::plan::CredentialKind) -> String {
+    match kind {
+        crate::plan::CredentialKind::Sqlite => {
+            "select name, type from sqlite_master where type in ('table', 'view') \
+             and name not like 'sqlite_%' order by name"
+                .to_string()
+        }
+        _ => "select table_schema as esquema, table_name as nombre, table_type as tipo \
+              from information_schema.tables \
+              where table_schema not in ('pg_catalog', 'information_schema') \
+              order by 1, 2"
+            .to_string(),
+    }
+}
+
+/// Las columnas de una tabla (`tabla` o `esquema.tabla`). El nombre solo puede llevar letras,
+/// números, `_`, `$` y un punto: va dentro de un texto SQL.
+pub fn columns_query(kind: crate::plan::CredentialKind, table: &str) -> Result<String, String> {
+    let ok = !table.is_empty()
+        && table.matches('.').count() <= 1
+        && table
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'));
+    if !ok {
+        return Err(format!("'{table}' no es un nombre de tabla válido"));
+    }
+    Ok(match kind {
+        crate::plan::CredentialKind::Sqlite => {
+            if table.contains('.') {
+                return Err("en SQLite el nombre de la tabla no lleva esquema".to_string());
+            }
+            format!(
+                "select name as columna, type as tipo, \"notnull\" as no_nulo, dflt_value as defecto, pk \
+                 from pragma_table_info('{table}')"
+            )
+        }
+        _ => {
+            let (schema, name) = table
+                .split_once('.')
+                .map_or((None, table), |(s, n)| (Some(s), n));
+            let schema = schema.map_or_else(String::new, |s| format!(" and table_schema = '{s}'"));
+            format!(
+                "select column_name as columna, data_type as tipo, is_nullable as acepta_nulos, \
+                 column_default as defecto from information_schema.columns \
+                 where table_name = '{name}'{schema} order by ordinal_position"
+            )
+        }
+    })
+}
+
+/// ¿La consulta parece llevar un secreto (una contraseña, un token)? No se guarda en el historial.
+pub fn looks_sensitive(sql: &str) -> bool {
+    let lower = sql.to_lowercase();
+    [
+        "password",
+        "passwd",
+        "contraseña",
+        "secret",
+        "token",
+        "identified by",
+        "api_key",
+        "apikey",
+    ]
+    .iter()
+    .any(|w| lower.contains(w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +457,61 @@ mod tests {
         assert_eq!(ro.args.last().map(String::as_str), Some("/p/x.db"));
         let rw = sqlite_query_invocation("/p/x.db", true);
         assert!(!rw.args.contains(&"-readonly".to_string()));
+    }
+
+    #[test]
+    fn meta_commands_are_read_with_their_arguments() {
+        for (line, meta) in [
+            ("\\q", Meta::Quit),
+            ("\\salir", Meta::Quit),
+            ("\\?", Meta::Help),
+            ("\\tablas", Meta::Tables),
+            ("\\bases", Meta::Bases),
+            ("\\columnas clientes", Meta::Columns("clientes".into())),
+            (
+                "\\d public.clientes;",
+                Meta::Columns("public.clientes".into()),
+            ),
+            ("\\formato json", Meta::Format(Some("json".into()))),
+            ("\\formato", Meta::Format(None)),
+            ("\\limite 50", Meta::Limit(Some("50".into()))),
+            ("\\completo", Meta::Full),
+            ("\\escribir", Meta::Write),
+            ("\\lectura", Meta::ReadOnly),
+        ] {
+            assert_eq!(parse_meta(line), meta, "{line}");
+        }
+        assert!(matches!(parse_meta("\\nada"), Meta::Unknown(m) if m.contains("\\nada")));
+        assert!(
+            matches!(parse_meta("\\columnas"), Meta::Unknown(m) if m.contains("nombre de una tabla"))
+        );
+    }
+
+    #[test]
+    fn the_catalog_queries_are_safe_against_odd_table_names() {
+        use crate::plan::CredentialKind::{Db, Sqlite};
+        assert!(tables_query(Sqlite).contains("sqlite_master"));
+        assert!(tables_query(Db).contains("information_schema.tables"));
+        let pg = columns_query(Db, "public.clientes").unwrap();
+        assert!(
+            pg.contains("table_name = 'clientes' and table_schema = 'public'"),
+            "{pg}"
+        );
+        assert!(
+            columns_query(Sqlite, "clientes")
+                .unwrap()
+                .contains("pragma_table_info('clientes')")
+        );
+        for bad in ["", "a'b", "a;drop", "a b", "a.b.c", "a\"b", "x--"] {
+            assert!(columns_query(Db, bad).is_err(), "{bad:?}");
+        }
+        assert!(columns_query(Sqlite, "main.clientes").is_err());
+    }
+
+    #[test]
+    fn queries_that_look_like_they_carry_a_secret_are_not_remembered() {
+        assert!(looks_sensitive("ALTER USER app WITH PASSWORD 'x'"));
+        assert!(looks_sensitive("select * from api_keys where token = 'a'"));
+        assert!(!looks_sensitive("select * from clientes where id = 1"));
     }
 }

@@ -4,6 +4,7 @@ mod ambiente;
 mod ask;
 mod config_run;
 mod db_cmd;
+mod db_session;
 mod history_cmd;
 mod import;
 mod last;
@@ -267,6 +268,9 @@ enum Command {
         /// Cuánto se espera a la respuesta (ej. 30s, 5m)
         #[arg(long, default_value = "60s")]
         timeout: String,
+        /// Abre una sesión interactiva (se abre sola con una base, sin consulta y en una terminal)
+        #[arg(short = 'i', long = "interactivo")]
+        interactivo: bool,
     },
     /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
     History {
@@ -616,6 +620,7 @@ fn main() -> ExitCode {
             assume_yes,
             ambiente,
             timeout,
+            interactivo,
         } => {
             let Ok(timeout) = timeout.parse::<baton_core::units::Dur>() else {
                 eprintln!("error: --timeout '{timeout}' no es una duración (ej. 30s, 5m)");
@@ -635,6 +640,7 @@ fn main() -> ExitCode {
                     assume_yes,
                     ambiente,
                     timeout: timeout.as_duration(),
+                    interactive: interactivo,
                 },
             )
         }

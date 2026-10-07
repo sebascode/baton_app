@@ -5,7 +5,7 @@
 //! consulta es destructiva, pide `--assume-yes`. La consulta viaja por la entrada estándar del
 //! motor, nunca en un argumento.
 
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -40,10 +40,12 @@ pub struct Args {
     pub assume_yes: bool,
     pub ambiente: Option<String>,
     pub timeout: Duration,
+    /// Una sesión interactiva (se activa sola con una base en una terminal y sin consulta).
+    pub interactive: bool,
 }
 
 /// Ancho máximo de una celda en la tabla (sin `--completo`).
-const MAX_CELL: usize = 60;
+pub(crate) const MAX_CELL: usize = 60;
 
 pub fn run(project: &Project, args: Args) -> ExitCode {
     // la configuración tiene que ser válida; el plan solo tiene que poder leerse (un error en otro
@@ -96,10 +98,26 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
         }
     };
     let Some(query) = query else {
-        // sin consulta: qué bases hay y cómo consultarlas
+        // sin consulta: una sesión interactiva si se pidió (o hay una base y una terminal); si no,
+        // qué bases hay y cómo consultarlas
+        let on_terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        if args.interactive || (args.credential.is_some() && on_terminal) {
+            let cred = match pick_credential(&dbs, args.credential.as_deref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(EXIT_USAGE);
+                }
+            };
+            return crate::db_session::run(project, cred, &dbs, &resolver, &args);
+        }
         print!("{}", describe(&dbs, &resolver, &Style::detect()));
         return ExitCode::SUCCESS;
     };
+    if args.interactive {
+        eprintln!("error: --interactivo no se combina con --consulta ni --archivo");
+        return ExitCode::from(EXIT_USAGE);
+    }
 
     let cred = match pick_credential(&dbs, args.credential.as_deref()) {
         Ok(c) => c,
@@ -169,7 +187,7 @@ fn read_query(args: &Args) -> Result<Option<String>, String> {
 }
 
 /// La credencial pedida, o la única que haya.
-fn pick_credential<'a>(
+pub(crate) fn pick_credential<'a>(
     dbs: &[&'a CredentialReq],
     wanted: Option<&str>,
 ) -> Result<&'a CredentialReq, String> {
@@ -195,7 +213,7 @@ fn pick_credential<'a>(
 
 /// Los valores de los campos de la credencial (`PREFIJO_CAMPO`), desde variable de entorno,
 /// proveedor o `.env`. Falla nombrando lo que falta.
-fn resolve_fields(
+pub(crate) fn resolve_fields(
     cred: &CredentialReq,
     resolver: &Resolver,
     project: &Project,
@@ -222,7 +240,7 @@ fn resolve_fields(
 }
 
 /// El programa que consulta esa base y los valores secretos que hay que tachar de lo que diga.
-fn invocation_for(
+pub(crate) fn invocation_for(
     cred: &CredentialReq,
     resolved: &[(String, String)],
     project: &Project,
@@ -268,33 +286,46 @@ fn sqlite_path(root: &Path, file: &str) -> PathBuf {
     }
 }
 
-fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> ExitCode {
-    // una sentencia sin `;` final queda sin ejecutar en algunos motores al leer de stdin
+/// Cómo se muestra el resultado y si se puede escribir: lo que la consola interactiva cambia con
+/// `\formato`, `\limite`, `\completo` y `\escribir`.
+#[derive(Debug, Clone)]
+pub struct View {
+    pub format: Format,
+    pub limit: usize,
+    pub full: bool,
+    pub write: bool,
+}
+
+/// Por qué una consulta no dio resultado.
+pub enum QueryError {
+    /// El programa (`psql`, `sqlite3`, `docker`) no está en el PATH.
+    NotFound(String),
+    TimedOut,
+    /// El motor contestó con un error: sus primeras líneas, sin secretos.
+    Failed(Vec<String>),
+    Other(String),
+}
+
+/// Corre la consulta (por la entrada estándar del motor) y devuelve su salida CSV. Una consulta
+/// sin `;` final se completa: algunos motores no ejecutan lo último que leen sin él.
+pub fn query_csv(
+    inv: &Invocation,
+    secrets: &[String],
+    query: &str,
+    timeout: Duration,
+) -> Result<(String, bool), QueryError> {
     let input = format!("{}\n;\n", query.trim_end());
-    let finished = run_capture(
+    let done = match run_capture(
         std::ffi::OsStr::new(&inv.program),
         &inv.args,
         &inv.env,
         Some(input.as_bytes()),
-        args.timeout,
-    );
-    let done = match finished {
+        timeout,
+    ) {
         Ok(d) => d,
-        Err(Unfinished::NotFound) => {
-            eprintln!("error: no se encontró {} en el PATH", inv.program);
-            return ExitCode::from(EXIT_INVALID);
-        }
-        Err(Unfinished::TimedOut) => {
-            eprintln!(
-                "error: la consulta no terminó en {} (--timeout para esperar más)",
-                baton_core::units::format_duration(args.timeout)
-            );
-            return ExitCode::from(EXIT_RUN_FAILED);
-        }
-        Err(Unfinished::Other(e)) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(EXIT_RUN_FAILED);
-        }
+        Err(Unfinished::NotFound) => return Err(QueryError::NotFound(inv.program.clone())),
+        Err(Unfinished::TimedOut) => return Err(QueryError::TimedOut),
+        Err(Unfinished::Other(e)) => return Err(QueryError::Other(e)),
     };
     // psql escribe `ERROR:` en stderr; si por alguna razón saliera con 0 igual (otra versión o un
     // `\set` ajeno), un error de la consulta no debe pasar por una consulta sin resultados
@@ -303,46 +334,78 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
     });
     if !done.ok || engine_error {
         let text = baton_core::mask::redact(&done.stderr, secrets);
-        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-        for l in lines.iter().take(8) {
-            eprintln!("{}", l.trim_end());
-        }
-        if lines.is_empty() {
-            eprintln!("error: la consulta falló");
-        }
-        return ExitCode::from(EXIT_RUN_FAILED);
+        let lines: Vec<String> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(8)
+            .map(|l| l.trim_end().to_string())
+            .collect();
+        return Err(QueryError::Failed(if lines.is_empty() {
+            vec!["error: la consulta falló".to_string()]
+        } else {
+            lines
+        }));
     }
-    if done.truncated {
-        eprintln!("aviso: la salida pasó de 64 MiB y se cortó");
-    }
-
-    match args.format {
-        Format::Csv => {
-            // la marca de NULL no se filtra: en CSV un NULL es un campo vacío
-            print!("{}", done.stdout.replace(NULL_MARK, ""));
-        }
-        Format::Json => match db_console::parse_csv(&done.stdout) {
-            Ok(t) => println!("{}", db_console::to_json(&t)),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(EXIT_RUN_FAILED);
-            }
-        },
-        Format::Tabla => match db_console::parse_csv(&done.stdout) {
-            Ok(t) => print_table(&t, args),
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(EXIT_RUN_FAILED);
-            }
-        },
-    }
-    ExitCode::SUCCESS
+    Ok((done.stdout, done.truncated))
 }
 
-fn print_table(t: &Table, args: &Args) {
+/// Dibuja la salida CSV de un motor en el formato pedido.
+pub fn show(csv: &str, truncated: bool, view: &View) -> Result<(), String> {
+    if truncated {
+        eprintln!("aviso: la salida pasó de 64 MiB y se cortó");
+    }
+    match view.format {
+        // la marca de NULL no se filtra: en CSV un NULL es un campo vacío
+        Format::Csv => print!("{}", csv.replace(NULL_MARK, "")),
+        Format::Json => println!("{}", db_console::to_json(&db_console::parse_csv(csv)?)),
+        Format::Tabla => print_table(&db_console::parse_csv(csv)?, view),
+    }
+    Ok(())
+}
+
+fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> ExitCode {
+    let view = View {
+        format: args.format,
+        limit: args.limit,
+        full: args.full,
+        write: args.write,
+    };
+    match query_csv(inv, secrets, query, args.timeout) {
+        Ok((csv, truncated)) => match show(&csv, truncated, &view) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(EXIT_RUN_FAILED)
+            }
+        },
+        Err(QueryError::NotFound(program)) => {
+            eprintln!("error: no se encontró {program} en el PATH");
+            ExitCode::from(EXIT_INVALID)
+        }
+        Err(QueryError::TimedOut) => {
+            eprintln!(
+                "error: la consulta no terminó en {} (--timeout para esperar más)",
+                baton_core::units::format_duration(args.timeout)
+            );
+            ExitCode::from(EXIT_RUN_FAILED)
+        }
+        Err(QueryError::Failed(lines)) => {
+            for l in lines {
+                eprintln!("{l}");
+            }
+            ExitCode::from(EXIT_RUN_FAILED)
+        }
+        Err(QueryError::Other(e)) => {
+            eprintln!("error: {e}");
+            ExitCode::from(EXIT_RUN_FAILED)
+        }
+    }
+}
+
+fn print_table(t: &Table, view: &View) {
     let style = Style::detect();
     if t.columns.is_empty() {
-        let what = if args.write {
+        let what = if view.write {
             "ok (la sentencia no devolvió filas)"
         } else {
             "(la consulta no devolvió resultados)"
@@ -350,8 +413,8 @@ fn print_table(t: &Table, args: &Args) {
         println!("{}", style.dim(what));
         return;
     }
-    let limit = (args.limit > 0).then_some(args.limit);
-    let cap = (!args.full).then_some(MAX_CELL);
+    let limit = (view.limit > 0).then_some(view.limit);
+    let cap = (!view.full).then_some(MAX_CELL);
     for line in render_table(t, limit, cap, &style) {
         println!("{line}");
     }
@@ -462,39 +525,50 @@ pub fn render_table(
     out
 }
 
+/// Una base en una frase, sin secretos: `local (sqlite datos.db)`, `pg (postgres app@db/tienda)`.
+pub(crate) fn pick_credential_label(c: &CredentialReq, resolver: &Resolver) -> String {
+    let (kind, target) = describe_target(c, resolver);
+    format!("{} ({kind} {target})", c.id)
+}
+
+/// Tipo y destino de una base, sin mostrar secretos.
+fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, String) {
+    let get = |key: &str| {
+        resolver
+            .resolve(&c.reference, key, c.provider.as_deref())
+            .value
+            .filter(|v| !v.is_empty())
+    };
+    match c.kind {
+        CredentialKind::Sqlite => (
+            "sqlite",
+            get("FILE").unwrap_or_else(|| "(falta el archivo)".into()),
+        ),
+        _ => {
+            let user = get("USER").unwrap_or_else(|| "(falta el usuario)".into());
+            let place = get("CONTAINER").map_or_else(
+                || {
+                    format!(
+                        "{}{}",
+                        get("HOST").unwrap_or_else(|| "local".into()),
+                        get("PORT").map(|p| format!(":{p}")).unwrap_or_default()
+                    )
+                },
+                |ct| format!("contenedor {ct}"),
+            );
+            let db = get("DATABASE").map(|d| format!("/{d}")).unwrap_or_default();
+            ("postgres", format!("{user}@{place}{db}"))
+        }
+    }
+}
+
 /// Las bases del plan y cómo llegar a cada una, sin mostrar secretos.
-fn describe(dbs: &[&CredentialReq], resolver: &Resolver, style: &Style) -> String {
+pub(crate) fn describe(dbs: &[&CredentialReq], resolver: &Resolver, style: &Style) -> String {
     let mut out = String::new();
     out.push_str(&format!("{}\n", style.bold("bases del plan")));
     let id_w = dbs.iter().map(|c| c.id.chars().count()).max().unwrap_or(0);
     for c in dbs {
-        let get = |key: &str| {
-            resolver
-                .resolve(&c.reference, key, c.provider.as_deref())
-                .value
-                .filter(|v| !v.is_empty())
-        };
-        let (kind, target) = match c.kind {
-            CredentialKind::Sqlite => (
-                "sqlite",
-                get("FILE").unwrap_or_else(|| "(falta el archivo)".into()),
-            ),
-            _ => {
-                let user = get("USER").unwrap_or_else(|| "(falta el usuario)".into());
-                let place = get("CONTAINER").map_or_else(
-                    || {
-                        format!(
-                            "{}{}",
-                            get("HOST").unwrap_or_else(|| "local".into()),
-                            get("PORT").map(|p| format!(":{p}")).unwrap_or_default()
-                        )
-                    },
-                    |ct| format!("contenedor {ct}"),
-                );
-                let db = get("DATABASE").map(|d| format!("/{d}")).unwrap_or_default();
-                ("postgres", format!("{user}@{place}{db}"))
-            }
-        };
+        let (kind, target) = describe_target(c, resolver);
         out.push_str(&format!("  {:<id_w$}  {kind:<8}  {target}\n", c.id));
     }
     let first = dbs[0].id.as_str();

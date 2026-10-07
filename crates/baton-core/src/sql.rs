@@ -331,6 +331,15 @@ pub fn statement_count(sql: &str) -> usize {
     count + usize::from(has_text)
 }
 
+/// ¿El texto ya es una sentencia completa? Es decir, termina en `;` (sin contar espacios ni
+/// comentarios) y no quedó un texto entre comillas sin cerrar. Lo usa la consola interactiva para
+/// saber si sigue pidiendo líneas.
+pub fn ends_statement(sql: &str) -> bool {
+    let orig: Vec<char> = sql.chars().collect();
+    let clean = blank_comments_and_strings(&orig);
+    clean.iter().rev().find(|c| !c.is_whitespace()) == Some(&';')
+}
+
 /// Largo de una etiqueta de bloque (`$$`, `$cuerpo$`) que empieza en `chars[0]`.
 fn dollar_tag_len(chars: &[char]) -> Option<usize> {
     let end = chars
@@ -802,6 +811,24 @@ mod tests {
             ("select '$$'; select 2", 2),
         ] {
             assert_eq!(statement_count(sql), n, "{sql:?}");
+        }
+    }
+
+    #[test]
+    fn a_statement_is_complete_when_it_ends_with_a_semicolon_outside_comments_and_strings() {
+        for (sql, done) in [
+            ("select 1;", true),
+            ("select 1;  \n", true),
+            ("select 1; -- fin", true),
+            ("select 1 /* x; */", false),
+            ("select 1", false),
+            ("select ';", false),
+            ("select 'a;'", false),
+            ("select 1 -- ;", false),
+            ("", false),
+            ("select\n  1\n;", true),
+        ] {
+            assert_eq!(ends_statement(sql), done, "{sql:?}");
         }
     }
 }

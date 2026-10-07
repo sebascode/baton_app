@@ -560,3 +560,157 @@ fn real_postgres_in_a_container_is_read_only_by_default_and_reports_errors() {
     assert_eq!(o.status.code(), Some(3));
     assert!(err(&o).contains("does not exist"), "{}", err(&o));
 }
+
+// ------------------------------------------------------------------ sesión interactiva
+
+fn session(fx: &Fx, input: &str) -> Output {
+    // con `-i` la sesión lee líneas aunque la entrada no sea una terminal
+    fx.baton_in(&["local", "-i"], Some(input), &[])
+}
+
+#[test]
+fn an_interactive_session_runs_statements_across_lines_and_meta_commands() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = Fx::sqlite();
+    let o = session(
+        &fx,
+        "select id, nombre\n  from clientes\n where id < 3\n order by id;\n\
+         \\tablas\n\\columnas clientes\n\\formato json\nselect count(*) as n from clientes;\n\\q\n",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(
+        t.contains("baton db · local (sqlite datos.db) · solo lectura"),
+        "{t}"
+    );
+    assert!(
+        t.contains("│ Ana    │") && t.contains("│ Beto   │") && t.contains("(2 filas)"),
+        "{t}"
+    );
+    assert!(
+        !t.contains("Ñandú"),
+        "la consulta de varias líneas se ejecutó completa: {t}"
+    );
+    assert!(t.contains("│ clientes │ table │"), "\\tablas: {t}");
+    assert!(
+        t.contains("│ nombre") && t.contains("│ saldo"),
+        "\\columnas: {t}"
+    );
+    assert!(
+        t.contains("formato: json") && t.contains("[\n  {\"n\": 3}\n]"),
+        "{t}"
+    );
+}
+
+#[test]
+fn an_error_does_not_end_the_session_and_unknown_commands_are_explained() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = Fx::sqlite();
+    let o = session(
+        &fx,
+        "select * from no_existe;\n\\nada\nselect 1; select 2;\nselect 7 as siete;\n\\columnas a;b\n\\q\n",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let (t, e) = (out(&o), err(&o));
+    assert!(e.contains("no such table"), "{e}");
+    assert!(e.contains("comando desconocido: \\nada"), "{e}");
+    assert!(e.contains("una consulta por vez (esta trae 2)"), "{e}");
+    assert!(e.contains("no es un nombre de tabla válido"), "{e}");
+    assert!(
+        t.contains("│ siete │") && t.contains("│     7 │"),
+        "la sesión siguió: {t}"
+    );
+}
+
+#[test]
+fn the_session_is_read_only_until_escribir_and_destructive_statements_ask() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = Fx::sqlite();
+    let count = |fx: &Fx| {
+        let o = Command::new("sqlite3")
+            .arg(fx.root.join("datos.db"))
+            .arg("select count(*) from clientes")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let o = session(
+        &fx,
+        "insert into clientes (id, nombre) values (10, 'Uno');\n\
+         \\escribir\n\
+         insert into clientes (id, nombre) values (10, 'Uno');\n\
+         delete from clientes;\nn\n\
+         \\lectura\n\\q\n",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    let (t, e) = (out(&o), err(&o));
+    assert!(
+        e.contains("readonly"),
+        "la primera escritura se rechaza: {e}"
+    );
+    assert!(
+        t.contains("modo escritura") && t.contains("modo solo lectura"),
+        "{t}"
+    );
+    assert!(e.contains("atención: DELETE sin WHERE"), "{e}");
+    assert!(t.contains("(no se ejecutó)"), "{t}");
+    assert_eq!(count(&fx), "4", "se insertó una y el delete no corrió");
+
+    let o = session(&fx, "\\escribir\ndelete from clientes;\ns\n\\q\n");
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(count(&fx), "0", "confirmado, se ejecuta");
+}
+
+#[test]
+fn history_is_kept_in_baton_with_private_permissions_and_secrets_are_left_out() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = Fx::sqlite();
+    let o = session(
+        &fx,
+        "select id from clientes where id = 1;\n\
+         select * from clientes where nota = 'token-123';\n\
+         select\n  2 as dos;\n\\q\n",
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let path = fx.root.join(".baton/db_history");
+    let history = fs::read_to_string(&path).unwrap();
+    assert!(
+        history.contains("select id from clientes where id = 1;"),
+        "{history}"
+    );
+    assert!(
+        history.contains("select 2 as dos;"),
+        "una consulta de varias líneas queda en una: {history}"
+    );
+    assert!(
+        !history.contains("token-123"),
+        "lo que parece un secreto no se guarda: {history}"
+    );
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn the_interactive_flag_does_not_mix_with_a_query_and_fails_early_without_the_database() {
+    let fx = Fx::sqlite();
+    let o = fx.baton(&["local", "-i", "-c", "select 1"]);
+    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    assert!(
+        err(&o).contains("--interactivo no se combina"),
+        "{}",
+        err(&o)
+    );
+    // sin el archivo SQLite no se abre la sesión
+    fs::remove_file(fx.root.join("datos.db")).ok();
+    let o = session(&fx, "select 1;\n");
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(err(&o).contains("no existe"), "{}", err(&o));
+}

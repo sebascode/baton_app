@@ -84,6 +84,7 @@ baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
 baton db -c "select * from clientes"   # consulta una base del plan (PostgreSQL o SQLite), solo lectura
+baton db local                # o abre una sesión interactiva con historial (\? ayuda)
 baton rollback                # deshace la última ejecución
 baton import pipeline.yml     # convierte GitHub Actions, GitLab CI o Azure Pipelines en un plan
 baton config                  # destinos, logs y credenciales
@@ -139,7 +140,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-07 | **0.2.0.** `baton update` y binarios en cada release. `{ambiente}` en los comandos. `baton last` y `baton history`, y un resumen visual en `baton`. Llaves ssh con frase secreta y bastion con llave propia. Exportación de logs a OTLP y syslog. |
 | 2026-10-07 | **0.3.0.** Varias bases de datos por plan y SQLite junto a PostgreSQL. Probar la conexión de una credencial `db`. "Abrir shell" en el destino del paso que falló. `baton db`: consultas de solo lectura contra las bases del plan, en tabla, CSV o JSON. |
 
-Lo que sigue: MySQL y un modo interactivo para `baton db`.
+Lo que sigue: MySQL.
 
 ## Desarrollo
 
