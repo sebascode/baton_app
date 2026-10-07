@@ -7,9 +7,11 @@ use crate::template::placeholders;
 /// Variables disponibles en `get`.
 pub const SECRET_VARS: &[&str] = &["ambiente", "prefijo", "campo", "variable", "archivo"];
 
-/// Un ambiente va dentro de un comando de shell: solo letras, números, `.`, `-` y `_`.
+/// Un ambiente va dentro de un comando de shell y es el nombre de una carpeta de credenciales:
+/// solo letras, números, `.`, `-` y `_`, y no puede ser `.` ni `..` (saldría de `credentials/`).
 pub fn is_safe_ambiente(s: &str) -> bool {
     !s.is_empty()
+        && !s.chars().all(|c| c == '.')
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
@@ -155,6 +157,10 @@ mod tests {
     #[test]
     fn only_plain_ambientes_are_safe_in_a_shell_command() {
         assert!(is_safe_ambiente("prod-2.eu_1"));
+        assert!(is_safe_ambiente(".hidden-ok"), "un punto dentro es válido");
+        for dots in [".", "..", "..."] {
+            assert!(!is_safe_ambiente(dots), "{dots:?} saldría de credentials/");
+        }
         for bad in ["", "a b", "a;b", "$(x)", "a/b", "'x'"] {
             assert!(!is_safe_ambiente(bad), "{bad:?}");
         }

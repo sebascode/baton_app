@@ -234,6 +234,7 @@ impl Ctx {
             plan: self.plan.name.clone(),
             fecha: self.fecha.clone(),
             destino: ps.host.clone(),
+            ambiente: self.opts.ambiente.clone(),
             ..StepVars::default()
         };
         match file {

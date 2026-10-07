@@ -68,6 +68,9 @@ pub struct StepVars {
     /// `2026-09-24-1402`
     pub fecha: String,
     pub destino: String,
+    /// Ambiente elegido (`--ambiente`, `BATON_AMBIENTE` o `[defaults] ambiente`). Sin ambiente el
+    /// marcador se deja tal cual, pero `prepare_run` ya rechazó antes un plan que lo use.
+    pub ambiente: Option<String>,
     /// Ruta del archivo de origen relativa a la raíz del proyecto.
     pub file: Option<String>,
     /// Carpeta de ese archivo, relativa a la raíz (`.` si está en la raíz).
@@ -100,6 +103,7 @@ impl StepVars {
             "plan" => Some(self.plan.clone()),
             "fecha" => Some(self.fecha.clone()),
             "destino" => Some(self.destino.clone()),
+            "ambiente" => self.ambiente.clone(),
             "file" => self.file.clone(),
             "dir" => self.dir.clone(),
             "name" => self.name.clone(),
@@ -312,6 +316,22 @@ mod tests {
         );
         let sin_archivo = StepVars::default();
         assert_eq!(sin_archivo.render("{file} {dir}"), "{file} {dir}");
+    }
+
+    #[test]
+    fn ambiente_is_rendered_when_there_is_one_and_left_alone_otherwise() {
+        let v = StepVars {
+            ambiente: Some("staging".into()),
+            ..StepVars::default()
+        };
+        assert_eq!(
+            v.render("deploy --env {ambiente} https://{ambiente}.mi.app"),
+            "deploy --env staging https://staging.mi.app"
+        );
+        assert_eq!(
+            StepVars::default().render("deploy --env {ambiente}"),
+            "deploy --env {ambiente}"
+        );
     }
 
     #[test]

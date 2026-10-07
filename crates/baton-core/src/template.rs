@@ -5,7 +5,7 @@
 
 /// Variables disponibles en comandos, rollbacks y URLs de un paso.
 pub const STEP_VARS: &[&str] = &[
-    "plan", "fecha", "destino", "file", "dir", "name", "script", "stem",
+    "plan", "fecha", "destino", "ambiente", "file", "dir", "name", "script", "stem",
 ];
 /// Variables disponibles en las rutas de log.
 pub const LOG_VARS: &[&str] = &["plan", "fecha", "destino"];
@@ -42,6 +42,11 @@ pub fn placeholders(s: &str) -> Vec<Placeholder<'_>> {
         i += 1;
     }
     out
+}
+
+/// ¿El texto usa el placeholder `{name}`?
+pub fn uses(s: &str, name: &str) -> bool {
+    placeholders(s).iter().any(|p| p.name == name)
 }
 
 /// Nombres de placeholders que no están en `allowed` (sin repetir, en orden de aparición).

@@ -37,6 +37,10 @@ impl Fx {
     }
 
     fn baton(&self, args: &[&str]) -> Output {
+        self.baton_env(args, &[])
+    }
+
+    fn baton_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let path = format!(
             "{}:{}",
             self.root.join("_bin").display(),
@@ -50,6 +54,8 @@ impl Fx {
             .env("BATON_CALLS", self.root.join("_calls"))
             .env("BATON_FAIL", self.root.join("_fail"))
             .env_remove("CI")
+            .env_remove("BATON_AMBIENTE")
+            .envs(env.iter().copied())
             .stdin(std::process::Stdio::null())
             .output()
             .unwrap()
@@ -461,6 +467,124 @@ fn an_ambiente_looks_in_its_own_credentials_subfolder() {
     assert_eq!(o.status.code(), Some(1), "sin --ambiente no debe verla");
     let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+}
+
+const AMBIENTE_PLAN: &str = r#"
+name = "instalar"
+
+[[steps]]
+id = "deploy"
+name = "Desplegar"
+type = "comando"
+command = "docker desplegar --en {ambiente}"
+rollback = "docker retirar --de {ambiente}"
+"#;
+
+#[test]
+fn a_step_that_uses_ambiente_without_one_fails_before_running_and_says_how_to_set_it() {
+    let fx = Fx::new(AMBIENTE_PLAN);
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(1), "{}", out(&o));
+    let e = err(&o);
+    assert!(e.contains("usa {ambiente} en command"), "{e}");
+    assert!(
+        e.contains("usa {ambiente} en rollback"),
+        "todos de una vez: {e}"
+    );
+    assert!(
+        e.contains("--ambiente") && e.contains("BATON_AMBIENTE") && e.contains("[defaults]"),
+        "{e}"
+    );
+    assert!(fx.calls().is_empty(), "no se ejecutó nada");
+}
+
+#[test]
+fn the_ambiente_flag_fills_the_placeholder_in_commands_and_rollbacks() {
+    let fx = Fx::new(AMBIENTE_PLAN);
+    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls(), ["desplegar --en prod"]);
+    assert!(
+        !err(&o).contains("ambiente:"),
+        "con el flag no hace falta decir de dónde sale: {}",
+        err(&o)
+    );
+
+    let o = fx.baton(&["rollback", "instalar", "--ambiente", "prod"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls().last().unwrap(), "retirar --de prod");
+}
+
+#[test]
+fn the_ambiente_can_come_from_the_variable_or_the_config_and_the_flag_wins() {
+    let fx = Fx::new(AMBIENTE_PLAN);
+    let o = fx.baton_env(&["run", "instalar"], &[("BATON_AMBIENTE", "qa")]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls(), ["desplegar --en qa"]);
+    assert!(
+        err(&o).contains("ambiente: qa (de BATON_AMBIENTE)"),
+        "{}",
+        err(&o)
+    );
+
+    fs::create_dir_all(fx.root.join(".baton")).unwrap();
+    fs::write(
+        fx.root.join(".baton/config.toml"),
+        "[defaults]\nambiente = \"dev\"\n",
+    )
+    .unwrap();
+    let o = fx.baton(&["run", "instalar"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls().last().unwrap(), "desplegar --en dev");
+    assert!(
+        err(&o).contains("ambiente: dev (por defecto, de .baton/config.toml)"),
+        "{}",
+        err(&o)
+    );
+
+    // variable sobre config, flag sobre las dos
+    let o = fx.baton_env(&["run", "instalar"], &[("BATON_AMBIENTE", "qa")]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(fx.calls().last().unwrap(), "desplegar --en qa");
+    let o = fx.baton_env(
+        &["run", "instalar", "--ambiente", "prod"],
+        &[("BATON_AMBIENTE", "qa")],
+    );
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(fx.calls().last().unwrap(), "desplegar --en prod");
+}
+
+#[test]
+fn an_ambiente_that_could_reach_a_shell_or_leave_the_credentials_folder_is_refused() {
+    let fx = Fx::new(AMBIENTE_PLAN);
+    for bad in ["a;touch pwned", "$(id)", "..", ".", "a b", "a/b"] {
+        let o = fx.baton(&["run", "instalar", "--ambiente", bad]);
+        assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", err(&o));
+        assert!(err(&o).contains("no es válido"), "{bad:?}: {}", err(&o));
+    }
+    assert!(fx.calls().is_empty());
+    assert!(!fx.has("pwned"));
+
+    // el de la variable o el de la configuración también se revisa
+    let o = fx.baton_env(&["run", "instalar"], &[("BATON_AMBIENTE", "a;b")]);
+    assert_eq!(o.status.code(), Some(2), "{}", err(&o));
+    fs::create_dir_all(fx.root.join(".baton")).unwrap();
+    fs::write(
+        fx.root.join(".baton/config.toml"),
+        "[defaults]\nambiente = \"x y\"\n",
+    )
+    .unwrap();
+    let o = fx.baton(&["validate"]);
+    assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
+    assert!(err(&o).contains("defaults.ambiente"), "{}", err(&o));
+}
+
+#[test]
+fn a_plan_that_never_uses_ambiente_ignores_the_variable() {
+    let fx = Fx::new(PLAN);
+    let o = fx.baton_env(&["run", "instalar"], &[("BATON_AMBIENTE", "qa")]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert_eq!(fx.calls(), ["compose up -d", "probar"]);
 }
 
 #[test]

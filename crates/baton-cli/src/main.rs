@@ -1,5 +1,6 @@
 //! Binario `baton`.
 
+mod ambiente;
 mod ask;
 mod config_run;
 mod import;
@@ -215,6 +216,9 @@ enum Command {
     Rollback {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
+        /// Ambiente de los comandos de rollback que usan {ambiente} y de las credenciales
+        #[arg(long)]
+        ambiente: Option<String>,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
     Config,
@@ -254,7 +258,8 @@ struct RunArgs {
     /// No hace backup aunque el plan lo pida
     #[arg(long)]
     no_backup: bool,
-    /// Ambiente del que se resuelven las credenciales (`.baton/credentials/<ambiente>/`)
+    /// Ambiente: carpeta de credenciales (`.baton/credentials/<ambiente>/`) y valor de {ambiente}
+    /// (sin él: la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml)
     #[arg(long)]
     ambiente: Option<String>,
 }
@@ -519,10 +524,12 @@ fn main() -> ExitCode {
                 Err(code) => code,
             }
         }
-        Command::Rollback { plan } => match pick::resolve(&project, plan, "rollback", "deshacer") {
-            Ok(plan) => run::rollback(&project, &plan),
-            Err(code) => code,
-        },
+        Command::Rollback { plan, ambiente } => {
+            match pick::resolve(&project, plan, "rollback", "deshacer") {
+                Ok(plan) => run::rollback(&project, &plan, ambiente.as_deref()),
+                Err(code) => code,
+            }
+        }
         Command::Copy { plan, nuevo } => plans_cmd::copy(&project, &plan, &nuevo),
         Command::Rename { plan, nuevo } => plans_cmd::rename(&project, &plan, &nuevo),
         Command::Delete { plan, yes } => plans_cmd::delete(&project, &plan, yes),

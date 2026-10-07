@@ -90,7 +90,7 @@ Campos de un paso:
 
 ### Placeholders en `command` y `rollback`
 
-Entre llaves, para pasos `compose`, `dockerfile`, `script` y `sql`: `{plan}` `{fecha}` `{destino}` `{file}` (ruta del archivo) `{dir}` (su carpeta) `{name}` `{script}` (nombre del archivo con extensión) `{stem}` (sin extensión). En los demás tipos solo `{plan}`, `{fecha}` y `{destino}`. Un `{nombre}` desconocido es advertencia, no error.
+Entre llaves, para pasos `compose`, `dockerfile`, `script` y `sql`: `{plan}` `{fecha}` `{destino}` `{ambiente}` (el que elige quien ejecuta con `--ambiente`; sin ambiente el plan no corre) `{file}` (ruta del archivo) `{dir}` (su carpeta) `{name}` `{script}` (nombre del archivo con extensión) `{stem}` (sin extensión). En los demás tipos solo `{plan}`, `{fecha}`, `{destino}` y `{ambiente}`. Un `{nombre}` desconocido es advertencia, no error.
 
 Como cada comando corre **dentro de la carpeta de su archivo**, un script que asume la raíz del proyecto debe volver a ella (`cd "$(dirname "$0")/.." || exit 1`). Si lo ves en un script, no lo cambies tú; menciónalo.
 
@@ -258,7 +258,7 @@ ref = "db.env#DB"
 
 - **No escribas secretos** (contraseñas, tokens, llaves) en el plan ni en ningún archivo del proyecto. Solo referencias `[[credentials]]`.
 - **No crees ni edites `.baton/`.** Es local de cada máquina (destinos, credenciales, logs) y nunca se versiona ni se envía a los servidores.
-- **No pongas ramas por ambiente** (dev, staging, prod) dentro de un plan. Un plan es una lista fija de pasos. Si dos ambientes necesitan pasos distintos, son **dos planes** (`instalar-dev.toml`, `instalar-prod.toml`). Las credenciales sí cambian por ambiente, pero eso lo elige quien ejecuta (`--ambiente`).
+- **No pongas ramas por ambiente** (dev, staging, prod) dentro de un plan. Un plan es una lista fija de pasos. Si dos ambientes necesitan pasos distintos, son **dos planes** (`instalar-dev.toml`, `instalar-prod.toml`). Las credenciales sí cambian por ambiente, pero eso lo elige quien ejecuta (`--ambiente`, la variable `BATON_AMBIENTE` o `ambiente` en `[defaults]` de `.baton/config.toml`). Si un comando necesita el nombre del ambiente (una URL, un `--env`), usa `{ambiente}` en vez de una rama.
 - **No inventes destinos.** Usa solo `local` u omite `target`, a menos que la persona te diga qué destinos tiene.
 - **No actives pasos destructivos por tu cuenta** (limpiar, borrar, `down`, resetear base de datos). Déjalos con `enabled = false` y dilo.
 - **No inventes campos ni tipos** que no estén en esta guía.

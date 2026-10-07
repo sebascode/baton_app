@@ -59,7 +59,7 @@ Una condición que debe cumplirse antes de pasar al paso siguiente: una confirma
 Dónde corre un paso: \fBlocal\fR, \fBssh\fR (host, usuario, directorio remoto, bastion opcional) o \fBcontext\fR (un docker context). Cada paso elige su destino.
 .TP
 .B ambiente
-Una dimensión aparte del destino (dev, staging, prod...). Solo decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR); nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes.
+Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar.
 .TP
 .B credencial
 Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAMPO\fR (por ejemplo \fIdocker.env#GHCR\fR agrupa \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR y \fBGHCR_TOKEN\fR). El plan guarda la referencia, nunca el valor.
@@ -101,7 +101,7 @@ Responde que sí a los gates manuales cuando no hay terminal. Sin esta opción, 
 Fuerzan hacer (o no hacer) backup, por encima de lo que diga el plan.
 .TP
 .BI \-\-ambiente " ambiente"
-Ambiente del que se resuelven las credenciales.
+Ambiente: carpeta de credenciales y valor de \fB{ambiente}\fR en los comandos. Ver \fBambiente\fR en la sección CONCEPTOS.
 .SS baton create plan
 Crea el archivo de un plan vacío y nada más (no lo abre ni toca \fI.baton/\fR). No pisa un plan existente. El nombre se normaliza a minúsculas, números, \fB\-\fR y \fB_\fR, y se avisa si cambió.
 .SS baton copy plan nuevo
@@ -149,6 +149,9 @@ Destino de todos los pasos importados.
 Muestra el informe sin escribir nada.
 .SS baton rollback [plan]
 Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso que terminó (y del que falló, que pudo dejar cosas a medias), en orden inverso.
+.TP
+.BI \-\-ambiente " ambiente"
+Ambiente de los comandos de rollback que usan \fB{ambiente}\fR y de las credenciales; se elige igual que en \fBbaton run\fR.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
@@ -326,7 +329,7 @@ url = "http://{destino}:8080/health"
 .PP
 Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
 .PP
-En \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR y \fBsql\fR el comando corre una vez por archivo, dentro de la carpeta de ese archivo (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (el nombre del archivo con su extensión) y \fB{stem}\fR (sin ella, por ejemplo \fBrollback = "sh {stem}.rollback.sh"\fR); un marcador desconocido se deja tal cual y solo da una advertencia.
+En \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR y \fBsql\fR el comando corre una vez por archivo, dentro de la carpeta de ese archivo (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{ambiente}\fR, \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (el nombre del archivo con su extensión) y \fB{stem}\fR (sin ella, por ejemplo \fBrollback = "sh {stem}.rollback.sh"\fR); un marcador desconocido se deja tal cual y solo da una advertencia.
 .PP
 Un paso \fBscript\fR ejecuta archivos \fB.sh\fR (\fBsource\fR es obligatorio y puede ser un archivo, un glob o una lista), uno por uno y en orden por nombre, \fBdentro de la carpeta de cada script\fR: un script que asuma la raíz del proyecto debe volver a ella, por ejemplo con \fBcd "$(dirname "$0")/.." || exit 1\fR. Sin \fBcommand\fR, cada script corre con el intérprete de su \fBshebang\fR (\fB#!/bin/bash\fR corre con bash) o con \fBsh\fR si no tiene, y no hace falta que sea ejecutable. Con \fBcommand\fR se usa ese comando para cada archivo (por ejemplo \fBbash \-x {script}\fR). Un script recibe todas las credenciales declaradas en el plan como variables de entorno.
 .PP
@@ -346,6 +349,7 @@ Los pasos se ejecutan en el orden del archivo. \fBdepends_on\fR se valida (exist
 [defaults]
 target = "local"
 secrets = "vault"         # proveedor de secretos por defecto
+ambiente = "dev"          # ambiente si no das \-\-ambiente ni BATON_AMBIENTE
 
 [targets.prod\-app]
 type = "ssh"
@@ -565,7 +569,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. \fB{ambiente}\fR no se reemplaza dentro de los comandos de un plan. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. No hay un comando de texto para el historial: se ve desde la aplicación. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Las llaves ssh con frase secreta que no estén en un agente no funcionan, ni un bastion que necesite una llave distinta de la del destino final. La exportación de logs (OTLP y syslog) se guarda y se valida pero todavía no exporta nada. "Abrir shell" en la pantalla de fallo abre un shell en la máquina local, no en el destino remoto de un paso ssh. No hay un comando de texto para el historial: se ve desde la aplicación. Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),

@@ -68,10 +68,17 @@ fn wants_tui(flags: &RunFlags) -> bool {
     !flags.no_tui && !ci && std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
 }
 
-pub fn run(project: &Project, plan_name: &str, flags: RunFlags) -> ExitCode {
+pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode {
     let (config, plan) = match load(project, plan_name) {
         Ok(v) => v,
         Err(code) => return code,
+    };
+    flags.ambiente = match crate::ambiente::resolve(flags.ambiente.as_deref(), &config) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(EXIT_USAGE);
+        }
     };
 
     if wants_tui(&flags) {
@@ -281,12 +288,20 @@ fn init_next_steps(plan: &str, empty: bool) -> String {
     format!("\n{}", crate::start::next_steps(&rows))
 }
 
-pub fn rollback(project: &Project, plan_name: &str) -> ExitCode {
+pub fn rollback(project: &Project, plan_name: &str, ambiente: Option<&str>) -> ExitCode {
     let (config, plan) = match load(project, plan_name) {
         Ok(v) => v,
         Err(code) => return code,
     };
+    let ambiente = match crate::ambiente::resolve(ambiente, &config) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
     let mut options = RunOptions::for_plan(&plan);
+    options.ambiente = ambiente;
     options.mode = Mode::Rollback;
     options.interactive = false;
     // Deshacer es siempre real: un dry-run del plan no aplica aquí.

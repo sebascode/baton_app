@@ -112,7 +112,20 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
         Err(code) => return code,
     };
     let empty = plan.steps.is_empty();
-    let mut driver = RunDriver::new(project.clone(), config, plan, Flags::default());
+    // un ambiente inválido no impide abrir el plan (el editor sirve para arreglarlo): se avisa
+    let ambiente = crate::ambiente::resolve(None, &config).unwrap_or_else(|e| {
+        eprintln!("aviso: {e}; se ignora");
+        None
+    });
+    let mut driver = RunDriver::new(
+        project.clone(),
+        config,
+        plan,
+        Flags {
+            ambiente,
+            ..Flags::default()
+        },
+    );
     let mut app = driver.initial_app();
     if editor_first || empty {
         app.open_editor_first();

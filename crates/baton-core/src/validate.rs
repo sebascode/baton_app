@@ -20,7 +20,7 @@ use crate::template::{LOG_VARS, STEP_VARS, unknown_placeholders};
 
 /// Variables de plantilla disponibles fuera de los pasos escaneados (`{file}`, `{dir}` y `{name}`
 /// solo existen para `compose` y `dockerfile`).
-const CONTEXT_VARS: &[&str] = &["plan", "fecha", "destino"];
+const CONTEXT_VARS: &[&str] = &["plan", "fecha", "destino", "ambiente"];
 
 pub fn validate_config(config: &Config) -> Vec<Issue> {
     let mut out = Vec::new();
@@ -37,6 +37,15 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         out.push(Issue::error(
             path!["defaults", "target"],
             format!("el destino por defecto '{t}' no existe en [targets]"),
+        ));
+    }
+
+    if let Some(a) = &config.defaults.ambiente
+        && !crate::secrets::is_safe_ambiente(a)
+    {
+        out.push(Issue::error(
+            path!["defaults", "ambiente"],
+            format!("el ambiente por defecto '{a}' no es válido (solo letras, números, . - _)"),
         ));
     }
 
@@ -1156,6 +1165,49 @@ mod tests {
             issues
                 .iter()
                 .any(|i| i.path_string() == "logs.local" && !i.is_error())
+        );
+    }
+
+    #[test]
+    fn the_default_ambiente_must_be_a_plain_name() {
+        let ok = Config::parse("[defaults]\nambiente = \"staging\"\n").unwrap();
+        assert!(validate_config(&ok).is_empty());
+        for bad in ["a b", "a;b", "..", "$(x)", ""] {
+            let c = Config::parse(&format!("[defaults]\nambiente = \"{bad}\"\n")).unwrap();
+            assert_error(&validate_config(&c), "defaults.ambiente", "no es válido");
+        }
+    }
+
+    #[test]
+    fn ambiente_is_a_known_placeholder_everywhere_a_command_can_use_it() {
+        let p = Plan::parse(
+            r#"
+            name = "x"
+            [[steps]]
+            id = "a"
+            name = "A"
+            type = "comando"
+            command = "deploy {ambiente}"
+            rollback = "undo {ambiente}"
+            [[steps]]
+            id = "b"
+            name = "B"
+            type = "compose"
+            source = "docker-compose.yml"
+            command = "docker compose -p app-{ambiente} up -d"
+            [steps.gate]
+            mode = "auto"
+            [[steps.gate.checks]]
+            kind = "http"
+            name = "web"
+            url = "http://{destino}/{ambiente}/health"
+            "#,
+        )
+        .unwrap();
+        let issues = validate_plan(&p, None);
+        assert!(
+            !issues.iter().any(|i| i.message.contains("ambiente")),
+            "{issues:?}"
         );
     }
 

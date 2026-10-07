@@ -9,6 +9,7 @@ use baton_core::compose::{Service, parse_services};
 use baton_core::config::{Config, Target};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_core::sql::{Risk, destructive_statements};
+use baton_core::template;
 use baton_store::Project;
 use baton_store::secrets::Resolver;
 use baton_store::sources::expand_sources;
@@ -160,6 +161,27 @@ impl fmt::Display for PrepareError {
 
 impl std::error::Error for PrepareError {}
 
+/// Dónde usa un paso el marcador `{ambiente}`: su comando, su rollback y los checks activos de su
+/// gate (URL o comando).
+fn uses_ambiente(step: &Step) -> Vec<String> {
+    let uses = |t: &Option<String>| t.as_deref().is_some_and(|t| template::uses(t, "ambiente"));
+    let mut out = Vec::new();
+    if uses(&step.command) {
+        out.push("command".to_string());
+    }
+    if uses(&step.rollback) {
+        out.push("rollback".to_string());
+    }
+    if let Some(g) = &step.gate {
+        for c in g.checks.iter().filter(|c| c.enabled) {
+            if uses(&c.url) || uses(&c.run) {
+                out.push(format!("el gate (check '{}')", c.display_name()));
+            }
+        }
+    }
+    out
+}
+
 fn label(step: &Step) -> String {
     format!("paso '{}' ({})", step.id, step.name)
 }
@@ -224,6 +246,27 @@ pub fn prepare_run(
                         field.label,
                         project.display_path(&path),
                         req.reference.variable(field.key)
+                    ));
+                }
+            }
+        }
+    }
+
+    // El ambiente va dentro de comandos y es una carpeta de credenciales: solo nombres simples. Y
+    // un paso que usa `{ambiente}` sin que haya uno elegido no puede correr (quedaría el texto
+    // literal `{ambiente}` en el comando).
+    match opts.ambiente.as_deref() {
+        Some(a) if !baton_core::secrets::is_safe_ambiente(a) => errors.push(format!(
+            "el ambiente '{a}' no es válido (solo letras, números, . - _)"
+        )),
+        Some(_) => {}
+        None => {
+            for s in &chosen {
+                for field in uses_ambiente(s) {
+                    errors.push(format!(
+                        "{} usa {{ambiente}} en {field}, pero no hay ambiente: \
+                         pásalo con --ambiente, la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml",
+                        label(s)
                     ));
                 }
             }
@@ -811,6 +854,84 @@ mod tests {
         let mut o = opts(&p);
         o.interactive = false; // sin PASSPHRASE: no debe fallar, es opcional
         assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+    }
+
+    const USES_AMBIENTE: &str = r#"
+        [[steps]]
+        id = "a"
+        name = "A"
+        type = "comando"
+        command = "deploy {ambiente}"
+        rollback = "undo {ambiente}"
+        [[steps]]
+        id = "b"
+        name = "B"
+        type = "comando"
+        command = "true"
+        [steps.gate]
+        mode = "auto"
+        [[steps.gate.checks]]
+        kind = "http"
+        name = "web"
+        url = "http://{destino}/{ambiente}/health"
+        [[steps.gate.checks]]
+        kind = "command"
+        name = "apagado"
+        run = "check {ambiente}"
+        enabled = false
+    "#;
+
+    #[test]
+    fn using_ambiente_without_one_is_reported_for_every_place_it_appears() {
+        let (_t, proj) = project(&[]);
+        let p = plan(USES_AMBIENTE);
+        let e = prepare_run(&proj, &Config::default(), &p, &opts(&p)).unwrap_err();
+        let text = e.to_string();
+        assert!(
+            text.contains("paso 'a' (A) usa {ambiente} en command"),
+            "{text}"
+        );
+        assert!(
+            text.contains("paso 'a' (A) usa {ambiente} en rollback"),
+            "{text}"
+        );
+        assert!(
+            text.contains("paso 'b' (B) usa {ambiente} en el gate (check 'web')"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("apagado"),
+            "un check desactivado no cuenta: {text}"
+        );
+        assert!(
+            text.contains("--ambiente") && text.contains("BATON_AMBIENTE"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn with_an_ambiente_the_placeholder_is_fine_and_a_plan_without_it_never_asks() {
+        let (_t, proj) = project(&[]);
+        let p = plan(USES_AMBIENTE);
+        let mut o = opts(&p);
+        o.ambiente = Some("prod".into());
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+
+        let p = plan(TWO);
+        let (_t, proj) = project(&["svc/web/docker-compose.yml", "svc/api/docker-compose.yml"]);
+        assert!(prepare_run(&proj, &Config::default(), &p, &opts(&p)).is_ok());
+    }
+
+    #[test]
+    fn an_unsafe_ambiente_is_rejected_even_if_nothing_uses_it() {
+        let (_t, proj) = project(&["svc/web/docker-compose.yml", "svc/api/docker-compose.yml"]);
+        let p = plan(TWO);
+        for bad in ["a;b", "..", "x y", "$(id)"] {
+            let mut o = opts(&p);
+            o.ambiente = Some(bad.into());
+            let e = prepare_run(&proj, &Config::default(), &p, &o).unwrap_err();
+            assert!(e.to_string().contains("no es válido"), "{bad:?}: {e}");
+        }
     }
 
     #[test]
