@@ -160,7 +160,7 @@ fn step_line(row: &StepRow, width: u16) -> Line<'static> {
     }
     let time = match row.elapsed {
         Some(d) => fmt_duration(d),
-        None => "—".to_string(),
+        None => "-".to_string(),
     };
     justify(left, vec![Span::styled(time, name_style)], width)
 }

@@ -9,7 +9,7 @@ expression: text(&buf)
 │  ✓ Build imágenes                                                     1m52s  │
 │  ✓ Levantar DB + gate                                                   44s  │
 │  ↻ Levantar servicios  1 reintento                                    2m31s  │
-│  » Smoke tests  omitido                                                   —  │
+│  » Smoke tests  omitido                                                   -  │
 │  ! worker: healthcheck no crítico falló (2 de 6 intentos)                    │
 │                                                                              │
 │  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐                    │
