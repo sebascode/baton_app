@@ -1047,13 +1047,22 @@ exit 2"#,
     fn a_database_that_does_not_answer_gives_up() {
         let (_d, psql) = fake_psql("sleep 5");
         let reference: baton_core::CredentialRef = "db.env#DB".parse().unwrap();
-        let started = std::time::Instant::now();
-        let (ok, msg) = db_ping(
-            &reference,
-            &[("DB_USER".into(), "app".into())],
-            Some(&psql),
-            std::time::Duration::from_millis(300),
-        );
+        let (mut started, mut result) = (std::time::Instant::now(), (true, String::new()));
+        // otro hilo puede estar escribiendo un ejecutable justo al hacer `fork`: se reintenta
+        for _ in 0..50 {
+            started = std::time::Instant::now();
+            result = db_ping(
+                &reference,
+                &[("DB_USER".into(), "app".into())],
+                Some(&psql),
+                std::time::Duration::from_millis(300),
+            );
+            if !result.1.contains("busy") && !result.1.contains("ocupado") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (ok, msg) = result;
         assert!(!ok);
         assert!(msg.contains("no respondió"), "{msg}");
         assert!(started.elapsed() < std::time::Duration::from_secs(3));

@@ -7,7 +7,6 @@
 //! baja el manifiesto de ese SHA exacto, no de un tag que puede moverse. Lo instalado queda
 //! registrado con su sha256 en `plugins.lock`, y un manifiesto que cambia después ya no se carga.
 
-use std::ffi::OsStr;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -46,17 +45,103 @@ pub enum Change {
 
 // ----------------------------------------------------------------------------- traer
 
-/// Trae un plugin de su origen, comprueba la firma (GitHub) y valida el manifiesto.
-pub fn fetch(source: &Source) -> Result<Fetched, String> {
-    fetch_with(OsStr::new("curl"), source)
+/// Cómo se pregunta a GitHub. En producción es `curl`; las pruebas ponen uno en memoria.
+pub trait Http {
+    /// `GET` de una URL https. `github_api` agrega las cabeceras de la API de GitHub.
+    fn get(&self, url: &str, max_bytes: u64, github_api: bool) -> Result<String, String>;
 }
 
-/// Lo mismo con el programa `curl` inyectado, para probarlo con uno de mentira.
-pub fn fetch_with(curl: &OsStr, source: &Source) -> Result<Fetched, String> {
+/// El `curl` del sistema (como en `baton update`).
+pub struct Curl(pub std::ffi::OsString);
+
+impl Curl {
+    pub fn system() -> Curl {
+        Curl("curl".into())
+    }
+}
+
+/// Los argumentos de `curl`: solo https (también tras una redirección), con tiempos de espera y un
+/// tope de tamaño.
+pub fn curl_args(url: &str, max_bytes: u64, github_api: bool) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-fsSL",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--connect-timeout",
+        "15",
+        "-m",
+        "30",
+        "--max-redirs",
+        "3",
+        "--max-filesize",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(max_bytes.to_string());
+    if github_api {
+        args.extend(
+            [
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-H",
+                "X-GitHub-Api-Version: 2022-11-28",
+            ]
+            .map(String::from),
+        );
+    }
+    args.push(url.to_string());
+    args
+}
+
+/// Lo que dijo `curl` al fallar, en palabras de quien instala.
+pub fn explain_curl_failure(stderr: &str) -> String {
+    let why = stderr.trim();
+    if why.contains("404") {
+        "no se encontró el repositorio, la versión o el manifiesto en GitHub (¿es privado o el nombre está mal escrito?)".to_string()
+    } else if why.contains("403") || why.contains("429") {
+        "GitHub rechazó la consulta (suele ser el límite de uso sin autenticar): espera unos minutos y vuelve a intentarlo".to_string()
+    } else {
+        format!("no se pudo consultar GitHub: {why}")
+    }
+}
+
+impl Http for Curl {
+    fn get(&self, url: &str, max_bytes: u64, github_api: bool) -> Result<String, String> {
+        let out = Command::new(&self.0)
+            .args(curl_args(url, max_bytes, github_api))
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "no se encontró `curl`: instálalo para descargar plugins".to_string()
+                } else {
+                    format!("no se pudo ejecutar curl: {e}")
+                }
+            })?;
+        if !out.status.success() {
+            return Err(explain_curl_failure(&String::from_utf8_lossy(&out.stderr)));
+        }
+        if out.stdout.len() as u64 > max_bytes {
+            return Err(format!(
+                "la respuesta es demasiado grande (máximo {max_bytes} bytes)"
+            ));
+        }
+        String::from_utf8(out.stdout).map_err(|_| "la respuesta no es texto UTF-8".to_string())
+    }
+}
+
+/// Trae un plugin de su origen, comprueba la firma (GitHub) y valida el manifiesto.
+pub fn fetch(source: &Source) -> Result<Fetched, String> {
+    fetch_with(&Curl::system(), source)
+}
+
+/// Lo mismo con el acceso a GitHub inyectado.
+pub fn fetch_with(http: &dyn Http, source: &Source) -> Result<Fetched, String> {
     let (text, commit) = match source {
         Source::Github { git_ref, .. } => {
             let url = source.commit_url().expect("GitHub tiene url de commit");
-            let json = curl_get(curl, &url, 1024 * 1024, true)?;
+            let json = http.get(&url, 1024 * 1024, true)?;
             let commit = parse_commit(&json)?;
             if !commit.verified {
                 return Err(format!(
@@ -70,7 +155,7 @@ pub fn fetch_with(curl: &OsStr, source: &Source) -> Result<Fetched, String> {
             let url = source
                 .manifest_url(&commit.sha)
                 .expect("GitHub tiene url de manifiesto");
-            let text = curl_get(curl, &url, MAX_MANIFEST_BYTES as u64, false)?;
+            let text = http.get(&url, MAX_MANIFEST_BYTES as u64, false)?;
             (text, Some(commit))
         }
         Source::Local(path) => {
@@ -112,42 +197,6 @@ pub fn fetch_with(curl: &OsStr, source: &Source) -> Result<Fetched, String> {
         text,
         manifest,
     })
-}
-
-/// `GET` de una URL https con `curl`, sin seguir nada que no sea https y con un tope de tamaño.
-fn curl_get(curl: &OsStr, url: &str, max_bytes: u64, github_api: bool) -> Result<String, String> {
-    let mut cmd = Command::new(curl);
-    cmd.args(["-fsSL", "--proto", "=https", "--proto-redir", "=https"])
-        .args(["--connect-timeout", "15", "-m", "30", "--max-redirs", "3"])
-        .args(["--max-filesize", &max_bytes.to_string()]);
-    if github_api {
-        cmd.args(["-H", "Accept: application/vnd.github+json"])
-            .args(["-H", "X-GitHub-Api-Version: 2022-11-28"]);
-    }
-    let out = cmd.arg(url).output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "no se encontró `curl`: instálalo para descargar plugins".to_string()
-        } else {
-            format!("no se pudo ejecutar curl: {e}")
-        }
-    })?;
-    if !out.status.success() {
-        let why = String::from_utf8_lossy(&out.stderr);
-        let why = why.trim();
-        return Err(if why.contains("404") {
-            "no se encontró el repositorio, la versión o el manifiesto en GitHub (¿es privado o el nombre está mal escrito?)".to_string()
-        } else if why.contains("403") || why.contains("429") {
-            "GitHub rechazó la consulta (suele ser el límite de uso sin autenticar): espera unos minutos y vuelve a intentarlo".to_string()
-        } else {
-            format!("no se pudo consultar GitHub: {why}")
-        });
-    }
-    if out.stdout.len() as u64 > max_bytes {
-        return Err(format!(
-            "la respuesta es demasiado grande (máximo {max_bytes} bytes)"
-        ));
-    }
-    String::from_utf8(out.stdout).map_err(|_| "la respuesta no es texto UTF-8".to_string())
 }
 
 // -------------------------------------------------------------------------- decidir
@@ -549,7 +598,6 @@ pub fn new_in(base: &Path, name: &str, out: &mut dyn Write) -> u8 {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -565,45 +613,55 @@ mod tests {
         )
     }
 
-    /// Un `curl` de mentira que sirve archivos de una carpeta según la URL y registra cada llamada.
-    struct FakeCurl {
-        dir: tempfile::TempDir,
+    /// GitHub de mentira, en memoria: sirve respuestas por URL y registra cada petición. No ejecuta
+    /// ningún programa (un script recién escrito y ejecutado en una prueba choca con los `fork` de
+    /// otras pruebas: "Text file busy").
+    struct FakeHttp {
+        answers: Vec<(String, Result<String, String>)>,
+        log: std::cell::RefCell<Vec<(String, u64, bool)>>,
     }
 
-    impl FakeCurl {
-        fn new(commit: &str, manifest: &str) -> FakeCurl {
-            let dir = tempfile::tempdir().unwrap();
-            let root = dir.path();
-            fs::write(root.join("commit.json"), commit).unwrap();
-            fs::write(root.join("manifest.toml"), manifest).unwrap();
-            let script = format!(
-                r#"#!/bin/sh
-echo "$*" >> "{root}/log"
-for last; do :; done
-case "$last" in
-  https://api.github.com/repos/o/r/commits/v1) [ -f "{root}/commit.json" ] && cat "{root}/commit.json" ;;
-  https://raw.githubusercontent.com/o/r/{SHA}/baton-plugin.toml) cat "{root}/manifest.toml" ;;
-  *) echo "curl: (22) The requested URL returned error: 404" >&2; exit 22 ;;
-esac
-"#,
-                root = root.display()
-            );
-            let path = root.join("curl");
-            fs::write(&path, script).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            FakeCurl { dir }
+    impl Http for FakeHttp {
+        fn get(&self, url: &str, max_bytes: u64, github_api: bool) -> Result<String, String> {
+            self.log
+                .borrow_mut()
+                .push((url.to_string(), max_bytes, github_api));
+            match self.answers.iter().find(|(u, _)| u == url) {
+                Some((_, answer)) => answer.clone(),
+                None => Err(explain_curl_failure(
+                    "curl: (22) The requested URL returned error: 404",
+                )),
+            }
+        }
+    }
+
+    impl FakeHttp {
+        fn new(commit: &str, manifest: &str) -> FakeHttp {
+            FakeHttp {
+                answers: vec![
+                    (
+                        "https://api.github.com/repos/o/r/commits/v1".to_string(),
+                        Ok(commit.to_string()),
+                    ),
+                    (
+                        format!("https://raw.githubusercontent.com/o/r/{SHA}/baton-plugin.toml"),
+                        Ok(manifest.to_string()),
+                    ),
+                ],
+                log: Default::default(),
+            }
         }
 
-        fn program(&self) -> PathBuf {
-            self.dir.path().join("curl")
-        }
-
-        fn log(&self) -> String {
-            fs::read_to_string(self.dir.path().join("log")).unwrap_or_default()
+        fn urls(&self) -> Vec<String> {
+            self.log
+                .borrow()
+                .iter()
+                .map(|(u, _, _)| u.clone())
+                .collect()
         }
 
         fn fetch(&self, source: &str) -> Result<Fetched, String> {
-            fetch_with(self.program().as_os_str(), &Source::parse(source).unwrap())
+            fetch_with(self, &Source::parse(source).unwrap())
         }
     }
 
@@ -611,118 +669,125 @@ esac
 
     #[test]
     fn it_installs_the_manifest_of_the_verified_commit_not_the_one_of_the_tag() {
-        let c = FakeCurl::new(
+        let h = FakeHttp::new(
             &commit_json(true, "valid"),
             &manifest_text("t-add-ok", "echo hola"),
         );
-        let f = c.fetch("github:o/r@v1").unwrap();
+        let f = h.fetch("github:o/r@v1").unwrap();
         assert_eq!(f.commit.as_ref().unwrap().sha, SHA);
         assert_eq!(f.manifest.name, "t-add-ok");
         assert_eq!(f.sha256, sha256_hex(f.text.as_bytes()));
-        let log = c.log();
         // primero pregunta por el commit y luego baja el manifiesto de ese SHA exacto
-        let api = log.find("api.github.com/repos/o/r/commits/v1").unwrap();
-        let raw = log
-            .find(&format!(
-                "raw.githubusercontent.com/o/r/{SHA}/baton-plugin.toml"
-            ))
-            .unwrap();
-        assert!(api < raw, "{log}");
+        assert_eq!(
+            h.urls(),
+            [
+                "https://api.github.com/repos/o/r/commits/v1".to_string(),
+                format!("https://raw.githubusercontent.com/o/r/{SHA}/baton-plugin.toml"),
+            ]
+        );
         assert!(
-            !log.contains("/v1/baton-plugin.toml"),
-            "nunca se baja del tag: {log}"
+            h.urls()
+                .iter()
+                .all(|u| !u.contains("/v1/baton-plugin.toml")),
+            "nunca del tag"
         );
     }
 
     #[test]
-    fn every_request_is_https_only_with_timeouts_and_a_size_cap() {
-        let c = FakeCurl::new(
+    fn the_api_headers_go_only_to_the_commit_request_and_the_manifest_has_its_own_cap() {
+        let h = FakeHttp::new(
             &commit_json(true, "valid"),
-            &manifest_text("t-add-flags", "x"),
+            &manifest_text("t-add-caps", "x"),
         );
-        c.fetch("github:o/r@v1").unwrap();
-        for line in c.log().lines() {
-            for flag in [
-                "--proto =https",
-                "--proto-redir =https",
-                "--connect-timeout 15",
-                "-m 30",
-                "--max-filesize",
-                "--max-redirs 3",
-            ] {
-                assert!(line.contains(flag), "falta {flag} en: {line}");
-            }
+        h.fetch("github:o/r@v1").unwrap();
+        let log = h.log.borrow();
+        assert!(log[0].2 && !log[1].2, "{log:?}");
+        assert_eq!(log[1].1, MAX_MANIFEST_BYTES as u64);
+    }
+
+    #[test]
+    fn curl_is_https_only_with_timeouts_and_a_size_cap() {
+        let a = curl_args("https://x/y", 65536, false);
+        let line = a.join(" ");
+        for expected in [
+            "--proto =https",
+            "--proto-redir =https",
+            "--connect-timeout 15",
+            "-m 30",
+            "--max-redirs 3",
+            "--max-filesize 65536",
+        ] {
+            assert!(line.contains(expected), "falta {expected} en: {line}");
         }
+        assert_eq!(a.last().unwrap(), "https://x/y", "la URL va al final");
+        assert!(!line.contains("Accept"), "sin cabeceras de la API: {line}");
+        let api = curl_args("https://api.github.com/x", 1, true).join(" ");
+        assert!(api.contains("Accept: application/vnd.github+json"), "{api}");
+        assert!(api.contains("X-GitHub-Api-Version"), "{api}");
         assert!(
-            c.log().contains("--max-filesize 65536"),
-            "el manifiesto tiene su tope: {}",
-            c.log()
+            api.contains("-f"),
+            "falla ante un 4xx en vez de devolver su página"
         );
     }
 
     #[test]
     fn a_commit_without_a_verified_signature_is_refused_and_the_manifest_is_never_downloaded() {
         for reason in ["unsigned", "unknown_key", "expired_key", "bad_email"] {
-            let c = FakeCurl::new(
+            let h = FakeHttp::new(
                 &commit_json(false, reason),
                 &manifest_text("t-add-unsigned", "x"),
             );
-            let e = c.fetch("github:o/r@v1").unwrap_err();
+            let e = h.fetch("github:o/r@v1").unwrap_err();
             assert!(e.contains("no tiene una firma verificada"), "{e}");
             assert!(e.contains(reason), "dice por qué: {e}");
             assert!(e.contains(&SHA[..12]), "{e}");
-            assert!(
-                !c.log().contains("raw.githubusercontent.com"),
-                "no se baja nada: {}",
-                c.log()
-            );
+            assert_eq!(h.urls().len(), 1, "no se baja nada más: {:?}", h.urls());
         }
     }
 
     #[test]
     fn github_answers_that_do_not_make_sense_never_count_as_verified() {
         for body in ["", "no es json", "{}", r#"{"sha":"corto"}"#] {
-            let c = FakeCurl::new(body, &manifest_text("t-add-junk", "x"));
-            assert!(c.fetch("github:o/r@v1").is_err(), "'{body}'");
-            assert!(!c.log().contains("raw.githubusercontent.com"));
+            let h = FakeHttp::new(body, &manifest_text("t-add-junk", "x"));
+            assert!(h.fetch("github:o/r@v1").is_err(), "'{body}'");
+            assert_eq!(h.urls().len(), 1);
         }
     }
 
     #[test]
     fn network_failures_are_explained() {
-        let c = FakeCurl::new(
+        let h = FakeHttp::new(
             &commit_json(true, "valid"),
             &manifest_text("t-add-net", "x"),
         );
-        let e = c.fetch("github:o/r@v9").unwrap_err();
+        let e = h.fetch("github:o/r@v9").unwrap_err();
         assert!(e.contains("no se encontró el repositorio"), "{e}");
 
-        let missing = fetch_with(
-            std::ffi::OsStr::new("/no/existe/curl"),
-            &Source::parse("github:o/r@v1").unwrap(),
-        )
-        .unwrap_err();
+        // sin `curl` instalado: se pide a un programa que no existe (no se ejecuta nada nuestro)
+        let missing = Curl("/no/existe/curl".into())
+            .get("https://x/y", 10, false)
+            .unwrap_err();
         assert!(missing.contains("no se encontró `curl`"), "{missing}");
 
-        // 403 / 429: el límite de uso de la API sin autenticar
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("curl");
-        fs::write(
-            &path,
-            "#!/bin/sh\necho 'curl: (22) The requested URL returned error: 403' >&2\nexit 22\n",
-        )
-        .unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        let e = fetch_with(path.as_os_str(), &Source::parse("github:o/r@v1").unwrap()).unwrap_err();
-        assert!(e.contains("límite de uso"), "{e}");
+        // el límite de uso de la API sin autenticar
+        for status in ["403", "429"] {
+            let e = explain_curl_failure(&format!(
+                "curl: (22) The requested URL returned error: {status}"
+            ));
+            assert!(e.contains("límite de uso"), "{e}");
+        }
+        assert!(
+            explain_curl_failure("curl: (6) Could not resolve host")
+                .contains("Could not resolve host")
+        );
     }
 
     #[test]
     fn an_invalid_manifest_from_a_verified_commit_is_still_refused_with_its_position() {
         let bad = manifest_text("t-add-bad", "x")
             .replace("dry_run = \"echo plan\"", "dry_run = \"terraform apply\"");
-        let c = FakeCurl::new(&commit_json(true, "valid"), &bad);
-        let e = c.fetch("github:o/r@v1").unwrap_err();
+        let h = FakeHttp::new(&commit_json(true, "valid"), &bad);
+        let e = h.fetch("github:o/r@v1").unwrap_err();
         assert!(e.contains("el manifiesto no es válido"), "{e}");
         assert!(e.contains("dry_run usa 'apply'"), "{e}");
         assert!(e.contains(":9:"), "con su línea: {e}");
@@ -735,12 +800,9 @@ esac
             manifest_text("t-add-big", "x"),
             "x".repeat(MAX_MANIFEST_BYTES)
         );
-        let c = FakeCurl::new(&commit_json(true, "valid"), &big);
-        let e = c.fetch("github:o/r@v1").unwrap_err();
-        assert!(
-            e.contains("demasiado grande") || e.contains("máximo"),
-            "{e}"
-        );
+        let h = FakeHttp::new(&commit_json(true, "valid"), &big);
+        let e = h.fetch("github:o/r@v1").unwrap_err();
+        assert!(e.contains("máximo"), "{e}");
     }
 
     // ---------------------------------------------------------------------- local
