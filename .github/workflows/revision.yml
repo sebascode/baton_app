@@ -1,0 +1,97 @@
+name: revision
+
+# Revisión de los PR (también los de forks). Usa `pull_request`, no `pull_request_target`:
+# el código del fork corre sin secretos y con un token de solo lectura. No cambiar eso.
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: dco
+    # Dependabot no firma sus commits.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Todos los commits llevan Signed-off-by
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          fail=0
+          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            if ! git show -s --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
+              echo "::error::El commit $(git rev-parse --short "$c") no tiene Signed-off-by (usa git commit -s, o git rebase --signoff $BASE)"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  superficie:
+    name: superficie sensible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No bloquea: deja a la vista, en el resumen del PR, lo que exige una lectura atenta.
+      # Lo que bloquea es la revisión obligatoria de CODEOWNERS y `cargo deny`.
+      - name: Buscar red, procesos externos y cambios de build en el diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          out="$GITHUB_STEP_SUMMARY"
+          git diff --name-only "$BASE...$HEAD" > cambiados.txt
+
+          git diff -U0 "$BASE...$HEAD" -- '*.rs' '*.sh' '*.yml' '*.yaml' '*.toml' \
+            | grep -E '^\+' | grep -vE '^\+\+\+' | grep -vE '^\+[[:space:]]*(//|#)' \
+            | tr -d '`' > agregadas.txt || true
+
+          hallazgos=0
+          reporta() {
+            titulo="$1"; patron="$2"
+            lineas=$(grep -E "$patron" agregadas.txt | head -20 || true)
+            if [ -n "$lineas" ]; then
+              hallazgos=1
+              echo "::warning::Revisar con atención: $titulo"
+              { echo "### $titulo"; echo '```'; printf '%s\n' "$lineas"; echo '```'; } >> "$out"
+            fi
+          }
+
+          reporta "sockets o clientes de red" \
+            'TcpStream|UdpSocket|UnixStream|UnixDatagram|TcpListener|std::net|tokio::net|reqwest|ureq|hyper|isahc|attohttpc|tungstenite|/dev/tcp'
+          reporta "programas que sacan datos de la máquina" \
+            'Command::new\("(curl|wget|nc|ncat|socat|scp|sftp|ftp|telnet)"\)|(^|[^[:alnum:]_.-])(curl|wget|ncat|socat)[[:space:]]'
+          reporta "lectura de variables de entorno y llaves ajenas al plan" \
+            '\.ssh/|id_rsa|id_ed25519|/etc/shadow|\.aws/|\.azure/|\.kube/|\.docker/config'
+
+          for patron in '^Cargo\.(toml|lock)$|/Cargo\.toml$' '(^|/)build\.rs$' '^\.github/' '^scripts/' '^packaging/'; do
+            if grep -qE "$patron" cambiados.txt; then
+              hallazgos=1
+              { echo "### Archivos sensibles modificados (\`$patron\`)"; echo '```'; grep -E "$patron" cambiados.txt; echo '```'; } >> "$out"
+            fi
+          done
+
+          if [ "$hallazgos" = 0 ]; then
+            echo "Sin cambios en la superficie sensible." >> "$out"
+          fi
+
+  dependencias:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check

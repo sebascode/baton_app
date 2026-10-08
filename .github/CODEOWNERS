@@ -1,0 +1,35 @@
+# Todo cambio necesita la aprobación de quien mantiene el proyecto.
+# Las rutas de abajo son las que tocan credenciales, llaves, red o lo que se instala en la
+# máquina de otras personas: si algún día hay más mantenedores, se reparten desde aquí.
+*                                   @sebascode
+
+# Automatización, publicación e instalación
+/.github/                           @sebascode
+/scripts/                           @sebascode
+/packaging/                         @sebascode
+/man/                               @sebascode
+/deny.toml                          @sebascode
+/Cargo.toml                         @sebascode
+/Cargo.lock                         @sebascode
+build.rs                            @sebascode
+
+# Credenciales, secretos y redacción
+/crates/baton-store/src/credentials.rs   @sebascode
+/crates/baton-store/src/secrets.rs       @sebascode
+/crates/baton-core/src/credential.rs     @sebascode
+/crates/baton-core/src/secrets.rs        @sebascode
+/crates/baton-core/src/mask.rs           @sebascode
+/crates/baton-core/src/askpass.rs        @sebascode
+/crates/baton-core/src/auth_failure.rs   @sebascode
+
+# Todo lo que sale de la máquina: ssh, rsync, exportación de logs, actualización
+/crates/baton-exec/src/transport.rs      @sebascode
+/crates/baton-exec/src/remote.rs         @sebascode
+/crates/baton-exec/src/export.rs         @sebascode
+/crates/baton-exec/src/runner.rs         @sebascode
+/crates/baton-core/src/export.rs         @sebascode
+/crates/baton-core/src/update.rs         @sebascode
+/crates/baton-cli/src/update.rs          @sebascode
+/crates/baton-cli/src/config_run.rs      @sebascode
+/crates/baton-cli/src/tui_run.rs         @sebascode
+/crates/baton-cli/src/main.rs            @sebascode
