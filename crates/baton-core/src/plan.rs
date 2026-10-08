@@ -228,6 +228,10 @@ pub struct Step {
     /// Solo en pasos `sql`: id de la credencial `db` con la que se conectan. Sin él se usa la
     /// única del plan; con varias, es obligatorio.
     pub database: Option<String>,
+    /// Comando de solo lectura que `--dry-run` ejecuta de verdad para este paso, en lugar del
+    /// `dry_run` de su tipo (que no se usa si el paso reescribe `command`). Sin ninguno de los dos,
+    /// un dry-run no ejecuta nada de este paso.
+    pub dry_run: Option<String>,
 }
 
 fn yes() -> bool {

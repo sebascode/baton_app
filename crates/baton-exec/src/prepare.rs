@@ -345,7 +345,7 @@ pub fn prepare_run(
         // no se comprueba: desde aquí no hay una conexión que preguntar. Un dry-run solo los
         // necesita si su tipo ejecuta algo en él.
         let remote = matches!(config.targets.get(&target), Some(Target::Ssh(_)));
-        if !remote && (!opts.dry_run || s.kind.dry_run_command().is_some()) {
+        if !remote && (!opts.dry_run || s.dry_run_command().is_some()) {
             let path = search_path(opts);
             for bin in s.kind.binaries() {
                 if !on_path(bin, &path) {

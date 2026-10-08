@@ -620,9 +620,33 @@ fn validate_step(
     } else {
         CONTEXT_VARS
     };
-    for (field, text) in [("command", &step.command), ("rollback", &step.rollback)] {
+    for (field, text) in [
+        ("command", &step.command),
+        ("rollback", &step.rollback),
+        ("dry_run", &step.dry_run),
+    ] {
         if let Some(t) = text {
             template_warnings(t, vars, path!["steps", i, field], out);
+        }
+    }
+    if let Some(dry) = &step.dry_run {
+        if dry.trim().is_empty() {
+            out.push(Issue::error(p("dry_run"), "dry_run no puede estar vacío"));
+        } else if !step.kind.runs_command() {
+            out.push(Issue::error(
+                p("dry_run"),
+                format!(
+                    "dry_run no aplica a un paso {}: no ejecuta un comando",
+                    step.kind.label()
+                ),
+            ));
+        } else if let Some(word) = crate::plugin::mutating_word(dry) {
+            // una advertencia y no un error: aquí quien escribe el plan es quien manda, y una
+            // palabra suelta puede ser inocente; el plan lo ve quien lo revisa
+            out.push(Issue::warning(
+                p("dry_run"),
+                format!("dry_run usa '{word}', que suele modificar algo: un dry-run debe ser de solo lectura"),
+            ));
         }
     }
 
@@ -1598,6 +1622,85 @@ mod tests {
         assert!(
             Config::parse("[secrets.v]\ntype = \"azure-keyvault\"\n").is_err(),
             "falta vault"
+        );
+    }
+
+    // ------------------------------------------------ dry_run de un paso
+
+    fn warnings(issues: &[Issue]) -> Vec<String> {
+        issues
+            .iter()
+            .filter(|i| !i.is_error())
+            .map(|i| format!("{}: {}", i.path_string(), i.message))
+            .collect()
+    }
+
+    fn with_dry_run(kind_and_fields: &str, dry: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\n{kind_and_fields}dry_run = {dry:?}\n"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_step_dry_run_that_reads_only_is_accepted() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "make -n");
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn an_empty_step_dry_run_is_an_error() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "  ");
+        assert_error(&issues, "steps[0].dry_run", "no puede estar vacío");
+    }
+
+    #[test]
+    fn a_dry_run_makes_no_sense_on_a_step_that_runs_no_command() {
+        let backup = "type = \"backup\"\n";
+        let issues = validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[backup]\nvolumes = [\"v\"]\n[[steps]]\nid = \"a\"\nname = \"A\"\n{backup}dry_run = \"true\"\n"
+            )),
+            None,
+        );
+        assert_error(&issues, "steps[0].dry_run", "no aplica a un paso backup");
+        let gate = "type = \"gate\"\ndry_run = \"true\"\n[steps.gate]\nmode = \"manual\"\n";
+        let issues = validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\n{gate}"
+            )),
+            None,
+        );
+        assert_error(&issues, "steps[0].dry_run", "no aplica a un paso gate");
+    }
+
+    #[test]
+    fn a_step_dry_run_that_looks_like_it_modifies_only_warns() {
+        let issues = with_dry_run(
+            "type = \"comando\"\ncommand = \"make\"\n",
+            "terraform apply",
+        );
+        assert!(errors(&issues).is_empty(), "{:?}", errors(&issues));
+        let w = warnings(&issues);
+        assert!(
+            w.iter()
+                .any(|m| m.starts_with("steps[0].dry_run:") && m.contains("'apply'")),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_placeholders_in_a_step_dry_run_warn_like_in_command() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "make {nope}");
+        assert!(errors(&issues).is_empty());
+        assert!(
+            warnings(&issues)
+                .iter()
+                .any(|m| m.contains("steps[0].dry_run") && m.contains("{nope}")),
+            "{:?}",
+            warnings(&issues)
         );
     }
 }

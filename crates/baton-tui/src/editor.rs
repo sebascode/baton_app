@@ -481,6 +481,8 @@ impl EditorState {
                 Some(v) => (v != NO_DATABASE && !v.is_empty()).then_some(v),
                 None => origin.and_then(|o| o.database.clone()),
             },
+            // no tiene campo en el formulario (se escribe en el plan): se conserva del paso original
+            dry_run: origin.and_then(|o| o.dry_run.clone()),
         })
     }
 

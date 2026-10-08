@@ -131,6 +131,9 @@ fn step_detail(step: &Step) -> Vec<(&'static str, String)> {
     if let Some(cmd) = step.command.as_deref().filter(|c| !c.trim().is_empty()) {
         out.push(("comando", cmd.trim().to_string()));
     }
+    if let Some(dry) = step.dry_run.as_deref().filter(|d| !d.trim().is_empty()) {
+        out.push(("dry-run", dry.trim().to_string()));
+    }
     if !step.depends_on.is_empty() {
         out.push(("depende de", step.depends_on.join(", ")));
     }

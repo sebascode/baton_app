@@ -66,6 +66,18 @@ fn editor_of(app: &mut App) -> &mut EditorState {
 // ------------------------------------------------------------- ida y vuelta
 
 #[test]
+fn a_dry_run_written_in_the_plan_survives_the_editor_even_though_it_has_no_field() {
+    let plan = Plan::parse(
+        "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"make\"\ndry_run = \"make -n\"\n",
+    )
+    .unwrap();
+    let steps = editor_for(&plan).to_steps().unwrap();
+    assert_eq!(steps[0].dry_run.as_deref(), Some("make -n"));
+    assert_eq!(steps[0], plan.steps[0]);
+}
+
+#[test]
 fn the_real_example_plan_survives_a_round_trip_through_the_editor_unchanged() {
     let plan = example();
     let steps = editor_for(&plan).to_steps().unwrap();

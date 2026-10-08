@@ -702,3 +702,25 @@ fn cancelling_a_rollback_changes_nothing() {
     assert!(app.handle_key(key(KeyCode::Esc)).is_none());
     assert!(!screen(&app, 100, 30).contains("Se deshace"));
 }
+
+#[test]
+fn the_step_panel_shows_its_own_dry_run_only_when_it_has_one() {
+    let plan = Plan::parse(
+        "name = \"x\"\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"make\"\ndry_run = \" make -n \"\n\
+         [[steps]]\nid = \"b\"\nname = \"B\"\ntype = \"comando\"\ncommand = \"make\"\n",
+    )
+    .unwrap();
+    let p = PreviewState::from_plan(&plan);
+    let rows = |i: usize| -> Vec<(&str, String)> { p.steps[i].detail.clone() };
+    assert!(
+        rows(0).contains(&("dry-run", "make -n".to_string())),
+        "{:?}",
+        rows(0)
+    );
+    assert!(
+        rows(1).iter().all(|(k, _)| *k != "dry-run"),
+        "{:?}",
+        rows(1)
+    );
+}
