@@ -6,6 +6,8 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 
 use crate::credential::CredentialRef;
+pub use crate::credential_kind::CredentialKind;
+pub use crate::kind::StepKind;
 use crate::units::Dur;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -172,31 +174,6 @@ pub struct CredentialReq {
     pub provider: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CredentialKind {
-    Git,
-    Docker,
-    Ssh,
-    /// PostgreSQL (`psql`, directo o con `docker exec`).
-    Db,
-    /// Un archivo SQLite (`sqlite3`).
-    Sqlite,
-    /// MySQL o MariaDB (`mysql`, directo o con `docker exec`).
-    Mysql,
-    Otro,
-}
-
-impl CredentialKind {
-    /// Una base de datos a la que se conecta un paso `sql` y que puede respaldarse.
-    pub fn is_database(self) -> bool {
-        matches!(
-            self,
-            CredentialKind::Db | CredentialKind::Sqlite | CredentialKind::Mysql
-        )
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
@@ -227,56 +204,14 @@ pub struct Step {
     /// Solo en pasos `sql`: id de la credencial `db` con la que se conectan. Sin él se usa la
     /// única del plan; con varias, es obligatorio.
     pub database: Option<String>,
+    /// Comando de solo lectura que `--dry-run` ejecuta de verdad para este paso, en lugar del
+    /// `dry_run` de su tipo (que no se usa si el paso reescribe `command`). Sin ninguno de los dos,
+    /// un dry-run no ejecuta nada de este paso.
+    pub dry_run: Option<String>,
 }
 
 fn yes() -> bool {
     true
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StepKind {
-    Compose,
-    Dockerfile,
-    Script,
-    /// Archivos `.sql` contra la base de la credencial `db` del plan (v0.3).
-    Sql,
-    Comando,
-    Check,
-    Backup,
-    /// Paso sin acción: solo un gate.
-    Gate,
-}
-
-impl StepKind {
-    /// Etiqueta entre corchetes de la vista previa.
-    pub fn label(self) -> &'static str {
-        match self {
-            StepKind::Compose => "compose",
-            StepKind::Dockerfile => "dockerfile",
-            StepKind::Script => "script",
-            StepKind::Sql => "sql",
-            StepKind::Comando => "comando",
-            StepKind::Check => "check",
-            StepKind::Backup => "backup",
-            StepKind::Gate => "gate",
-        }
-    }
-
-    /// Los orígenes de estos tipos se escanean (glob) y su comando corre una vez por archivo,
-    /// dentro de la carpeta de ese archivo.
-    pub fn is_scanned(self) -> bool {
-        matches!(
-            self,
-            StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql
-        )
-    }
-
-    /// Tipos cuyos archivos definen servicios (de ahí salen los checks de un gate automático).
-    /// Un script o un archivo sql no define ninguno.
-    pub fn has_services(self) -> bool {
-        matches!(self, StepKind::Compose | StepKind::Dockerfile)
-    }
 }
 
 /// Uno o varios orígenes. En el TOML puede escribirse como texto o como lista.

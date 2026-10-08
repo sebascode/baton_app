@@ -4,6 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use baton_core::plan::StepKind;
+
 /// Carpetas que nunca se bajan a escanear.
 const SKIP: [&str; 6] = [
     "node_modules",
@@ -26,6 +28,16 @@ pub struct Discovered {
     pub scripts: Vec<PathBuf>,
     /// Archivos `.sql`.
     pub sql: Vec<PathBuf>,
+    /// Lo que reconocen los tipos de plugins instalados (su `detect`), un tipo por entrada.
+    pub plugins: Vec<PluginHit>,
+}
+
+/// Los archivos que un tipo de plugin reconoce en el proyecto.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginHit {
+    pub kind: StepKind,
+    /// Rutas relativas a la raíz, ordenadas.
+    pub files: Vec<PathBuf>,
 }
 
 impl Discovered {
@@ -34,6 +46,7 @@ impl Discovered {
             && self.dockerfiles.is_empty()
             && self.scripts.is_empty()
             && self.sql.is_empty()
+            && self.plugins.is_empty()
     }
 }
 
@@ -53,7 +66,31 @@ pub fn scan_project(root: &Path) -> Discovered {
     out.dockerfiles.sort();
     out.scripts.sort();
     out.sql.sort();
+    out.plugins = detect_plugins(root);
     out
+}
+
+/// Para cada tipo de plugin registrado con `detect`, los archivos que coinciden, sin bajar a las
+/// carpetas que el resto del escaneo ignora (`node_modules`, `vendor`...) ni a las ocultas (el
+/// glob ya no entra en ellas: `.terraform/` guarda copias de módulos que no son del proyecto).
+fn detect_plugins(root: &Path) -> Vec<PluginHit> {
+    StepKind::all()
+        .into_iter()
+        .filter(|k| !k.is_builtin() && !k.detect().is_empty())
+        .filter_map(|kind| {
+            let files: Vec<PathBuf> =
+                crate::sources::expand_sources(root, kind.detect().iter().copied())
+                    .into_iter()
+                    .filter(|p| {
+                        p.components().count() <= MAX_DEPTH + 1
+                            && !p
+                                .components()
+                                .any(|c| SKIP.contains(&c.as_os_str().to_string_lossy().as_ref()))
+                    })
+                    .collect();
+            (!files.is_empty()).then_some(PluginHit { kind, files })
+        })
+        .collect()
 }
 
 fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Discovered) {
@@ -206,5 +243,89 @@ mod tests {
                 PathBuf::from("seed.sql")
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::*;
+    use baton_core::kind::{KindSpec, Requires, register};
+
+    fn touch(root: &Path, rel: &str) {
+        let p = root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, "").unwrap();
+    }
+
+    fn kind_detecting(name: &'static str, detect: &'static [&'static str]) -> StepKind {
+        register(KindSpec {
+            name,
+            scanned: true,
+            has_services: false,
+            default_command: Some("true"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: Requires::Source,
+            dry_run: None,
+            detect,
+            binaries: &[],
+            destructive: &[],
+            credentials: &[],
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plugin_type_finds_its_files_and_sorts_them() {
+        let kind = kind_detecting("t-det-basic", &["**/main.tf"]);
+        let tmp = tempfile::tempdir().unwrap();
+        for f in ["infra/prod/main.tf", "infra/dev/main.tf", "otra/cosa.txt"] {
+            touch(tmp.path(), f);
+        }
+        let found = scan_project(tmp.path());
+        let hit = found.plugins.iter().find(|h| h.kind == kind).unwrap();
+        assert_eq!(
+            hit.files,
+            [
+                PathBuf::from("infra/dev/main.tf"),
+                PathBuf::from("infra/prod/main.tf")
+            ]
+        );
+        assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn it_ignores_hidden_folders_and_the_usual_noise() {
+        let kind = kind_detecting("t-det-noise", &["**/noise.tf"]);
+        let tmp = tempfile::tempdir().unwrap();
+        for f in [
+            "infra/noise.tf",
+            ".terraform/modules/x/noise.tf",
+            "node_modules/dep/noise.tf",
+            "vendor/dep/noise.tf",
+            "target/noise.tf",
+        ] {
+            touch(tmp.path(), f);
+        }
+        let found = scan_project(tmp.path());
+        let hit = found.plugins.iter().find(|h| h.kind == kind).unwrap();
+        assert_eq!(hit.files, [PathBuf::from("infra/noise.tf")]);
+    }
+
+    #[test]
+    fn a_type_that_matches_nothing_adds_no_entry() {
+        let kind = kind_detecting("t-det-none", &["**/nada-de-esto.xyz"]);
+        let tmp = tempfile::tempdir().unwrap();
+        touch(tmp.path(), "a/b.txt");
+        let found = scan_project(tmp.path());
+        assert!(found.plugins.iter().all(|h| h.kind != kind));
+    }
+
+    #[test]
+    fn builtin_types_never_appear_as_plugin_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(tmp.path(), "docker-compose.yml");
+        let found = scan_project(tmp.path());
+        assert!(found.plugins.iter().all(|h| !h.kind.is_builtin()));
     }
 }

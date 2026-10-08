@@ -32,7 +32,7 @@ jobs:
             os: macos-latest
             target: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -62,7 +62,7 @@ jobs:
           tar -czf "$name.tar.gz" -C stage baton baton.1 LICENSE
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.platform }}
           path: |
@@ -77,9 +77,9 @@ jobs:
       contents: write
     steps:
       # el repositorio trae packaging/nfpm.yaml, LICENSE y scripts/build-packages.sh
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true

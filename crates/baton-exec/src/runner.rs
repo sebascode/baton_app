@@ -116,6 +116,9 @@ pub(crate) struct Ctx {
     sink: Mutex<Option<LogSink>>,
     /// Últimas líneas de salida del comando en curso, para el mensaje de fallo.
     tail: Mutex<Vec<String>>,
+    /// La salida completa del comando en curso, mientras se necesita revisar entera (el plan de un
+    /// tipo con frases destructivas); `None` el resto del tiempo.
+    capture: Mutex<Option<Vec<String>>>,
     paused: AtomicBool,
     /// Un transporte por destino usado (`"local"` incluido); se arma una vez, antes de correr.
     transports: HashMap<String, Box<dyn Transport>>,
@@ -173,6 +176,37 @@ impl Ctx {
             .filter(|(name, _)| all || mentions_variable(line, name))
             .cloned()
             .collect()
+    }
+
+    /// Las credenciales que el tipo de plugin de este paso declara usar, con los nombres de variable
+    /// que su manifiesto les da. Solo las del plan que son del tipo que el plugin pide; si el plan
+    /// no declara ninguna, el paso no recibe nada (la herramienta usa lo que ya haya en el entorno).
+    /// Una variable cuyo campo falta o quedó vacío no se define.
+    fn plugin_credential_env(&self, ps: &PStep) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for used in ps.step.kind.credential_uses() {
+            let Some(req) = self
+                .plan
+                .credentials
+                .iter()
+                .find(|c| c.kind.name() == used.kind)
+            else {
+                continue;
+            };
+            for (name, template) in used.env {
+                let rendered = baton_core::plugin::render_env(template, |field| {
+                    let var = req.reference.variable(field);
+                    self.secrets
+                        .iter()
+                        .find(|(n, _)| *n == var)
+                        .map(|(_, v)| v.clone())
+                });
+                if let Some(value) = rendered {
+                    out.push(((*name).to_string(), value));
+                }
+            }
+        }
+        out
     }
 
     /// La conexión de una credencial de base de datos (`db` o `sqlite`).
@@ -277,6 +311,11 @@ impl Ctx {
             let extra = t.len().saturating_sub(200);
             t.drain(..extra);
         }
+        if let Ok(mut c) = self.capture.lock()
+            && let Some(lines) = c.as_mut()
+        {
+            lines.push(text.clone());
+        }
         self.log(step, LogKind::Output, text);
     }
 
@@ -318,7 +357,13 @@ impl Ctx {
             Some(dir) => self.project.root.join(dir),
             None => self.project.root.clone(),
         };
-        let mut secrets = self.secrets_for(&line, ps.step.kind.is_scanned());
+        let mut secrets = self.secrets_for(&line, ps.step.kind.receives_all_credentials());
+        // las variables con los nombres que espera la herramienta del plugin (AWS_ACCESS_KEY_ID...)
+        for (name, value) in self.plugin_credential_env(ps) {
+            if !secrets.iter().any(|(n, _)| *n == name) {
+                secrets.push((name, value));
+            }
+        }
         if ps.step.kind == StepKind::Sql {
             let own = self.plan.db_for_step(&ps.step).map(|c| c.id.as_str());
             let foreign = self.foreign_db_vars(own);
@@ -443,7 +488,11 @@ impl Ctx {
             }
         }
         if self.opts.dry_run {
-            self.log(step, LogKind::Output, "dry-run: no se sincroniza");
+            self.log(
+                step,
+                LogKind::Output,
+                "dry-run: no se sincroniza (se usan los archivos que ya hay en el destino)",
+            );
             return Ok(());
         }
         let dest = format!(
@@ -809,12 +858,24 @@ async fn run_command(
     cmd: Command,
     retries: u32,
 ) -> Result<u32, StepEnd> {
-    ctx.log(step, LogKind::Command, cmd.line.clone());
     if ctx.opts.dry_run {
+        ctx.log(step, LogKind::Command, cmd.line.clone());
         ctx.log(step, LogKind::Success, "dry-run: no se ejecutó");
         return Ok(0);
     }
+    execute_command(ctx, cmds, step, cmd, retries).await
+}
 
+/// Ejecuta de verdad un comando con los reintentos del paso, aunque sea un dry-run: es lo que usa
+/// el `dry_run` de solo lectura de un tipo de plugin.
+async fn execute_command(
+    ctx: &Ctx,
+    cmds: &mut Rx<RunCommand>,
+    step: usize,
+    cmd: Command,
+    retries: u32,
+) -> Result<u32, StepEnd> {
+    ctx.log(step, LogKind::Command, cmd.line.clone());
     let mut last = String::new();
     for attempt in 0..=retries {
         if attempt > 0 {
@@ -833,6 +894,11 @@ async fn run_command(
         }
         if let Ok(mut t) = ctx.tail.lock() {
             t.clear();
+        }
+        if let Ok(mut c) = ctx.capture.lock()
+            && let Some(lines) = c.as_mut()
+        {
+            lines.clear();
         }
         match exec(ctx, cmds, step, &cmd).await {
             Err(int) => return Err(StepEnd::Interrupted(int)),
@@ -1053,6 +1119,165 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
     }
 }
 
+/// Corre un comando y devuelve su salida completa (ya redactada), sin el tope de líneas del `tail`.
+async fn run_capturing(
+    ctx: &Ctx,
+    cmds: &mut Rx<RunCommand>,
+    step: usize,
+    cmd: Command,
+    retries: u32,
+) -> Result<Vec<String>, StepEnd> {
+    if let Ok(mut c) = ctx.capture.lock() {
+        *c = Some(Vec::new());
+    }
+    let result = execute_command(ctx, cmds, step, cmd, retries).await;
+    let lines = ctx
+        .capture
+        .lock()
+        .ok()
+        .and_then(|mut c| c.take())
+        .unwrap_or_default();
+    result.map(|_| lines)
+}
+
+/// Cuántas líneas destructivas se escriben en el log antes de resumir el resto.
+const MAX_HITS_SHOWN: usize = 20;
+
+/// Deja en el log lo que el plan destruye o reemplaza: `(archivo, línea)`.
+fn log_destructive(ctx: &Ctx, step: usize, hits: &[(String, String)]) {
+    for (file, line) in hits.iter().take(MAX_HITS_SHOWN) {
+        let at = if file.is_empty() {
+            String::new()
+        } else {
+            format!("{file}: ")
+        };
+        ctx.log(step, LogKind::Output, format!("atención: {at}{line}"));
+    }
+    if hits.len() > MAX_HITS_SHOWN {
+        ctx.log(
+            step,
+            LogKind::Output,
+            format!("atención: y {} más", hits.len() - MAX_HITS_SHOWN),
+        );
+    }
+}
+
+/// Las líneas destructivas de la salida de un plan, con el archivo donde aparecieron.
+fn destructive_in(ps: &PStep, file: Option<&PathBuf>, output: &[String]) -> Vec<(String, String)> {
+    let shown = file.map(|f| f.display().to_string()).unwrap_or_default();
+    baton_core::plugin::destructive_hits(output, ps.step.kind.destructive_patterns())
+        .into_iter()
+        .map(|line| (shown.clone(), line))
+        .collect()
+}
+
+/// Antes de ejecutar un paso de un tipo con frases destructivas: corre su `dry_run` (de solo
+/// lectura), busca esas frases en el plan y, si hay alguna, pide confirmación. Sin nadie que
+/// pueda responder, el paso falla antes de aplicar nada, salvo con `--assume-yes`.
+///
+/// Es una revisión sobre el plan de un momento: el comando del paso vuelve a planificar, y lo que
+/// aplique podría diferir si algo cambió entre uno y otro.
+async fn confirm_plan(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Result<(), StepEnd> {
+    let ps = &ctx.steps[i];
+    let Some(dry) = ps.step.dry_run_command() else {
+        // la validación lo impide; si llegara aquí, aplicar sin revisar no es una opción
+        return Err(destructive_failure(
+            ctx,
+            ps,
+            format!(
+                "«{}» no tiene un dry_run con el que revisar lo destructivo",
+                ps.step.name
+            ),
+            String::new(),
+            Vec::new(),
+        ));
+    };
+    let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
+        vec![None]
+    } else {
+        ps.files.iter().map(Some).collect()
+    };
+    let mut hits: Vec<(String, String)> = Vec::new();
+    let mut last_command = String::new();
+    for file in files {
+        let vars = ctx.vars(ps, file.map(PathBuf::as_path));
+        let cmd = ctx.command(ps, vars.render(dry), file.map(PathBuf::as_path));
+        last_command.clone_from(&cmd.line);
+        let lines = run_capturing(ctx, cmds, i, cmd, ps.step.retries).await?;
+        hits.extend(destructive_in(ps, file, &lines));
+    }
+    if hits.is_empty() {
+        ctx.log(
+            i,
+            LogKind::Success,
+            "plan revisado: no destruye ni reemplaza nada",
+        );
+        return Ok(());
+    }
+    log_destructive(ctx, i, &hits);
+    let total = hits.len();
+    if !ctx.opts.interactive && !ctx.opts.assume_yes {
+        let tail = hits.iter().take(8).map(|(_, l)| l.clone()).collect();
+        return Err(destructive_failure(
+            ctx,
+            ps,
+            format!(
+                "«{}» destruye o reemplaza {total} recurso(s) según su plan y no hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
+                ps.step.name
+            ),
+            last_command,
+            tail,
+        ));
+    }
+    let message = format!(
+        "«{}» destruye o reemplaza {total} recurso(s) según su plan. ¿Continuar?",
+        ps.step.name
+    );
+    match ask_gate(ctx, cmds, i, &message).await {
+        Answer::Yes => Ok(()),
+        Answer::No => Err(StepEnd::Declined),
+        Answer::Interrupted(int) => Err(StepEnd::Interrupted(int)),
+    }
+}
+
+fn destructive_failure(
+    ctx: &Ctx,
+    ps: &PStep,
+    message: String,
+    command: String,
+    output_tail: Vec<String>,
+) -> StepEnd {
+    let step = ctx
+        .steps
+        .iter()
+        .position(|s| s.step.id == ps.step.id)
+        .unwrap_or(0);
+    ctx.log(step, LogKind::Error, message.clone());
+    let kind = ctx.classify_failure(&message, None);
+    StepEnd::Failed(Failure {
+        message,
+        command,
+        output_tail,
+        kind,
+        rollback_to: None,
+    })
+}
+
+/// El comando de solo lectura que un `--dry-run` ejecuta de verdad para este paso, si lo tiene:
+/// el suyo (`dry_run`) o el de su tipo (un plugin), salvo que el paso reescriba `command` (ver
+/// `Step::dry_run_command`).
+fn dry_run_probe(ctx: &Ctx, ps: &PStep) -> Option<String> {
+    if !ctx.opts.dry_run {
+        return None;
+    }
+    ps.step.dry_run_command().map(str::to_string)
+}
+
+/// ¿Algún paso va a ejecutar un dry-run de verdad? Entonces hay que resolver las credenciales.
+fn has_dry_run_probe(steps: &[PStep]) -> bool {
+    steps.iter().any(|ps| ps.step.dry_run_command().is_some())
+}
+
 /// Ejecuta un paso completo: backup previo, comando por archivo y gate manual.
 /// `skip_action`: el comando ya corrió bien y solo se repite el gate (reintento tras un gate fallido).
 async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: bool) -> StepEnd {
@@ -1061,6 +1286,16 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     }
     let ps = &ctx.steps[i];
     let mut retries_total = 0;
+
+    // Lo destructivo se pregunta antes de todo lo demás: si se rechaza, no queda ni un respaldo hecho.
+    if !skip_action
+        && !ctx.opts.dry_run
+        && ps.step.kind.runs_command()
+        && !ps.step.kind.destructive_patterns().is_empty()
+        && let Err(end) = confirm_plan(ctx, cmds, i).await
+    {
+        return end;
+    }
 
     if !skip_action && (ps.step.kind == StepKind::Backup || ps.step.backup_before) {
         if !ctx.opts.backup {
@@ -1076,19 +1311,43 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     // Un script sin comando declarado se ejecuta con el intérprete de su shebang; los demás tipos
     // usan su comando (declarado o el de su tipo).
     let template = ps.step.command_template();
-    let is_script = ps.step.kind == StepKind::Script;
     let is_sql = ps.step.kind == StepKind::Sql;
+    let probe = dry_run_probe(ctx, ps);
+    if let Some(dry) = &probe {
+        // `--dry-run` de un tipo de plugin: ejecuta de verdad su comando de solo lectura
+        let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
+            vec![None]
+        } else {
+            ps.files.iter().map(Some).collect()
+        };
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for file in files {
+            let vars = ctx.vars(ps, file.map(PathBuf::as_path));
+            let cmd = ctx.command(ps, vars.render(dry), file.map(PathBuf::as_path));
+            if ps.step.kind.destructive_patterns().is_empty() {
+                if let Err(end) = execute_command(ctx, cmds, i, cmd, ps.step.retries).await {
+                    return end;
+                }
+            } else {
+                match run_capturing(ctx, cmds, i, cmd, ps.step.retries).await {
+                    Ok(lines) => hits.extend(destructive_in(ps, file, &lines)),
+                    Err(end) => return end,
+                }
+            }
+        }
+        // en un dry-run solo se deja a la vista: no hay nada que confirmar
+        log_destructive(ctx, i, &hits);
+    } else if ctx.opts.dry_run && ps.step.dry_run_shadowed() {
+        ctx.log(
+            i,
+            LogKind::Output,
+            "dry-run: el paso declara su propio command, así que no se ejecuta el dry_run de su tipo (declara dry_run en el paso para planificarlo)",
+        );
+    }
     if !skip_action
-        && matches!(
-            ps.step.kind,
-            StepKind::Compose
-                | StepKind::Dockerfile
-                | StepKind::Script
-                | StepKind::Sql
-                | StepKind::Comando
-                | StepKind::Check
-        )
-        && (template.is_some() || is_script || is_sql)
+        && probe.is_none()
+        && ps.step.kind.runs_command()
+        && (template.is_some() || ps.step.kind.has_own_interpreter())
     {
         if is_sql {
             match confirm_destructive(ctx, cmds, i).await {
@@ -1502,7 +1761,9 @@ async fn run(
         .flatten();
     let (transports, ssh_conns) =
         build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
-    let (secrets, mut redacted) = if opts.dry_run {
+    // Un dry-run no resuelve credenciales, salvo que algún paso ejecute el dry_run de su tipo
+    // (`terraform plan` las necesita para consultar la nube).
+    let (secrets, mut redacted) = if opts.dry_run && !has_dry_run_probe(&steps) {
         (Vec::new(), Vec::new())
     } else {
         resolve_credentials(&project, &config, &plan, opts.ambiente.as_deref())
@@ -1519,6 +1780,7 @@ async fn run(
         tx,
         sink: Mutex::new(sink),
         tail: Mutex::new(Vec::new()),
+        capture: Mutex::new(None),
         paused: AtomicBool::new(false),
         transports,
         ssh_conns,

@@ -241,6 +241,33 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
                 "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
             );
         }
+        let plugin_kinds: Vec<&str> = steps
+            .iter()
+            .filter(|s| !s.kind.is_builtin())
+            .map(|s| s.kind.label())
+            .collect();
+        let mut hinted: Vec<(&str, &str)> = Vec::new();
+        for s in steps.iter().filter(|s| !s.kind.is_builtin()) {
+            for used in s.kind.credential_uses() {
+                if !hinted.contains(&(s.kind.label(), used.kind)) {
+                    hinted.push((s.kind.label(), used.kind));
+                    println!(
+                        "el tipo '{}' acepta la credencial '{}' (si no la declaras, usa lo que ya haya en el entorno). Para usarla, agrega al plan:\n  [[credentials]]\n  id = \"{}\"\n  kind = \"{}\"\n  ref = \"servers.env#{}\"",
+                        s.kind.label(),
+                        used.kind,
+                        used.kind,
+                        used.kind,
+                        used.kind.to_uppercase().replace('-', "_")
+                    );
+                }
+            }
+        }
+        if !plugin_kinds.is_empty() {
+            println!(
+                "los pasos de plugins ({}) quedaron desactivados porque modifican cosas fuera de esta máquina: revisa su origen y su comando (baton plugin validate) y actívalos cuando corresponda",
+                plugin_kinds.join(", ")
+            );
+        }
     }
     if !ambientes.is_empty() {
         println!(

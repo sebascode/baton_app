@@ -89,7 +89,7 @@ Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la 
 Texto plano en vez de la pantalla.
 .TP
 .B \-\-dry\-run
-No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado).
+No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado). La única excepción son los pasos con un \fBdry_run\fR (el suyo o el de su tipo de plugin, ver \fBPLUGINS\fR): su comando de solo lectura sí se ejecuta, con las credenciales que mencione, y lo que muestra no se guarda en ningún log.
 .TP
 .B \-\-resume
 Salta los pasos que terminaron bien en la última ejecución (los muestra como omitidos).
@@ -197,6 +197,19 @@ Lista las ejecuciones anteriores de un plan que baton recuerda (la última y has
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
+.SS baton plugin list
+Lista los plugins instalados en esta máquina (ver \fBPLUGINS\fR), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. No necesita proyecto.
+.SS baton plugin validate ruta
+Revisa el manifiesto de un plugin (el archivo \fIbaton\-plugin.toml\fR o la carpeta que lo contiene) y muestra, tal cual, los comandos que ejecutaría: \fBes lo que hay que leer antes de instalar un plugin\fR. Sale con 1 si el manifiesto tiene errores y con 2 si la ruta no existe. No necesita proyecto ni instala nada.
+.SS baton plugin add fuente
+Instala un plugin: \fBgithub:dueño/repo@versión\fR (un tag o un commit; no una rama, que puede cambiar) o una carpeta local. De GitHub, baton pregunta por el commit al que apunta esa versión y \fBsolo lo instala si GitHub verificó su firma, sin excepción\fR; baja el manifiesto de ese SHA exacto (no del tag, que puede moverse), lo valida y \fBmuestra los comandos que ejecutará\fR antes de preguntar. Instala el manifiesto en la carpeta de plugins y deja su origen, el commit y su sha256 en \fIplugins.lock\fR. \fBNecesita una terminal\fR: sin ella no consulta la red ni instala nada, porque baton no instala un plugin sin que alguien lea antes qué va a ejecutar (en CI se usa un plugin ya instalado). Si ya está instalado y es idéntico no hace nada; si cambió, muestra qué cambió y pregunta; no reemplaza uno del mismo nombre que vino de otro origen ni uno que no instaló \fBplugin add\fR (por ejemplo, el que alguien enlazó para desarrollarlo). Una carpeta local no tiene commit ni firma que verificar: se instala igual, tras confirmar, y queda registrada como local. Sale con 1 si se rechaza (sin firma verificada, manifiesto inválido, nombre ocupado, o respuesta negativa) y con 2 si no hay terminal o la fuente no se entiende.
+.SS baton plugin remove nombre
+Quita un plugin instalado y su entrada de \fIplugins.lock\fR. Pregunta antes; sin terminal necesita \fB\-\-yes\fR. Si el plugin es un enlace a otra carpeta (alguien lo desarrolla), solo se quita el enlace, nunca la carpeta de destino.
+.TP
+.B \-\-yes
+No pregunta.
+.SS baton plugin new nombre
+Crea \fI./nombre/baton\-plugin.toml\fR con un manifiesto para empezar (que pasa \fBplugin validate\fR) y dice los siguientes pasos. No pisa uno existente. No necesita proyecto.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
@@ -331,6 +344,12 @@ Un log por ejecución (por defecto \fI{plan}\-{fecha}.log\fR, con \fB\-2\fR, \fB
 .TP
 .I .baton/backups/
 Backups de volúmenes (un \fI.tgz\fR por volumen).
+.TP
+.I ~/.config/baton/plugins/plugins.lock
+Lo que instaló \fBbaton plugin add\fR: origen, versión, commit, firma y sha256 de cada manifiesto. No se edita a mano.
+.TP
+.I ~/.config/baton/plugins/<nombre>/baton\-plugin.toml
+Los plugins instalados de este usuario (o la carpeta de \fBBATON_PLUGINS_DIR\fR). Viven fuera del proyecto: el plan solo nombra el tipo de paso y cada máquina decide qué plugins tiene.
 .
 .SH FORMATO DE UN PLAN
 .nf
@@ -372,7 +391,7 @@ url = "http://{destino}:8080/health"
 .RE
 .fi
 .PP
-Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
+Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR, \fBdry_run\fR y \fBbackup_before\fR. \fBdry_run\fR es un comando de solo lectura que \fB\-\-dry\-run\fR ejecuta de verdad en lugar de listar el comando del paso (por ejemplo \fBterraform plan \-var\-file=prod.tfvars\fR); admite los mismos placeholders que \fBcommand\fR, solo vale en pasos que ejecutan un comando, y una palabra que suele modificar algo (\fBapply\fR, \fBdestroy\fR...) genera una advertencia.
 .PP
 En \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR y \fBsql\fR el comando corre una vez por archivo, dentro de la carpeta de ese archivo (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{ambiente}\fR, \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (el nombre del archivo con su extensión) y \fB{stem}\fR (sin ella, por ejemplo \fBrollback = "sh {stem}.rollback.sh"\fR); un marcador desconocido se deja tal cual y solo da una advertencia.
 .PP
@@ -435,6 +454,54 @@ endpoint = "http://localhost:4318"
 .PP
 Un destino \fBssh\fR usa el binario \fBssh\fR del sistema (respeta \fI~/.ssh/config\fR). Si \fBsync\fR está activo, \fBrsync\fR copia la raíz del proyecto, nunca \fI.baton/\fR, una sola vez por destino y por ejecución. El bastion se traduce a \fB\-J\fR, o, si su credencial tiene una llave (\fBKEY\fR), a un \fBProxyCommand\fR que la usa, así un bastion puede tener una llave distinta de la del destino. Una llave con frase secreta (\fBPASSPHRASE\fR en la credencial, o en la del bastion) funciona sin agente ni terminal: baton se ofrece a \fBssh\fR como programa de contraseñas (\fBSSH_ASKPASS\fR, OpenSSH 8.4 o más) y solo contesta a la pregunta por la frase de esa llave; nunca a una contraseña ni a una confirmación. Solo se soportan llaves, no contraseñas. Un \fBcontext\fR ejecuta con \fBDOCKER_CONTEXT\fR definida.
 .
+.SH PLUGINS
+Un plugin añade un tipo de paso (por ejemplo \fBterraform\fR) junto a \fBcompose\fR, \fBscript\fR y los demás. Es un manifiesto, sin código: describe qué comando correr y baton se queda con la ejecución, las credenciales, los logs y los gates. Se instala en \fI~/.config/baton/plugins/<nombre>/baton\-plugin.toml\fR (la carpeta se llama igual que el plugin) y se usa con \fBtype = "<tipo>"\fR. Un plugin que no se puede cargar se avisa por stderr y no impide usar baton.
+.PP
+.nf
+.RS
+api = 1
+name = "terraform"
+version = "0.1.0"
+description = "Terraform por carpeta"
+requires = ["terraform"]
+
+[type]
+scanned = true
+detect = ["**/main.tf"]
+command = "terraform init \-input=false && terraform apply \-input=false \-auto\-approve"
+dry_run = "terraform init \-input=false && terraform plan \-input=false"
+destructive = ["will be destroyed", "must be replaced"]
+
+[[credentials]]
+kind = "aws"
+fields = [
+  { key = "ACCESS_KEY_ID" },
+  { key = "SECRET_ACCESS_KEY", secret = true },
+  { key = "REGION", optional = true },
+]
+
+[credentials.env]
+AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+AWS_DEFAULT_REGION = "{REGION}"
+.RE
+.fi
+.PP
+\fBapi\fR es la versión del formato (hoy 1); un manifiesto de otra versión se rechaza explicando por qué. \fBrequires\fR son programas que deben existir donde corre el paso. \fBscanned\fR hace que \fBsource\fR sea un glob y que el comando corra una vez por archivo, dentro de su carpeta, como \fBcompose\fR. \fBdetect\fR son los patrones con los que \fBbaton init\fR propondrá pasos de este tipo. \fBcommand\fR es el comando por defecto (un paso puede declarar el suyo) y admite los mismos placeholders que un paso. Un tipo no puede llamarse como uno de baton, ni exigir backup ni gate.
+.PP
+\fBdry_run\fR es el comando que se usa con \fB\-\-dry\-run\fR y \fBtiene que ser de solo lectura\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): se rechaza uno igual a \fBcommand\fR o que use palabras como \fBapply\fR, \fBdestroy\fR, \fBcreate\fR o \fBdeploy\fR. Es un chequeo de apariencia, no una garantía: un comando puede esconder lo que hace, así que lee los comandos con \fBbaton plugin validate\fR antes de instalar un plugin ajeno.
+.PP
+Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). \fBdestructive\fR son frases que se buscan en la salida del \fBdry_run\fR (texto literal, sin distinguir mayúsculas ni colores; hace falta un \fBdry_run\fR). Antes de ejecutar un paso de ese tipo, baton corre el \fBdry_run\fR de todas sus carpetas y, si alguna frase aparece (en Terraform, un recurso que \fBwill be destroyed\fR o \fBmust be replaced\fR; un resumen como \fB0 to destroy\fR no cuenta), deja en el log cada línea con \fBatención:\fR y pregunta una sola vez antes de respaldar o aplicar nada. Rechazar detiene el plan como abortado. \fBSin terminal el paso falla antes de aplicar\fR, salvo con \fB\-\-assume\-yes\fR. En un \fB\-\-dry\-run\fR solo se deja a la vista. La revisión se hace sobre un plan anterior al del comando: si algo cambia entre uno y otro, lo que se aplique podría diferir. Un paso de ese tipo que reescribe \fBcommand\fR debe declarar su propio \fBdry_run\fR (con el plan equivalente); si no, \fBbaton validate\fR lo rechaza, para que la revisión no se pierda sin que nadie lo note.
+.PP
+\fB[[credentials]]\fR declara qué credencial usa el plugin. \fBkind\fR es el nombre del tipo (\fBaws\fR); si no es uno de baton, \fBfields\fR lo define (cada campo con su \fBkey\fR en mayúsculas, \fBsecret\fR si debe enmascararse y tacharse de todo lo que se muestra o guarda, y \fBoptional\fR si puede quedar vacío); con un tipo de baton (\fBdocker\fR, \fBgit\fR...) se omite \fBfields\fR y solo se da \fBenv\fR. \fB[credentials.env]\fR dice con qué nombres recibe el comando cada valor, porque cada herramienta espera los suyos: \fBVARIABLE = "plantilla con {CAMPOS}"\fR. Una variable cuya plantilla usa un campo opcional vacío no se define. No se puede definir \fBPATH\fR, \fBHOME\fR, \fBSHELL\fR, \fBIFS\fR, \fBLD_*\fR, \fBDYLD_*\fR, \fBBASH_ENV\fR ni \fBBATON_*\fR. El plan usa el tipo con su \fB[[credentials]]\fR de siempre (\fBkind = "aws"\fR, \fBref = "servers.env#PROD"\fR); si no declara ninguna, el comando no recibe nada y la herramienta usa lo que ya haya en el entorno (\fBaws sso\fR, un perfil...). El comando recibe únicamente las variables de \fBenv\fR de la credencial que su tipo pide, no las demás del plan. Un plan solo puede declarar una credencial de cada tipo que use el plugin (para cuentas distintas están los ambientes). Un tipo de credencial es global y dos plugins pueden compartirlo si lo definen igual; con campos distintos, el segundo no se carga. \fBbaton plugin add\fR muestra qué credenciales pide el plugin y a qué variables las convierte.
+.PP
+La guía para quien escribe un plugin (tutorial, referencia del manifiesto y cómo publicarlo firmado) está en \fIdocs/plugins.md\fR, en el repositorio de baton.
+.PP
+\fBInstalar un plugin ajeno es darle a alguien órdenes que se ejecutan con tus permisos.\fR Por eso \fBbaton plugin add\fR muestra los comandos antes de instalar, exige una firma verificada en GitHub y fija lo instalado. Una firma verificada prueba que el commit es de quien dice ser, no que sus comandos sean inofensivos: lo que protege es leerlos. \fBplugins.lock\fR (en la carpeta de plugins) guarda de dónde vino cada plugin, el commit y el sha256 del manifiesto; en cada arranque, un plugin registrado cuyo manifiesto ya no coincide \fBno se carga\fR y se avisa, y si el propio \fIplugins.lock\fR no se puede leer no se carga ninguno. Un plugin copiado o enlazado a mano no tiene registro (\fBplugin list\fR lo marca) y se carga como antes.
+.PP
+Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
+.PP
+\fBbaton init\fR propone un paso por cada tipo de plugin que reconoce algo en el proyecto (según \fBdetect\fR), siempre \fBdesactivado\fR: un paso de infraestructura modifica cosas fuera de esta máquina y activarlo es una decisión de quien conoce el entorno. No baja a carpetas ocultas ni a \fBnode_modules\fR, \fBvendor\fR o \fBtarget\fR.
 .SH CREDENCIALES
 Antes de ejecutar, \fBbaton\fR pide o confirma las credenciales que el plan necesita (las declaradas con \fB[[credentials]]\fR más la de cada destino ssh que use un paso activo). En la pantalla se puede confirmar, editar, probar la conexión (real solo para docker) o marcar "no volver a preguntar", un flag por credencial que se guarda en \fIstate.json\fR. Si una credencial silenciada falla por autenticación, el flag se reactiva sin avisar.
 .PP
@@ -559,6 +626,9 @@ La respuesta a una pregunta de \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR o 
 .TP
 .B <PREFIJO>_<CAMPO>
 El valor de un campo de credencial (por ejemplo \fBGHCR_TOKEN\fR). Gana sobre el \fI.env\fR y sobre el proveedor, así que en CI no hace falta \fI.baton/\fR.
+.TP
+.B BATON_PLUGINS_DIR
+La carpeta donde están los plugins (por defecto \fI$XDG_CONFIG_HOME/baton/plugins\fR o \fI~/.config/baton/plugins\fR).
 .TP
 .B VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE
 Los usa \fBvault\fR en los proveedores de ese tipo.

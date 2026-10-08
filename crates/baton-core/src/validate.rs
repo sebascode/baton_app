@@ -11,6 +11,7 @@ use petgraph::graph::DiGraph;
 
 use crate::config::{Config, FILE_PROVIDER, LOCAL_TARGET, SecretProvider, Target};
 use crate::issue::{Issue, Seg};
+use crate::kind::Requires;
 use crate::path;
 use crate::plan::{
     Check, CheckKind, Condition, DatabaseBackup, Gate, GateMode, Plan, Step, StepKind,
@@ -236,12 +237,40 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
 
     validate_backup(plan, &mut out);
     validate_credentials(plan, config, &mut out);
+    validate_plugin_credentials(plan, &mut out);
     validate_ids_and_dependencies(plan, &mut out);
 
     for (i, step) in plan.steps.iter().enumerate() {
         validate_step(plan, step, i, config, &mut out);
     }
     out
+}
+
+/// Un tipo de plugin recibe una credencial de cada tipo que usa. Con dos del mismo tipo en el plan
+/// no se sabría cuál darle (para cuentas distintas están los ambientes).
+fn validate_plugin_credentials(plan: &Plan, out: &mut Vec<Issue>) {
+    let mut reported: Vec<(&str, &str)> = Vec::new();
+    for step in plan.active_steps() {
+        for used in step.kind.credential_uses() {
+            let count = plan
+                .credentials
+                .iter()
+                .filter(|c| c.kind.name() == used.kind)
+                .count();
+            let key = (step.kind.label(), used.kind);
+            if count > 1 && !reported.contains(&key) {
+                reported.push(key);
+                out.push(Issue::error(
+                    path!["credentials"],
+                    format!(
+                        "el plan declara {count} credenciales '{}' y el tipo '{}' solo puede usar una: para cuentas distintas usa ambientes (--ambiente), no dos credenciales",
+                        used.kind,
+                        step.kind.label()
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
@@ -555,8 +584,8 @@ fn validate_step(
         }
     }
 
-    match step.kind {
-        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql => {
+    match step.kind.requires() {
+        Requires::Source => {
             if step.source.is_empty() {
                 out.push(Issue::error(
                     p("source"),
@@ -567,15 +596,16 @@ fn validate_step(
                 ));
             }
         }
-        StepKind::Comando | StepKind::Check => {
-            if step.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
+        Requires::Command => {
+            // el comando propio o, si el tipo trae uno por defecto (los de plugins), ese
+            if step.command_template().is_none() {
                 out.push(Issue::error(
                     p("command"),
                     format!("un paso {} necesita command", step.kind.label()),
                 ));
             }
         }
-        StepKind::Backup => {
+        Requires::BackupSection => {
             if plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
                 out.push(Issue::error(
                     p("type"),
@@ -583,7 +613,7 @@ fn validate_step(
                 ));
             }
         }
-        StepKind::Gate => {
+        Requires::Gate => {
             if step.gate.is_none() {
                 out.push(Issue::error(
                     p("gate"),
@@ -603,6 +633,7 @@ fn validate_step(
                 }
             }
         }
+        Requires::Nothing => {}
     }
 
     if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
@@ -617,9 +648,44 @@ fn validate_step(
     } else {
         CONTEXT_VARS
     };
-    for (field, text) in [("command", &step.command), ("rollback", &step.rollback)] {
+    for (field, text) in [
+        ("command", &step.command),
+        ("rollback", &step.rollback),
+        ("dry_run", &step.dry_run),
+    ] {
         if let Some(t) = text {
             template_warnings(t, vars, path!["steps", i, field], out);
+        }
+    }
+    // El tipo revisa lo destructivo con su dry_run: si el paso reescribe `command` y no declara el
+    // suyo, esa revisión se perdería sin que nadie lo notara.
+    if !step.kind.destructive_patterns().is_empty() && step.dry_run_shadowed() {
+        out.push(Issue::error(
+            p("command"),
+            format!(
+                "el tipo '{}' revisa lo destructivo con su dry_run, que este paso pierde al reescribir command: declara dry_run en el paso con el plan equivalente",
+                step.kind.label()
+            ),
+        ));
+    }
+    if let Some(dry) = &step.dry_run {
+        if dry.trim().is_empty() {
+            out.push(Issue::error(p("dry_run"), "dry_run no puede estar vacío"));
+        } else if !step.kind.runs_command() {
+            out.push(Issue::error(
+                p("dry_run"),
+                format!(
+                    "dry_run no aplica a un paso {}: no ejecuta un comando",
+                    step.kind.label()
+                ),
+            ));
+        } else if let Some(word) = crate::plugin::mutating_word(dry) {
+            // una advertencia y no un error: aquí quien escribe el plan es quien manda, y una
+            // palabra suelta puede ser inocente; el plan lo ve quien lo revisa
+            out.push(Issue::warning(
+                p("dry_run"),
+                format!("dry_run usa '{word}', que suele modificar algo: un dry-run debe ser de solo lectura"),
+            ));
         }
     }
 
@@ -1596,5 +1662,229 @@ mod tests {
             Config::parse("[secrets.v]\ntype = \"azure-keyvault\"\n").is_err(),
             "falta vault"
         );
+    }
+
+    // ------------------------------------------------ dry_run de un paso
+
+    fn warnings(issues: &[Issue]) -> Vec<String> {
+        issues
+            .iter()
+            .filter(|i| !i.is_error())
+            .map(|i| format!("{}: {}", i.path_string(), i.message))
+            .collect()
+    }
+
+    fn with_dry_run(kind_and_fields: &str, dry: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\n{kind_and_fields}dry_run = {dry:?}\n"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_step_dry_run_that_reads_only_is_accepted() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "make -n");
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn an_empty_step_dry_run_is_an_error() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "  ");
+        assert_error(&issues, "steps[0].dry_run", "no puede estar vacío");
+    }
+
+    #[test]
+    fn a_dry_run_makes_no_sense_on_a_step_that_runs_no_command() {
+        let backup = "type = \"backup\"\n";
+        let issues = validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[backup]\nvolumes = [\"v\"]\n[[steps]]\nid = \"a\"\nname = \"A\"\n{backup}dry_run = \"true\"\n"
+            )),
+            None,
+        );
+        assert_error(&issues, "steps[0].dry_run", "no aplica a un paso backup");
+        let gate = "type = \"gate\"\ndry_run = \"true\"\n[steps.gate]\nmode = \"manual\"\n";
+        let issues = validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\n{gate}"
+            )),
+            None,
+        );
+        assert_error(&issues, "steps[0].dry_run", "no aplica a un paso gate");
+    }
+
+    #[test]
+    fn a_step_dry_run_that_looks_like_it_modifies_only_warns() {
+        let issues = with_dry_run(
+            "type = \"comando\"\ncommand = \"make\"\n",
+            "terraform apply",
+        );
+        assert!(errors(&issues).is_empty(), "{:?}", errors(&issues));
+        let w = warnings(&issues);
+        assert!(
+            w.iter()
+                .any(|m| m.starts_with("steps[0].dry_run:") && m.contains("'apply'")),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_placeholders_in_a_step_dry_run_warn_like_in_command() {
+        let issues = with_dry_run("type = \"comando\"\ncommand = \"make\"\n", "make {nope}");
+        assert!(errors(&issues).is_empty());
+        assert!(
+            warnings(&issues)
+                .iter()
+                .any(|m| m.contains("steps[0].dry_run") && m.contains("{nope}")),
+            "{:?}",
+            warnings(&issues)
+        );
+    }
+
+    // ------------------------------------------------ tipo que revisa lo destructivo
+
+    fn reviewing_kind(name: &'static str) {
+        crate::kind::register(crate::kind::KindSpec {
+            name,
+            scanned: true,
+            has_services: false,
+            default_command: Some("aplicar"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Source,
+            dry_run: Some("planificar"),
+            detect: &[],
+            binaries: &[],
+            destructive: &["will be destroyed"],
+            credentials: &[],
+        })
+        .unwrap();
+    }
+
+    fn step_of(kind: &str, extra: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"{kind}\"\nsource = \"a\"\n{extra}"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn rewriting_command_in_a_type_that_reviews_destruction_needs_its_own_dry_run() {
+        reviewing_kind("t-val-review");
+        // sin tocar el command: usa el del tipo, que revisa
+        assert!(errors(&step_of("t-val-review", "")).is_empty());
+        // reescribirlo sin dry_run perdería la revisión en silencio
+        let issues = step_of("t-val-review", "command = \"mi-aplicar\"\n");
+        assert_error(&issues, "steps[0].command", "revisa lo destructivo");
+        // con su propio dry_run (el plan equivalente) vuelve a estar cubierto
+        let issues = step_of(
+            "t-val-review",
+            "command = \"mi-aplicar\"\ndry_run = \"mi-plan\"\n",
+        );
+        assert!(errors(&issues).is_empty(), "{:?}", errors(&issues));
+    }
+
+    #[test]
+    fn a_type_without_destructive_phrases_can_rewrite_command_freely() {
+        crate::kind::register(crate::kind::KindSpec {
+            name: "t-val-free",
+            scanned: true,
+            has_services: false,
+            default_command: Some("aplicar"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Source,
+            dry_run: Some("planificar"),
+            detect: &[],
+            binaries: &[],
+            destructive: &[],
+            credentials: &[],
+        })
+        .unwrap();
+        assert!(errors(&step_of("t-val-free", "command = \"mi-aplicar\"\n")).is_empty());
+    }
+
+    // ------------------------------------------------ credenciales de un tipo de plugin
+
+    fn cred_user(name: &'static str) {
+        let uses: &'static [crate::kind::CredUse] = Box::leak(
+            vec![crate::kind::CredUse {
+                kind: "docker",
+                env: &[("REGISTRY_TOKEN", "{TOKEN}")],
+            }]
+            .into_boxed_slice(),
+        );
+        crate::kind::register(crate::kind::KindSpec {
+            name,
+            scanned: false,
+            has_services: false,
+            default_command: Some("true"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Command,
+            dry_run: None,
+            detect: &[],
+            binaries: &[],
+            destructive: &[],
+            credentials: uses,
+        })
+        .unwrap();
+    }
+
+    fn docker_cred(id: &str, prefix: &str) -> String {
+        format!(
+            "[[credentials]]\nid = \"{id}\"\nkind = \"docker\"\nref = \"docker.env#{prefix}\"\n"
+        )
+    }
+
+    fn plan_with(kind: &str, enabled: bool, creds: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n{creds}[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"{kind}\"\nenabled = {enabled}\n"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_plugin_type_accepts_one_credential_of_the_kind_it_uses_or_none() {
+        cred_user("t-vp-one");
+        assert!(errors(&plan_with("t-vp-one", true, &docker_cred("d", "A"))).is_empty());
+        assert!(
+            errors(&plan_with("t-vp-one", true, "")).is_empty(),
+            "ninguna: usa el entorno"
+        );
+    }
+
+    #[test]
+    fn two_credentials_of_the_same_kind_are_ambiguous_for_a_plugin_type() {
+        cred_user("t-vp-two");
+        let creds = format!("{}{}", docker_cred("d1", "A"), docker_cred("d2", "B"));
+        let issues = plan_with("t-vp-two", true, &creds);
+        assert_error(&issues, "credentials", "declara 2 credenciales 'docker'");
+        let msg = errors(&issues).join(" ");
+        assert!(
+            msg.contains("el tipo 't-vp-two' solo puede usar una") && msg.contains("ambientes"),
+            "{msg}"
+        );
+        // un paso desactivado no cuenta
+        assert!(errors(&plan_with("t-vp-two", false, &creds)).is_empty());
+        // y un tipo que no usa credenciales de plugin no se ve afectado
+        assert!(errors(&plan_with("comando\"\ncommand = \"true", true, &creds)).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_credential_kind_in_a_plan_points_to_the_plugins() {
+        let e = Plan::parse(
+            "name = \"x\"\n[[credentials]]\nid = \"a\"\nkind = \"nube\"\nref = \"x.env#A\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("tipo de credencial desconocido 'nube'"), "{e}");
+        assert!(e.contains("baton plugin list"), "{e}");
     }
 }

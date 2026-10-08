@@ -7,6 +7,12 @@ CLAUDE.md
 # el README sí se versiona
 !/README.md
 !/docs/ai-guide.md
+!/docs/plugins.md
+
+# gobernanza del repositorio: GitHub los lee desde el repo
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/.github/pull_request_template.md
 
 # imágenes de diseño: solo locales
 /docs/design/

@@ -9,19 +9,37 @@ use crate::template::render;
 
 /// Comando por defecto de los tipos que lo tienen. Corre una vez por archivo, con `cwd = {dir}`.
 pub fn default_command(kind: StepKind) -> Option<&'static str> {
-    match kind {
-        StepKind::Compose => Some("docker compose up -d"),
-        StepKind::Dockerfile => Some("docker build -t {name}:latest ."),
-        StepKind::Script
-        | StepKind::Sql
-        | StepKind::Comando
-        | StepKind::Check
-        | StepKind::Backup
-        | StepKind::Gate => None,
-    }
+    kind.default_command()
 }
 
 impl Step {
+    /// El comando de solo lectura que `--dry-run` ejecuta de verdad para este paso: el suyo o, si
+    /// no declara uno, el `dry_run` de su tipo (un plugin). Si el paso reescribe `command`, el del
+    /// tipo ya no describe lo que haría y no se usa (ver [`Step::dry_run_shadowed`]).
+    pub fn dry_run_command(&self) -> Option<&str> {
+        if let Some(own) = self.dry_run.as_deref().filter(|d| !d.trim().is_empty()) {
+            return Some(own);
+        }
+        if self.has_own_command() {
+            return None;
+        }
+        self.kind.dry_run_command()
+    }
+
+    /// El tipo tiene un `dry_run` pero este paso lo pierde: reescribe `command` y no declara el
+    /// suyo. Es lo que hay que avisar para que no parezca que se planificó algo.
+    pub fn dry_run_shadowed(&self) -> bool {
+        self.kind.dry_run_command().is_some()
+            && self.has_own_command()
+            && self.dry_run.as_deref().is_none_or(|d| d.trim().is_empty())
+    }
+
+    fn has_own_command(&self) -> bool {
+        self.command
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+    }
+
     /// El comando declarado o, si no hay, el de su tipo.
     pub fn command_template(&self) -> Option<&str> {
         self.command
@@ -458,5 +476,71 @@ mod tests {
         let bare = StepVars::default().for_file(Path::new("bin/deploy"));
         assert_eq!(bare.render("{stem}"), "deploy");
         assert_eq!(StepVars::default().render("{stem}"), "{stem}");
+    }
+
+    // ------------------------------------------------ el dry-run de un paso
+
+    fn planner(name: &'static str) -> StepKind {
+        crate::kind::register(crate::kind::KindSpec {
+            name,
+            scanned: true,
+            has_services: false,
+            default_command: Some("aplicar"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Source,
+            dry_run: Some("planificar"),
+            detect: &[],
+            binaries: &[],
+            destructive: &[],
+            credentials: &[],
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_step_dry_run_wins_over_the_one_of_its_type() {
+        planner("t-sr-wins");
+        let s =
+            step("type = \"t-sr-wins\"\nsource = \"a\"\ndry_run = \"planificar -var-file=x\"\n");
+        assert_eq!(s.dry_run_command(), Some("planificar -var-file=x"));
+        assert!(!s.dry_run_shadowed());
+    }
+
+    #[test]
+    fn the_type_dry_run_is_used_when_the_step_declares_nothing() {
+        planner("t-sr-type");
+        let s = step("type = \"t-sr-type\"\nsource = \"a\"\n");
+        assert_eq!(s.dry_run_command(), Some("planificar"));
+        assert!(!s.dry_run_shadowed());
+    }
+
+    #[test]
+    fn rewriting_command_hides_the_type_dry_run_and_is_flagged() {
+        planner("t-sr-shadow");
+        let s = step("type = \"t-sr-shadow\"\nsource = \"a\"\ncommand = \"mi-aplicar\"\n");
+        assert_eq!(s.dry_run_command(), None);
+        assert!(s.dry_run_shadowed());
+        // un command en blanco no cuenta como reescribirlo
+        let s = step("type = \"t-sr-shadow\"\nsource = \"a\"\ncommand = \"  \"\n");
+        assert_eq!(s.dry_run_command(), Some("planificar"));
+    }
+
+    #[test]
+    fn a_step_dry_run_works_on_any_type_that_runs_a_command() {
+        let s = step("type = \"comando\"\ncommand = \"make\"\ndry_run = \"make -n\"\n");
+        assert_eq!(s.dry_run_command(), Some("make -n"));
+        assert!(
+            !s.dry_run_shadowed(),
+            "su tipo no tiene dry_run: nada que ocultar"
+        );
+        let s = step("type = \"comando\"\ncommand = \"make\"\n");
+        assert_eq!(s.dry_run_command(), None);
+    }
+
+    #[test]
+    fn a_blank_dry_run_counts_as_none() {
+        let s = step("type = \"comando\"\ncommand = \"make\"\ndry_run = \"  \"\n");
+        assert_eq!(s.dry_run_command(), None);
     }
 }

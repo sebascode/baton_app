@@ -36,6 +36,7 @@ pub fn starter_steps(found: &Discovered, target: Option<&str>) -> Vec<Step> {
         .collect();
     let (before, after, off) = script_steps(&deploy_scripts, target);
     let mut steps = before;
+    steps.extend(plugin_steps(&found.plugins, target));
     if !found.dockerfiles.is_empty() {
         steps.push(step(
             "build",
@@ -58,6 +59,44 @@ pub fn starter_steps(found: &Discovered, target: Option<&str>) -> Vec<Step> {
     steps.extend(after);
     steps.extend(off);
     steps
+}
+
+/// Un paso por tipo de plugin que reconoció algo en el proyecto, **desactivado**: un paso de
+/// infraestructura (terraform, bicep...) modifica cosas fuera de esta máquina y activarlo es una
+/// decisión de quien conoce el entorno, no de un escaneo. Van antes de `build` y `servicios`
+/// (la infraestructura se prepara primero). El origen son los archivos encontrados; con muchos se
+/// usan los patrones del tipo para no llenar el plan de rutas.
+fn plugin_steps(hits: &[crate::discover::PluginHit], target: Option<&str>) -> Vec<Step> {
+    hits.iter()
+        .map(|hit| {
+            let label = hit.kind.label();
+            let sources: Vec<std::path::PathBuf> = if hit.files.len() <= MAX_STEP_PER_SCRIPT {
+                hit.files.clone()
+            } else {
+                hit.kind.detect().iter().map(std::path::PathBuf::from).collect()
+            };
+            let mut st = step(
+                &baton_core::slug::slug(label, "plugin"),
+                &capitalize(label),
+                hit.kind,
+                &sources,
+                target,
+            );
+            st.enabled = false;
+            st.description = Some(format!(
+                "Desactivado: el tipo '{label}' viene de un plugin y modifica cosas fuera de esta máquina. Revisa el origen y su comando (baton plugin validate) y actívalo cuando corresponda."
+            ));
+            st
+        })
+        .collect()
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// Un paso `sql` por carpeta con archivos `.sql` (`db/*.sql`), **desactivado**: esos archivos suelen
@@ -273,6 +312,7 @@ fn step(
         rollback: None,
         backup_before: false,
         database: None,
+        dry_run: None,
     }
 }
 
@@ -576,5 +616,106 @@ mod tests {
         let plan = baton_core::Plan::parse(&text).unwrap();
         assert_eq!(plan.name, "app");
         assert_eq!(plan.credentials.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::*;
+    use crate::discover::PluginHit;
+    use baton_core::kind::{KindSpec, Requires, register};
+    use std::path::PathBuf;
+
+    fn kind(name: &'static str, detect: &'static [&'static str]) -> StepKind {
+        register(KindSpec {
+            name,
+            scanned: true,
+            has_services: false,
+            default_command: Some("true"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: Requires::Source,
+            dry_run: None,
+            detect,
+            binaries: &[],
+            destructive: &[],
+            credentials: &[],
+        })
+        .unwrap()
+    }
+
+    fn found(hits: Vec<PluginHit>) -> Discovered {
+        Discovered {
+            plugins: hits,
+            ..Discovered::default()
+        }
+    }
+
+    #[test]
+    fn a_detected_plugin_type_becomes_a_disabled_step_with_its_files_as_source() {
+        let k = kind("t-sc-basic", &["**/main.tf"]);
+        let steps = starter_steps(
+            &found(vec![PluginHit {
+                kind: k,
+                files: vec!["infra/a/main.tf".into(), "infra/b/main.tf".into()],
+            }]),
+            None,
+        );
+        assert_eq!(steps.len(), 1);
+        let s = &steps[0];
+        assert_eq!(
+            (s.id.as_str(), s.name.as_str()),
+            ("t-sc-basic", "T-sc-basic")
+        );
+        assert_eq!(s.kind, k);
+        assert!(
+            !s.enabled,
+            "un paso de infraestructura nunca se propone activo"
+        );
+        assert_eq!(s.source.0, ["infra/a/main.tf", "infra/b/main.tf"]);
+        assert!(s.description.as_deref().unwrap().contains("Desactivado"));
+        assert!(
+            s.description
+                .as_deref()
+                .unwrap()
+                .contains("baton plugin validate")
+        );
+    }
+
+    #[test]
+    fn with_many_files_the_types_patterns_are_used_instead_of_a_long_list() {
+        let k = kind("t-sc-many", &["**/main.tf"]);
+        let files: Vec<PathBuf> = (0..=MAX_STEP_PER_SCRIPT)
+            .map(|i| PathBuf::from(format!("infra/m{i}/main.tf")))
+            .collect();
+        let steps = starter_steps(&found(vec![PluginHit { kind: k, files }]), None);
+        assert_eq!(steps[0].source.0, ["**/main.tf"]);
+        assert!(!steps[0].enabled);
+    }
+
+    #[test]
+    fn plugin_steps_come_before_build_and_services_and_the_rest_is_unchanged() {
+        let k = kind("t-sc-order", &["**/x.tf"]);
+        let mut d = found(vec![PluginHit {
+            kind: k,
+            files: vec!["infra/x.tf".into()],
+        }]);
+        d.dockerfiles = vec!["api/Dockerfile".into()];
+        d.composes = vec!["docker-compose.yml".into()];
+        let ids: Vec<String> = starter_steps(&d, None).into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["t-sc-order", "build", "servicios"]);
+    }
+
+    #[test]
+    fn the_target_is_applied_like_in_any_other_step() {
+        let k = kind("t-sc-target", &["**/y.tf"]);
+        let steps = starter_steps(
+            &found(vec![PluginHit {
+                kind: k,
+                files: vec!["y.tf".into()],
+            }]),
+            Some("prod"),
+        );
+        assert_eq!(steps[0].target.as_deref(), Some("prod"));
     }
 }

@@ -35,15 +35,7 @@ impl CredentialSuggestion {
 }
 
 fn kind_name(kind: CredentialKind) -> &'static str {
-    match kind {
-        CredentialKind::Git => "git",
-        CredentialKind::Docker => "docker",
-        CredentialKind::Ssh => "ssh",
-        CredentialKind::Db => "db",
-        CredentialKind::Sqlite => "sqlite",
-        CredentialKind::Mysql => "mysql",
-        CredentialKind::Otro => "otro",
-    }
+    kind.name()
 }
 
 fn file_for(kind: CredentialKind) -> &'static str {
@@ -54,7 +46,9 @@ fn file_for(kind: CredentialKind) -> &'static str {
         CredentialKind::Db => "db.env",
         CredentialKind::Sqlite => "db.env",
         CredentialKind::Mysql => "db.env",
-        CredentialKind::Otro => "otro.env",
+        // `otro` y los tipos de plugins (que no se sugieren al importar: su credencial la declara
+        // quien escribe el plan)
+        _ => "otro.env",
     }
 }
 

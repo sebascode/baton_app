@@ -143,6 +143,22 @@ Más detalle con `baton --help` y `man baton`.
 
 Si quieres que un asistente (Claude Code, Gemini, DeepSeek u otro) escriba el plan de tu proyecto, pásale [docs/ai-guide.md](docs/ai-guide.md). Explica el formato, las reglas y cómo comprobar el resultado con `baton validate` y `baton run --dry-run`.
 
+### Plugins
+
+Un plugin añade un tipo de paso nuevo (`terraform`, `make`, el que uses) con un archivo de texto que
+dice qué comando ejecutar. No tiene código, así que sirve para cualquier herramienta, en el lenguaje
+que esté escrita. baton conserva la ejecución, las credenciales, los logs y los gates.
+
+```sh
+baton plugin new mi-plugin        # crea un manifiesto para empezar
+baton plugin validate mi-plugin   # lo revisa y muestra lo que ejecutaría
+baton plugin add ./mi-plugin      # lo instala (o github:dueño/repo@v1.0.0, con commit firmado)
+baton plugin list                 # los instalados
+```
+
+Para escribir uno, con un tutorial de cinco minutos, la referencia completa y cómo publicarlo
+firmado en GitHub: [docs/plugins.md](docs/plugins.md).
+
 ## Línea de tiempo
 
 Qué se fue agregando y cuándo (las fechas son las de los commits del repositorio).
@@ -159,6 +175,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-07 | **0.3.0.** Varias bases de datos por plan y SQLite junto a PostgreSQL. Probar la conexión de una credencial `db`. "Abrir shell" en el destino del paso que falló. `baton db`: consultas de solo lectura contra las bases del plan, en tabla, CSV o JSON. |
 | 2026-10-07 | **0.4.0.** MySQL y MariaDB. Sesión interactiva de `baton db`, con historial y comandos para ver tablas y columnas. Instalador de una línea y paquetes `.deb` y `.rpm`. |
 | 2026-10-08 | **0.5.0.** Diseño nuevo de la interfaz: ayuda con `?`, filtro `/` y panel del paso en la vista del plan, ejecución con una celda por paso, resumen con barras de tiempo y teclas `1` a `9` en el fallo. El rollback muestra antes lo que deshace. Ambientes protegidos (`[ambientes.<nombre>] protegido = true`) que piden escribir su nombre. `baton db` muestra un registro por bloque cuando la tabla no cabe. |
+| 2026-10-08 | **0.6.0.** Plugins: un tipo de paso nuevo (`terraform`, `make`, el que uses) descrito con un manifiesto TOML, sin código y para cualquier herramienta. `baton plugin new`, `validate`, `add`, `list` y `remove`. `add` solo instala un commit con firma verificada por GitHub, fija su hash y no carga un plugin que cambió después de instalarlo. `--dry-run` ejecuta de verdad el comando de solo lectura del tipo, y antes de aplicar se pide confirmar si el plan destruye algo. Campo `dry_run` por paso, credenciales que declara el plugin con los nombres de variable de su herramienta, y una guía para quien escribe uno ([docs/plugins.md](docs/plugins.md)). |
 
 ## Desarrollo
 

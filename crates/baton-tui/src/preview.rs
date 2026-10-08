@@ -131,6 +131,9 @@ fn step_detail(step: &Step) -> Vec<(&'static str, String)> {
     if let Some(cmd) = step.command.as_deref().filter(|c| !c.trim().is_empty()) {
         out.push(("comando", cmd.trim().to_string()));
     }
+    if let Some(dry) = step.dry_run.as_deref().filter(|d| !d.trim().is_empty()) {
+        out.push(("dry-run", dry.trim().to_string()));
+    }
     if !step.depends_on.is_empty() {
         out.push(("depende de", step.depends_on.join(", ")));
     }
@@ -155,11 +158,7 @@ fn step_meta(step: &Step) -> String {
     }
     let src: Vec<&str> = step.source.iter().collect();
     match step.kind {
-        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql
-            if !src.is_empty() =>
-        {
-            src.join(", ")
-        }
+        kind if kind.is_scanned() && !src.is_empty() => src.join(", "),
         StepKind::Gate => step
             .gate
             .as_ref()

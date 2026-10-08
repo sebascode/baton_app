@@ -3127,3 +3127,845 @@ fn backing_up_mysql_without_a_database_is_refused_before_running_anything() {
         "{text}"
     );
 }
+
+// ------------------------------------------------- tipos de paso de plugins
+
+/// Registra un tipo como lo haría un plugin: se escanea y trae su comando por defecto. El comando
+/// anota en `$BATON_TRACE` el nombre de la carpeta donde corre.
+fn register_iac() -> baton_core::kind::StepKind {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: "t-iac",
+        scanned: true,
+        has_services: false,
+        default_command: Some("basename \"$PWD\" >> \"$BATON_TRACE\""),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
+        destructive: &[],
+        credentials: &[],
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_plugin_kind_runs_its_default_command_once_per_file_in_each_folder_without_touching_the_runner()
+{
+    register_iac();
+    let fx = Fx::new(&["infra/b/main.tf", "infra/a/main.tf"]);
+    let p = plan(
+        "[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-iac\"\nsource = \"infra/*/main.tf\"\n",
+    );
+    assert_eq!(p.steps[0].kind.label(), "t-iac");
+    let mut options = fx.options(&p);
+    options.env.push((
+        "BATON_TRACE".into(),
+        fx.root().join("trace.txt").display().to_string(),
+    ));
+    let events = run(&fx, &p, options);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("trace.txt")).unwrap(),
+        "a\nb\n"
+    );
+}
+
+#[test]
+fn a_plugin_kind_with_a_source_requirement_is_rejected_without_one() {
+    register_iac();
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-iac\"\n");
+    let issues = baton_core::validate_plan(&p, None);
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("un paso t-iac necesita source")),
+        "{issues:?}"
+    );
+    // y el runner no lo deja arrancar
+    assert!(spawn(fx.input(&p, fx.options(&p))).is_err());
+}
+
+// ------------------------------------------ dry-run de un tipo de plugin
+
+/// Un tipo con comando de aplicar y comando de solo lectura para el dry-run; los dos anotan en
+/// `$BATON_TRACE` lo que corrieron.
+fn register_planner(name: &'static str, command: &'static str, dry_run: &'static str) {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name,
+        scanned: true,
+        has_services: false,
+        default_command: Some(command),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some(dry_run),
+        detect: &[],
+        binaries: &[],
+        destructive: &[],
+        credentials: &[],
+    })
+    .unwrap();
+}
+
+fn planner_options(fx: &Fx, p: &Plan, dry_run: bool) -> RunOptions {
+    let mut o = fx.options(p);
+    o.dry_run = dry_run;
+    o.env.push((
+        "BATON_TRACE".into(),
+        fx.root().join("trace.txt").display().to_string(),
+    ));
+    o
+}
+
+fn trace(fx: &Fx) -> String {
+    fs::read_to_string(fx.root().join("trace.txt")).unwrap_or_default()
+}
+
+const APPLY: &str = "echo \"aplicado:{name}\" >> \"$BATON_TRACE\"";
+const PLAN: &str = "echo \"planeado:{name}\" >> \"$BATON_TRACE\"";
+
+fn planner_plan(kind: &str, extra: &str) -> Plan {
+    plan(&format!(
+        "[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"{kind}\"\nsource = \"infra/*/main.tf\"\n{extra}"
+    ))
+}
+
+#[test]
+fn a_dry_run_executes_the_read_only_command_of_the_type_and_leaves_no_trace() {
+    register_planner("t-dry-basic", APPLY, PLAN);
+    let fx = Fx::new(&["infra/b/main.tf", "infra/a/main.tf"]);
+    let p = planner_plan("t-dry-basic", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // corrió el comando de solo lectura, una vez por archivo, y nunca el de aplicar
+    assert_eq!(trace(&fx), "planeado:a\nplaneado:b\n");
+    // y un dry-run no deja nada en el proyecto
+    assert!(!fx.root().join(".baton").exists());
+    assert!(!fx.root().join(".gitignore").exists());
+}
+
+#[test]
+fn a_real_run_executes_the_apply_command_not_the_dry_run() {
+    register_planner("t-dry-real", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-real", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "aplicado:a\n");
+}
+
+#[test]
+fn a_step_with_its_own_command_does_not_run_the_dry_run_of_its_type_and_says_so() {
+    register_planner("t-dry-override", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-override", "command = \"echo propio\"\n");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "", "no debe ejecutar nada");
+    let shown = all_logs(&events);
+    assert!(shown.contains("declara su propio command"), "{shown}");
+    assert!(shown.contains("dry-run: no se ejecutó"), "{shown}");
+}
+
+#[test]
+fn a_failing_dry_run_command_fails_the_run_like_any_command() {
+    register_planner("t-dry-fails", APPLY, "echo no-hay-credenciales >&2; exit 3");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-fails", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(
+        f.output_tail.join("\n").contains("no-hay-credenciales"),
+        "{f:?}"
+    );
+    assert!(!fx.root().join(".baton").exists());
+}
+
+#[test]
+fn a_dry_run_still_goes_through_the_gate_of_the_step() {
+    register_planner("t-dry-gate", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan(
+        "t-dry-gate",
+        "[steps.gate]\nmode = \"manual\"\nmessage = \"¿Seguir?\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado:a\n");
+    assert!(
+        all_logs(&events).contains("gate manual confirmado sin preguntar"),
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn a_plugin_command_gets_only_the_credentials_it_mentions_even_in_a_dry_run() {
+    // el dry_run menciona GHCR_TOKEN y lista qué variables GHCR_* recibió
+    register_planner(
+        "t-dry-creds",
+        APPLY,
+        "echo \"token=$GHCR_TOKEN\"; env | grep '^GHCR_' | cut -d= -f1 >> \"$BATON_TRACE\"",
+    );
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-dry-creds\"\nsource = \"infra/*/main.tf\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // recibió la que menciona y no las demás de la credencial (registro, usuario)
+    assert_eq!(trace(&fx), "GHCR_TOKEN\n");
+    // y el valor no aparece en nada de lo que se muestra
+    assert!(
+        !all_logs(&events).contains("ghp_secreto_12345"),
+        "{}",
+        all_logs(&events)
+    );
+    assert!(!fx.root().join(".baton/logs").exists());
+}
+
+#[test]
+fn a_dry_run_without_a_plugin_dry_run_still_resolves_nothing() {
+    // un paso nativo: ni se ejecuta ni se tocan las credenciales
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"echo $GHCR_TOKEN\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.dry_run = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert!(all_logs(&events).contains("dry-run: no se ejecutó"));
+}
+
+// -------------------------------------------- dry_run declarado en el paso
+
+#[test]
+fn a_step_dry_run_replaces_the_one_of_the_type_and_lets_the_step_rewrite_its_command() {
+    register_planner("t-step-dry", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    // el caso de siempre: se agregan variables al comando y, con ellas, también al plan
+    let p = planner_plan(
+        "t-step-dry",
+        "command = \"echo \\\"aplicado-con-vars:{name}\\\" >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo \\\"planeado-con-vars:{name}\\\" >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let dry = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&dry), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado-con-vars:a\n");
+    assert!(
+        !all_logs(&dry).contains("declara su propio command"),
+        "{}",
+        all_logs(&dry)
+    );
+    assert!(
+        !fx.root().join(".baton").exists(),
+        "un dry-run no deja rastro"
+    );
+
+    fs::remove_file(fx.root().join("trace.txt")).unwrap();
+    let real = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&real), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "aplicado-con-vars:a\n",
+        "el dry_run del paso no corre fuera de un dry-run"
+    );
+}
+
+#[test]
+fn a_step_dry_run_works_on_a_native_type_that_had_none() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo aplicado >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo planeado >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado\n");
+}
+
+#[test]
+fn a_native_step_without_a_dry_run_still_executes_nothing() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo aplicado >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "");
+    assert!(all_logs(&events).contains("dry-run: no se ejecutó"));
+}
+
+#[test]
+fn a_step_dry_run_gets_the_credentials_it_mentions_and_nothing_leaks_to_the_screen() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n\
+         dry_run = \"echo \\\"token=$GHCR_TOKEN\\\"; env | grep '^GHCR_' | cut -d= -f1 >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "GHCR_TOKEN\n");
+    assert!(
+        !all_logs(&events).contains("ghp_secreto_12345"),
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn a_failing_step_dry_run_fails_the_run_and_still_leaves_no_trace() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n\
+         dry_run = \"echo sin-permisos >&2; exit 4\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(
+        failure(&events)
+            .output_tail
+            .join("\n")
+            .contains("sin-permisos")
+    );
+    assert!(!fx.root().join(".baton").exists());
+}
+
+// ------------------------------- lo destructivo en el plan de un tipo de plugin
+
+/// Un tipo que revisa su plan: el dry_run anota `planeado` y muestra el archivo `plan.txt` de la
+/// carpeta (lo que escribe cada prueba); el comando anota `aplicado`.
+fn register_reviewer(name: &'static str) {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name,
+        scanned: true,
+        has_services: false,
+        default_command: Some(APPLY),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some(
+            "echo \"planeado:{name}\" >> \"$BATON_TRACE\"; cat plan.txt 2>/dev/null; true",
+        ),
+        detect: &[],
+        binaries: &[],
+        destructive: &["will be destroyed", "must be replaced"],
+        credentials: &[],
+    })
+    .unwrap();
+}
+
+const DESTROYS: &str =
+    "Plan: 0 to add, 0 to change, 1 to destroy.\n  # aws_instance.web will be destroyed\n";
+const CALM: &str =
+    "Plan: 1 to add, 0 to change, 0 to destroy.\n  # aws_instance.web will be created\n";
+
+fn write_plan(fx: &Fx, folder: &str, text: &str) {
+    fs::write(fx.root().join(format!("infra/{folder}/plan.txt")), text).unwrap();
+}
+
+fn reviewing_options(fx: &Fx, p: &Plan, interactive: bool, assume_yes: bool) -> RunOptions {
+    let mut o = planner_options(fx, p, false);
+    o.interactive = interactive;
+    o.assume_yes = assume_yes;
+    o.backup = false;
+    o
+}
+
+fn answering(handle: RunHandle, yes: bool) -> (Vec<RunEvent>, usize) {
+    let mut asked = 0;
+    let events = drive(handle, |ev, tx| {
+        if let RunEvent::GateAsk { .. } = ev {
+            asked += 1;
+            tx.send(RunCommand::ConfirmGate(yes)).unwrap();
+        }
+    });
+    (events, asked)
+}
+
+#[test]
+fn a_plan_that_destroys_nothing_runs_without_asking() {
+    register_reviewer("t-rev-calm");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", CALM);
+    let p = planner_plan("t-rev-calm", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 0, "\"0 to destroy\" no es una coincidencia");
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\naplicado:a\n",
+        "planifica y luego aplica"
+    );
+    assert!(all_logs(&events).contains("plan revisado: no destruye ni reemplaza nada"));
+}
+
+#[test]
+fn a_plan_that_destroys_asks_and_applies_only_after_a_yes() {
+    register_reviewer("t-rev-yes");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-yes", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 1);
+    assert_eq!(trace(&fx), "planeado:a\naplicado:a\n");
+    let shown = all_logs(&events);
+    assert!(
+        shown.contains("atención: infra/a/main.tf: # aws_instance.web will be destroyed"),
+        "{shown}"
+    );
+    let ask = events
+        .iter()
+        .find_map(|e| match e {
+            RunEvent::GateAsk { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(ask.contains("destruye o reemplaza 1 recurso(s)"), "{ask}");
+}
+
+#[test]
+fn declining_the_destruction_applies_nothing_and_is_an_abort_not_a_failure() {
+    register_reviewer("t-rev-no");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-no", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        false,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Aborted);
+    assert_eq!(asked, 1);
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\n",
+        "solo se planificó: no se aplicó nada"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, RunEvent::StepFailed { .. }))
+    );
+}
+
+#[test]
+fn without_a_terminal_a_destroying_plan_fails_before_applying_unless_assume_yes() {
+    register_reviewer("t-rev-ci");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-ci", "");
+
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(
+        f.message.contains("no hay terminal para confirmar"),
+        "{}",
+        f.message
+    );
+    assert!(f.message.contains("--assume-yes"), "{}", f.message);
+    assert!(
+        f.output_tail.join("\n").contains("will be destroyed"),
+        "{f:?}"
+    );
+    assert_eq!(trace(&fx), "planeado:a\n", "falla antes de aplicar");
+
+    fs::remove_file(fx.root().join("trace.txt")).unwrap();
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado:a\naplicado:a\n");
+    assert!(
+        all_logs(&events).contains("atención: infra/a/main.tf"),
+        "queda escrito qué había"
+    );
+}
+
+#[test]
+fn a_coloured_plan_is_still_recognised() {
+    register_reviewer("t-rev-colour");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    fs::write(
+        fx.root().join("infra/a/plan.txt"),
+        "  # aws_instance.web will be \u{1b}[1m\u{1b}[31mdestroyed\u{1b}[0m\n",
+    )
+    .unwrap();
+    let p = planner_plan("t-rev-colour", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(trace(&fx), "planeado:a\n");
+}
+
+#[test]
+fn only_the_folders_that_destroy_are_reported_and_all_are_planned_before_applying() {
+    register_reviewer("t-rev-many");
+    let fx = Fx::new(&["infra/a/main.tf", "infra/b/main.tf", "infra/c/main.tf"]);
+    write_plan(&fx, "a", CALM);
+    write_plan(&fx, "b", DESTROYS);
+    write_plan(&fx, "c", "  # x must be replaced\n");
+    let p = planner_plan("t-rev-many", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 1, "una sola pregunta para todo el paso");
+    // primero se planifican todas, después se aplican todas
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\nplaneado:b\nplaneado:c\naplicado:a\naplicado:b\naplicado:c\n"
+    );
+    let shown = all_logs(&events);
+    assert!(
+        shown.contains("infra/b/main.tf: # aws_instance.web will be destroyed"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("infra/c/main.tf: # x must be replaced"),
+        "{shown}"
+    );
+    assert!(!shown.contains("atención: infra/a/main.tf"), "{shown}");
+}
+
+#[test]
+fn a_dry_run_shows_what_would_be_destroyed_without_asking_or_applying() {
+    register_reviewer("t-rev-dry");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-dry", "");
+    let mut o = planner_options(&fx, &p, true);
+    o.interactive = true;
+    let (events, asked) = answering(spawn(fx.input(&p, o)).unwrap(), false);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 0);
+    assert_eq!(trace(&fx), "planeado:a\n");
+    assert!(
+        all_logs(&events)
+            .contains("atención: infra/a/main.tf: # aws_instance.web will be destroyed")
+    );
+    assert!(!fx.root().join(".baton").exists());
+}
+
+#[test]
+fn a_failing_plan_stops_the_step_before_applying() {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: "t-rev-broken",
+        scanned: true,
+        has_services: false,
+        default_command: Some(APPLY),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some("echo sin-credenciales >&2; exit 2"),
+        detect: &[],
+        binaries: &[],
+        destructive: &["will be destroyed"],
+        credentials: &[],
+    })
+    .unwrap();
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-rev-broken", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(
+        failure(&events)
+            .output_tail
+            .join("\n")
+            .contains("sin-credenciales")
+    );
+    assert_eq!(trace(&fx), "", "no se aplicó nada");
+}
+
+#[test]
+fn the_step_own_dry_run_is_what_gets_reviewed_when_it_rewrites_the_command() {
+    register_reviewer("t-rev-own");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan(
+        "t-rev-own",
+        "command = \"echo propio >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo \\\"  # x will be destroyed\\\"; echo plan-propio >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Failed,
+        "su plan propio también se revisa"
+    );
+    assert_eq!(trace(&fx), "plan-propio\n");
+}
+
+#[test]
+fn a_type_without_destructive_phrases_is_not_planned_before_running() {
+    register_planner("t-rev-none", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-rev-none", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "aplicado:a\n", "ni siquiera corre su dry_run");
+}
+
+// ------------------------------- credenciales declaradas por un plugin
+
+use baton_core::credential::FieldSpec;
+
+/// Un tipo de credencial `nube` (como lo definiría un plugin) y un tipo de paso que lo usa, con las
+/// variables que espera su herramienta. Su comando vuelca esas variables en `$BATON_TRACE`.
+fn register_cloud(step: &'static str, kind: &'static str, command: &'static str) {
+    static FIELDS: &[FieldSpec] = &[
+        FieldSpec {
+            key: "ACCESS_KEY_ID",
+            label: "access key id",
+            secret: false,
+            optional: false,
+        },
+        FieldSpec {
+            key: "SECRET_ACCESS_KEY",
+            label: "secret access key",
+            secret: true,
+            optional: false,
+        },
+        FieldSpec {
+            key: "REGION",
+            label: "region",
+            secret: false,
+            optional: true,
+        },
+    ];
+    baton_core::credential_kind::register(baton_core::credential_kind::PluginCredential {
+        name: kind,
+        fields: FIELDS,
+    })
+    .unwrap();
+    let uses: &'static [baton_core::kind::CredUse] = Box::leak(
+        vec![baton_core::kind::CredUse {
+            kind,
+            env: &[
+                ("CLOUD_KEY", "{ACCESS_KEY_ID}"),
+                ("CLOUD_SECRET", "{SECRET_ACCESS_KEY}"),
+                ("CLOUD_REGION", "{REGION}"),
+                (
+                    "CLOUD_ENDPOINT",
+                    "https://{REGION}.nube.example/{ACCESS_KEY_ID}",
+                ),
+            ],
+        }]
+        .into_boxed_slice(),
+    );
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: step,
+        scanned: false,
+        has_services: false,
+        default_command: Some(command),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Command,
+        dry_run: Some(command),
+        detect: &[],
+        binaries: &[],
+        destructive: &[],
+        credentials: uses,
+    })
+    .unwrap();
+}
+
+fn save_cloud(fx: &Fx, prefix_file: &str, fields: &[(&str, &str)]) {
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &prefix_file.parse().unwrap(),
+        &fields
+            .iter()
+            .map(|(k, v)| (*k, v.to_string()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+}
+
+const DUMP: &str = "env | grep -E '^(CLOUD_|PROD_APP_)' | sort >> \"$BATON_TRACE\"";
+
+fn cloud_plan(kind: &str, step_type: &str, extra_steps: &str) -> Plan {
+    plan(&format!(
+        "[[credentials]]\nid = \"nube\"\nkind = \"{kind}\"\nref = \"servers.env#PROD_APP\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"{step_type}\"\n{extra_steps}"
+    ))
+}
+
+#[test]
+fn a_plugin_step_gets_the_credential_under_the_names_its_tool_expects_and_nothing_else() {
+    register_cloud("t-cr-step", "t-cr-nube", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+            ("region", "chile-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube", "t-cr-step", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // los cuatro nombres que espera la herramienta, con los valores de la credencial...
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_ENDPOINT=https://chile-1.nube.example/AKIA123\nCLOUD_KEY=AKIA123\nCLOUD_REGION=chile-1\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    // ...y no las variables con prefijo (PROD_APP_*), que el comando no menciona
+    assert!(!trace(&fx).contains("PROD_APP_"));
+}
+
+#[test]
+fn an_optional_field_left_empty_leaves_out_the_variables_that_use_it() {
+    register_cloud("t-cr-opt", "t-cr-nube-opt", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-opt", "t-cr-opt", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+}
+
+#[test]
+fn the_secret_never_shows_in_what_the_command_prints_or_in_the_log_file() {
+    register_cloud(
+        "t-cr-redact",
+        "t-cr-nube-redact",
+        "echo \"clave=$CLOUD_SECRET region=$CLOUD_REGION\"",
+    );
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+            ("region", "chile-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-redact", "t-cr-redact", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let shown = all_logs(&events);
+    assert!(!shown.contains("s3cr3t-valor-1"), "{shown}");
+    assert!(
+        shown.contains("region=chile-1"),
+        "lo que no es secreto se ve: {shown}"
+    );
+    let log = fs::read_dir(fx.root().join(".baton/logs"))
+        .unwrap()
+        .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(!log.contains("s3cr3t-valor-1"), "{log}");
+}
+
+#[test]
+fn without_a_credential_in_the_plan_the_step_runs_and_receives_nothing() {
+    register_cloud("t-cr-none", "t-cr-nube-none", DUMP);
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-cr-none\"\n");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "las credenciales son opcionales"
+    );
+    assert_eq!(trace(&fx), "");
+}
+
+#[test]
+fn other_steps_and_other_kinds_of_credential_do_not_get_the_plugin_variables() {
+    register_cloud("t-cr-other", "t-cr-nube-other", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(&format!(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\
+         [[credentials]]\nid = \"nube\"\nkind = \"t-cr-nube-other\"\nref = \"servers.env#PROD_APP\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-cr-other\"\n\n\
+         [[steps]]\nid = \"otro\"\nname = \"Otro\"\ntype = \"comando\"\ncommand = '''{DUMP}'''\n"
+    ));
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // el paso `comando` no recibe CLOUD_*; el de plugin no recibe nada de la credencial docker
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    assert!(!trace(&fx).contains("GHCR_"));
+}
+
+#[test]
+fn a_dry_run_that_executes_something_delivers_the_credential_too() {
+    register_cloud("t-cr-dry", "t-cr-nube-dry", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-dry", "t-cr-dry", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    assert!(
+        !fx.root().join(".baton/logs").exists(),
+        "un dry-run no deja log"
+    );
+}
+
+#[test]
+fn a_missing_required_field_stops_a_run_without_a_terminal_naming_the_credential() {
+    register_cloud("t-cr-ci", "t-cr-nube-ci", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(&fx, "servers.env#PROD_APP", &[("access_key_id", "AKIA123")]);
+    let p = cloud_plan("t-cr-nube-ci", "t-cr-ci", "");
+    let err = match spawn(fx.input(&p, planner_options(&fx, &p, false))) {
+        Ok(_) => panic!("debía rechazarse"),
+        Err(e) => format!("{e:?}"),
+    };
+    assert!(err.contains("PROD_APP_SECRET_ACCESS_KEY"), "{err}");
+    assert_eq!(trace(&fx), "");
+}
