@@ -747,3 +747,50 @@ fn step_status_helpers_agree_with_the_design_table() {
     assert_eq!(theme::status_symbol(StepStatus::Skipped), "»");
     assert_eq!(theme::status_color(StepStatus::Skipped), Color::DarkGray);
 }
+
+// ----------------------------------------------------- ejecución: barra y gates
+
+#[test]
+fn running_shows_a_counter_and_one_cell_per_step() {
+    let s = fake::running();
+    let t = text(&render(100, 30, |b, a| crate::run_view::render(&s, b, a)));
+    assert!(t.contains(" 3/7"), "{t}");
+    assert!(t.contains("✓✓✓◐◆○○  7 se ejecutan · 2 gates"), "{t}");
+}
+
+#[test]
+fn a_retrying_gate_is_explained_above_the_log() {
+    let mut s = fake::running();
+    let gate = s
+        .rows
+        .iter()
+        .position(|r| r.info.name.starts_with("Gate"))
+        .unwrap();
+    s.rows[gate].gate = Some((3, 6));
+    let t = text(&render(100, 30, |b, a| crate::run_view::render(&s, b, a)));
+    assert!(
+        t.contains("◆ Gate · intento 3 de 6 · Gate: healthcheck"),
+        "{t}"
+    );
+    // y el log sigue debajo
+    assert!(t.contains("log en vivo"), "{t}");
+}
+
+#[test]
+fn many_steps_show_counts_instead_of_a_sentence() {
+    use baton_core::events::StepStatus;
+    let statuses: Vec<StepStatus> = (0..30)
+        .map(|i| {
+            if i < 22 {
+                StepStatus::Done
+            } else {
+                StepStatus::Pending
+            }
+        })
+        .collect();
+    let counts = crate::widgets::status_counts(&statuses);
+    assert_eq!(counts, [(22, StepStatus::Done), (8, StepStatus::Pending)]);
+    // si no caben, se corta con … en vez de salirse
+    let line = crate::widgets::cell_rail(10, &statuses);
+    assert_eq!(line.width(), 10);
+}

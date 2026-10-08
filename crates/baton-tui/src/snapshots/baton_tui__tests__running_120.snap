@@ -4,24 +4,24 @@ expression: text(&buf)
 ---
 ╭─ ▶ baton  plan: instalar · ./stack-produccion ──────────────────────────────────────── [backup ok] [rollback listo] ─╮
 │ Paso 4 de 7 · Levantar DB                                                                                   00:02:41 │
-│ ████████████████ ████████████████ ████████████████ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ░░░░░░░░░░░░░░░ ░░░░░░░░░░░░░░░ │
+│ ████████████████ ███████████████ ███████████████ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ ░░░░░░░░░░░░░░░ ░░░░░░░░░░░░░░░ 3/7 │
+│ ✓✓✓◐◆○○  7 se ejecutan · 2 gates                                                                                     │
 ├───────────────────────────────────────────────────────────────────────────────────────┬──────────────────────────────┤
-│ log en vivo · db/docker-compose.yml                                                   │ pipeline                     │
-│                                                                                       │ ✓ Pre-checks                 │
-│ [14:02:11] ▸ docker compose -f db/docker-compose.yml up -d                            │   docker, puertos · 4s       │
-│ [14:02:12]   Network stack_net  Created                                               │ ✓ Backup volúmenes           │
-│ [14:02:12]   Volume pg_data  Created                                                  │   opcional · 38s             │
-│ [14:02:14]   Container postgres  Started                                              │ ✓ Build imágenes             │
-│ [14:02:14]   Container redis  Started                                                 │   3 Dockerfiles · 1m52s      │
-│ [14:02:15] ✓ 2/2 contenedores arriba                                                  │›◐ Levantar DB                │
-│ [14:02:15] ▸ gate: healthcheck postgres (timeout 60s)                                 │   db/docker-compose.yml      │
-│ [14:02:20]   intento 1/6 · esperando pg_isready…                                      │ ◆ Gate: healthcheck          │
-│ [14:02:25]   intento 2/6 · esperando pg_isready…                                      │   esperando                  │
-│ [14:02:30]   intento 3/6 · ▌                                                          │ ○ Levantar servicios         │
-│                                                                                       │   services/*/compose         │
-│                                                                                       │ ○ Smoke tests                │
-│                                                                                       │   últ. ejecución: ok         │
-│                                                                                       │                              │
+│ ◆ Gate · intento 3 de 6 · Gate: healthcheck                                           │ pipeline                     │
+│   ◐ pg_isready command                                                                │ ✓ Pre-checks                 │
+│                                                                                       │   docker, puertos · 4s       │
+│ log en vivo · db/docker-compose.yml                                                   │ ✓ Backup volúmenes           │
+│                                                                                       │   opcional · 38s             │
+│ [14:02:11] ▸ docker compose -f db/docker-compose.yml up -d                            │ ✓ Build imágenes             │
+│ [14:02:12]   Network stack_net  Created                                               │   3 Dockerfiles · 1m52s      │
+│ [14:02:12]   Volume pg_data  Created                                                  │›◐ Levantar DB                │
+│ [14:02:14]   Container postgres  Started                                              │   db/docker-compose.yml      │
+│ [14:02:14]   Container redis  Started                                                 │ ◆ Gate: healthcheck          │
+│ [14:02:15] ✓ 2/2 contenedores arriba                                                  │   esperando                  │
+│ [14:02:15] ▸ gate: healthcheck postgres (timeout 60s)                                 │ ○ Levantar servicios         │
+│ [14:02:20]   intento 1/6 · esperando pg_isready…                                      │   services/*/compose         │
+│ [14:02:25]   intento 2/6 · esperando pg_isready…                                      │ ○ Smoke tests                │
+│ [14:02:30]   intento 3/6 · ▌                                                          │   últ. ejecución: ok         │
 │                                                                                       │                              │
 │                                                                                       │                              │
 │                                                                                       │                              │

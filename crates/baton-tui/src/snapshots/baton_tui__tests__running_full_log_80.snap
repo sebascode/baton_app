@@ -4,7 +4,8 @@ expression: text(&buf)
 ---
 ╭─ ▶ baton  plan: instalar · ./stack-produccion ───────────────────────────────╮
 │ Paso 4 de 7 · Levantar DB                                           00:02:41 │
-│ ██████████ ██████████ ██████████ ▓▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓▓ ░░░░░░░░░░ ░░░░░░░░░░ │
+│ ██████████ ██████████ ██████████ ▓▓▓▓▓▓▓▓▓ ▓▓▓▓▓▓▓▓▓ ░░░░░░░░░ ░░░░░░░░░ 3/7 │
+│ ✓✓✓◐◆○○  7 se ejecutan · 2 gates                                             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ log completo · Levantar DB                                                   │
 │                                                                              │
@@ -18,7 +19,6 @@ expression: text(&buf)
 │ [14:02:20]   intento 1/6 · esperando pg_isready…                             │
 │ [14:02:25]   intento 2/6 · esperando pg_isready…                             │
 │ [14:02:30]   intento 3/6 · ▌                                                 │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
