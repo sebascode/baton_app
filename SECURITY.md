@@ -15,6 +15,7 @@ conexiones que puede hacer, y cada una la inicia la persona o está configurada 
 
 | Qué | A dónde | Cuándo |
 |---|---|---|
+| `baton plugin add github:...` | `api.github.com` y `raw.githubusercontent.com`, con `curl` (solo https) | Solo si se ejecuta el comando, en una terminal y tras mostrar los comandos del plugin |
 | `baton update` | `github.com/sebascode/baton_app` (releases), con `curl` | Solo si se ejecuta el comando |
 | `ssh`, `rsync` | Los destinos ssh declarados en `.baton/config.toml` | Al ejecutar un paso en ese destino |
 | `docker` con un contexto | El contexto elegido en el destino | Al ejecutar un paso en ese destino |
@@ -29,6 +30,15 @@ Garantías que el código mantiene y que una revisión debe proteger:
   entrada estándar en ssh.
 - Los valores de campos secretos se tachan en todo lo que se muestra o se guarda.
 - Un comando solo recibe las credenciales que menciona.
+
+Plugins (`baton plugin add`):
+
+- Solo se instala el commit de un repositorio de GitHub cuya firma GitHub haya verificado, y el
+  manifiesto se baja de ese SHA exacto, no de un tag que pueda moverse.
+- Nada se instala sin que una persona, en una terminal, vea antes los comandos que va a ejecutar.
+- `plugins.lock` guarda el origen, el commit y el sha256 de lo instalado; un manifiesto que cambia
+  después ya no se carga, y si el registro no se puede leer no se carga ninguno.
+- Una firma verificada prueba de quién es el commit, no que sus comandos sean inofensivos.
 
 Si un cambio agrega una conexión nueva o altera una de estas garantías, debe quedar escrito en el
 PR y reflejado en esta tabla.

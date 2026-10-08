@@ -36,7 +36,7 @@ pub fn list() -> ExitCode {
     println!("plugins en {}", dir.display());
     for plugin in &installed {
         match (&plugin.manifest, plugin.is_valid()) {
-            (Some(m), true) => {
+            (Some(m), true) if plugin.is_loadable() => {
                 let description = if m.description.is_empty() {
                     String::new()
                 } else {
@@ -48,9 +48,13 @@ pub fn list() -> ExitCode {
                     m.version,
                     m.type_name()
                 );
+                println!("      {}", origin_line(plugin));
             }
             _ => {
                 println!("  ✗ {}", plugin.folder);
+                if let Some(why) = plugin.lock_problem() {
+                    println!("      {why}");
+                }
                 for d in plugin.diagnostics.iter().filter(|d| d.is_error()) {
                     println!("      {d}");
                 }
@@ -58,6 +62,26 @@ pub fn list() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// De dónde vino un plugin instalado, según su registro.
+fn origin_line(plugin: &baton_store::plugins::Installed) -> String {
+    match &plugin.entry {
+        Some(e) => {
+            let version = e
+                .git_ref
+                .as_deref()
+                .map(|r| format!("@{r}"))
+                .unwrap_or_default();
+            let commit = e
+                .commit
+                .as_deref()
+                .map(|c| format!(" · commit {}", &c[..c.len().min(12)]))
+                .unwrap_or_default();
+            format!("{}{version}{commit} · firma: {}", e.source, e.verification)
+        }
+        None => "sin registro (no lo instaló baton plugin add)".to_string(),
+    }
 }
 
 /// `ruta` es el manifiesto o la carpeta del plugin.
@@ -92,34 +116,49 @@ pub fn validate(path: &Path) -> ExitCode {
 
 /// Lo que el plugin va a ejecutar, tal cual: es lo que hay que leer antes de instalarlo.
 fn summary(m: &Manifest) {
+    for (label, value) in describe(m) {
+        println!("  {label}: {value}");
+    }
+}
+
+/// Las líneas que describen lo que hace un manifiesto: `(etiqueta, valor)`. Las usan `validate`,
+/// `plugin add` (para que se lea antes de instalar) y la comparación al actualizar.
+pub fn describe(m: &Manifest) -> Vec<(&'static str, String)> {
     let t = &m.step_type;
     let scanned = if t.scanned {
         " (una vez por archivo)"
     } else {
         ""
     };
-    println!("  tipo: {}{scanned}", m.type_name());
-    println!("  comando: {}", t.command.trim());
-    match &t.dry_run {
-        Some(d) => println!("  dry-run: {}", d.trim()),
-        None => {
-            println!("  dry-run: no define uno (con --dry-run no se ejecuta nada de este tipo)")
-        }
-    }
+    let mut out = vec![
+        ("tipo", format!("{}{scanned}", m.type_name())),
+        ("comando", t.command.trim().to_string()),
+        (
+            "dry-run",
+            match &t.dry_run {
+                Some(d) => d.trim().to_string(),
+                None => "no define uno (con --dry-run no se ejecuta nada de este tipo)".to_string(),
+            },
+        ),
+    ];
     if !t.destructive.is_empty() {
-        println!(
-            "  destructivo: antes de ejecutar corre el dry-run y pide confirmar si dice: {}",
-            t.destructive
-                .iter()
-                .map(|p| format!("\"{p}\""))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        out.push((
+            "destructivo",
+            format!(
+                "antes de ejecutar corre el dry-run y pide confirmar si dice: {}",
+                t.destructive
+                    .iter()
+                    .map(|p| format!("\"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
     }
     if !m.requires.is_empty() {
-        println!("  requiere: {}", m.requires.join(", "));
+        out.push(("requiere", m.requires.join(", ")));
     }
     if !t.detect.is_empty() {
-        println!("  detecta: {}", t.detect.join(", "));
+        out.push(("detecta", t.detect.join(", ")));
     }
+    out
 }
