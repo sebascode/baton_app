@@ -47,3 +47,8 @@ pub use config_view::ConfigState;
 pub use editor::EditorState;
 pub use preview::{PreviewState, PreviewStep, RunRequest, Tag, plan_step_infos};
 pub use run::RunState;
+
+/// Ancho de la terminal en columnas, si se puede saber (para quien dibuja fuera de la TUI).
+pub fn terminal_width() -> Option<u16> {
+    ratatui::crossterm::terminal::size().ok().map(|(w, _)| w)
+}
