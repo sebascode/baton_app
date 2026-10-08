@@ -1076,19 +1076,10 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     // Un script sin comando declarado se ejecuta con el intérprete de su shebang; los demás tipos
     // usan su comando (declarado o el de su tipo).
     let template = ps.step.command_template();
-    let is_script = ps.step.kind == StepKind::Script;
     let is_sql = ps.step.kind == StepKind::Sql;
     if !skip_action
-        && matches!(
-            ps.step.kind,
-            StepKind::Compose
-                | StepKind::Dockerfile
-                | StepKind::Script
-                | StepKind::Sql
-                | StepKind::Comando
-                | StepKind::Check
-        )
-        && (template.is_some() || is_script || is_sql)
+        && ps.step.kind.runs_command()
+        && (template.is_some() || ps.step.kind.has_own_interpreter())
     {
         if is_sql {
             match confirm_destructive(ctx, cmds, i).await {

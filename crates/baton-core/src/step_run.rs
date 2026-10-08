@@ -9,16 +9,7 @@ use crate::template::render;
 
 /// Comando por defecto de los tipos que lo tienen. Corre una vez por archivo, con `cwd = {dir}`.
 pub fn default_command(kind: StepKind) -> Option<&'static str> {
-    match kind {
-        StepKind::Compose => Some("docker compose up -d"),
-        StepKind::Dockerfile => Some("docker build -t {name}:latest ."),
-        StepKind::Script
-        | StepKind::Sql
-        | StepKind::Comando
-        | StepKind::Check
-        | StepKind::Backup
-        | StepKind::Gate => None,
-    }
+    kind.default_command()
 }
 
 impl Step {

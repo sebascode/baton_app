@@ -155,11 +155,7 @@ fn step_meta(step: &Step) -> String {
     }
     let src: Vec<&str> = step.source.iter().collect();
     match step.kind {
-        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql
-            if !src.is_empty() =>
-        {
-            src.join(", ")
-        }
+        kind if kind.is_scanned() && !src.is_empty() => src.join(", "),
         StepKind::Gate => step
             .gate
             .as_ref()

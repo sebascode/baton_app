@@ -11,6 +11,7 @@ use petgraph::graph::DiGraph;
 
 use crate::config::{Config, FILE_PROVIDER, LOCAL_TARGET, SecretProvider, Target};
 use crate::issue::{Issue, Seg};
+use crate::kind::Requires;
 use crate::path;
 use crate::plan::{
     Check, CheckKind, Condition, DatabaseBackup, Gate, GateMode, Plan, Step, StepKind,
@@ -555,8 +556,8 @@ fn validate_step(
         }
     }
 
-    match step.kind {
-        StepKind::Compose | StepKind::Dockerfile | StepKind::Script | StepKind::Sql => {
+    match step.kind.requires() {
+        Requires::Source => {
             if step.source.is_empty() {
                 out.push(Issue::error(
                     p("source"),
@@ -567,7 +568,7 @@ fn validate_step(
                 ));
             }
         }
-        StepKind::Comando | StepKind::Check => {
+        Requires::Command => {
             if step.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
                 out.push(Issue::error(
                     p("command"),
@@ -575,7 +576,7 @@ fn validate_step(
                 ));
             }
         }
-        StepKind::Backup => {
+        Requires::BackupSection => {
             if plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
                 out.push(Issue::error(
                     p("type"),
@@ -583,7 +584,7 @@ fn validate_step(
                 ));
             }
         }
-        StepKind::Gate => {
+        Requires::Gate => {
             if step.gate.is_none() {
                 out.push(Issue::error(
                     p("gate"),
@@ -603,6 +604,7 @@ fn validate_step(
                 }
             }
         }
+        Requires::Nothing => {}
     }
 
     if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.is_empty()) {

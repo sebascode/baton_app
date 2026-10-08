@@ -12,6 +12,7 @@ pub mod events;
 pub mod export;
 pub mod import;
 pub mod issue;
+pub mod kind;
 pub mod locate;
 pub mod mask;
 pub mod plan;

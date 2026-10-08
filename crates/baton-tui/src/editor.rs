@@ -19,17 +19,14 @@ use crate::widgets::{self, frame, hsep_range, justify, pad, truncate, vline_to_s
 
 const LIST_W: u16 = 18;
 
-/// Tipos de paso en el orden de la maqueta (el segundo valor marca una opción deshabilitada).
-const KINDS: [(&str, bool); 8] = [
-    ("compose", false),
-    ("dockerfile", false),
-    ("script", false),
-    ("sql", false),
-    ("comando", false),
-    ("check", false),
-    ("backup", false),
-    ("gate", false),
-];
+/// Tipos de paso que ofrece el selector: primero los nativos en el orden de la maqueta, después los
+/// de plugins (el segundo valor marca una opción deshabilitada).
+fn kind_options() -> Vec<(&'static str, bool)> {
+    StepKind::all()
+        .into_iter()
+        .map(|k| (k.label(), false))
+        .collect()
+}
 
 // Posición de cada campo en el formulario de un paso.
 const F_NAME: usize = 0;
@@ -96,7 +93,7 @@ impl StepDraft {
         let source = Field::text("origen", &spec.source);
         let mut fields = vec![
             Field::text("nombre", &spec.name),
-            Field::choice("tipo", &KINDS, &spec.kind),
+            Field::choice("tipo", &kind_options(), &spec.kind),
             source,
             Field::drop("destino", &target_refs, &spec.target),
             Field::text("comando", &spec.command),
@@ -1249,16 +1246,7 @@ impl EditorState {
 }
 
 fn kind_of(label: &str) -> StepKind {
-    match label {
-        "compose" => StepKind::Compose,
-        "dockerfile" => StepKind::Dockerfile,
-        "script" => StepKind::Script,
-        "sql" => StepKind::Sql,
-        "check" => StepKind::Check,
-        "backup" => StepKind::Backup,
-        "gate" => StepKind::Gate,
-        _ => StepKind::Comando,
-    }
+    StepKind::from_name(label).unwrap_or(StepKind::Comando)
 }
 
 #[cfg(test)]
