@@ -7,9 +7,7 @@ expression: text(&buf)
 │  El comando terminó con código 1                                             │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
 │  │ ▸ docker compose up -d                                                 │  │
-│  │   … 5 líneas anteriores                                                │  │
-│  │   línea de error 6                                                     │  │
-│  │   línea de error 7                                                     │  │
+│  │   … 7 líneas anteriores                                                │  │
 │  │   línea de error 8                                                     │  │
 │  │   línea de error 9                                                     │  │
 │  │   línea de error 10                                                    │  │
@@ -19,10 +17,12 @@ expression: text(&buf)
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  ¿Qué quieres hacer?                                                         │
-│  › Reintentar sin cambios                                                    │
-│    Ver el log completo                                                       │
-│    Abrir shell para investigar                                               │
-│    Abortar y guardar estado                                                  │
+│  › 1 Reintentar sin cambios                                                  │
+│    2 Ver el log completo                                                     │
+│    3 Abrir shell para investigar                                             │
+│    4 Abortar y guardar estado                                                │
+│                                                                              │
+│    repite el paso 6 tal cual                                                 │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ [↑↓] elegir  [enter] confirmar  [l] ver log  [v] pipeline                    │
+│ [↑↓] elegir  [1-9] directo  [enter] confirmar  [l] ver log  [v] pipeline     │
 ╰──────────────────────────────────────────────────────────────────────────────╯

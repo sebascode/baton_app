@@ -4,17 +4,17 @@ expression: text(&buf)
 ---
 ╭─ Revisar plan: instalar ─────────────────────────────── 7 pasos · 6 activos ─╮
 │                                                                              │
-│   ⋮⋮ [✓] 1  Pre-checks                                               [check] │
+│   ⋮⋮ [x] 1  Pre-checks                                               [check] │
 │             docker ≥24, puertos 5432, 8080                                   │
-│   ⋮⋮ [✓] 2  Backup volúmenes (opcional)                             [backup] │
+│   ⋮⋮ [x] 2  Backup volúmenes (opcional)                             [backup] │
 │             pg_data → .baton/backups/                                        │
-│ › ⋮⋮ [✓] 3  Build imágenes                                      [dockerfile] │
+│ › ⋮⋮ [x] 3  Build imágenes                                      [dockerfile] │
 │             api/, worker/, web/Dockerfile                                    │
-│   ⋮⋮ [✓] 4  Levantar DB                                            [compose] │
+│   ⋮⋮ [x] 4  Levantar DB                                            [compose] │
 │             db/docker-compose.yml                                            │
-│   ⋮⋮ [✓] 5  Gate: healthcheck postgres                           [gate auto] │
+│   ⋮⋮ [x] 5  Gate: healthcheck postgres                           [gate auto] │
 │             pg_isready · 6 intentos · 60s                                    │
-│   ⋮⋮ [✓] 6  Gate: confirmar despliegue                         [gate manual] │
+│   ⋮⋮ [x] 6  Gate: confirmar despliegue                         [gate manual] │
 │             pregunta antes de continuar                                      │
 │   ⋮⋮ [ ] 7  Smoke tests                                              [check] │
 │             desactivado por ti                                               │

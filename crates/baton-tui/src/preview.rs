@@ -657,7 +657,7 @@ fn step_lines(
             Style::new(),
             Style::new(),
             Style::new().fg(theme::tag_color(&step.tag.label)),
-            Span::styled("[✓]", Style::new().fg(theme::OK)),
+            Span::raw("[x]"),
         )
     } else {
         (
