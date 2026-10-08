@@ -16,6 +16,7 @@ pub mod kind;
 pub mod locate;
 pub mod mask;
 pub mod plan;
+pub mod plugin;
 pub mod secrets;
 pub mod shell;
 pub mod slug;

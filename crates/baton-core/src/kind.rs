@@ -45,6 +45,13 @@ pub struct KindSpec {
     /// datos): no exige `command`.
     pub own_interpreter: bool,
     pub requires: Requires,
+    /// Comando de solo lectura para `--dry-run` (`terraform plan`). Sin él, un dry-run no ejecuta
+    /// nada de este tipo.
+    pub dry_run: Option<&'static str>,
+    /// Globs relativos al proyecto que `baton init` usa para proponer pasos de este tipo.
+    pub detect: &'static [&'static str],
+    /// Programas que tienen que existir donde corre el paso.
+    pub binaries: &'static [&'static str],
 }
 
 /// Tipos nativos, en el orden en que los ofrece el editor. El índice es el identificador del
@@ -58,6 +65,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: false,
         requires: Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "dockerfile",
@@ -67,6 +77,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: false,
         requires: Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "script",
@@ -76,6 +89,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: true,
         requires: Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "sql",
@@ -85,6 +101,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: true,
         requires: Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "comando",
@@ -94,6 +113,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: false,
         requires: Requires::Command,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "check",
@@ -103,6 +125,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: true,
         own_interpreter: false,
         requires: Requires::Command,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "backup",
@@ -112,6 +137,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: false,
         own_interpreter: false,
         requires: Requires::BackupSection,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
     KindSpec {
         name: "gate",
@@ -121,6 +149,9 @@ static BUILTIN: [KindSpec; 8] = [
         runs_command: false,
         own_interpreter: false,
         requires: Requires::Gate,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     },
 ];
 
@@ -216,16 +247,21 @@ fn plugins() -> Vec<&'static KindSpec> {
         .clone()
 }
 
+/// Un nombre de tipo (y de plugin): minúsculas, números y guiones, sin empezar ni terminar en uno.
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Registra el tipo de un plugin. Es idempotente si el descriptor es idéntico a uno ya
 /// registrado con ese nombre; uno distinto, o que choque con un tipo nativo, es un error.
 pub fn register(spec: KindSpec) -> Result<StepKind, String> {
     let name = spec.name;
-    if name.is_empty()
-        || !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        || name.starts_with('-')
-    {
+    if !is_valid_name(name) {
         return Err(format!(
             "nombre de tipo '{name}' no válido: solo minúsculas, números y guiones"
         ));
@@ -269,7 +305,7 @@ impl<'de> Deserialize<'de> for StepKind {
         StepKind::from_name(&name).ok_or_else(|| {
             let known: Vec<&str> = StepKind::all().into_iter().map(StepKind::label).collect();
             de::Error::custom(format!(
-                "tipo de paso desconocido '{name}' (los hay: {})",
+                "tipo de paso desconocido '{name}' (los hay: {}); si lo define un plugin, instálalo (baton plugin list)",
                 known.join(", ")
             ))
         })
@@ -290,6 +326,9 @@ mod tests {
             runs_command: true,
             own_interpreter: false,
             requires: Requires::Source,
+            dry_run: None,
+            detect: &[],
+            binaries: &[],
         }
     }
 
