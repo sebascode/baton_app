@@ -173,3 +173,17 @@ fn the_guide_follows_the_writing_rules() {
     );
     assert!(!text.contains('!'), "sin signos de exclamación");
 }
+
+#[test]
+fn the_guide_tells_the_truth_about_branches() {
+    // con GitHub real se vio que una rama se acepta (y se fija su commit): la guía no debe decir lo contrario
+    let text = guide();
+    assert!(
+        !text.contains("nunca una rama"),
+        "la guía afirma que no se aceptan ramas"
+    );
+    assert!(
+        text.contains("fija el commit en que está ese día"),
+        "falta explicar qué pasa con una rama"
+    );
+}
