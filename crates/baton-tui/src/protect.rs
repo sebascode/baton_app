@@ -34,6 +34,10 @@ pub struct ProtectPrompt {
     /// Plan, para decir qué se ejecuta.
     pub plan: String,
     pub action: Guarded,
+    /// Con ambiente protegido hay que escribir su nombre; sin él basta `enter`.
+    pub typed: bool,
+    /// Lo que se deshace, una línea por paso (solo en un rollback).
+    pub list: Vec<String>,
     input: TextField,
     pub error: Option<String>,
 }
@@ -44,6 +48,22 @@ impl ProtectPrompt {
             ambiente: ambiente.to_string(),
             plan: plan.to_string(),
             action,
+            typed: true,
+            list: Vec::new(),
+            input: TextField::new(""),
+            error: None,
+        }
+    }
+
+    /// Confirmación de un rollback: lista exacta de lo que se deshace. `ambiente` es `Some` solo si
+    /// está protegido (entonces hay que escribir su nombre).
+    pub fn rollback(ambiente: Option<&str>, plan: &str, list: Vec<String>) -> ProtectPrompt {
+        ProtectPrompt {
+            ambiente: ambiente.unwrap_or_default().to_string(),
+            plan: plan.to_string(),
+            action: Guarded::Rollback,
+            typed: ambiente.is_some(),
+            list,
             input: TextField::new(""),
             error: None,
         }
@@ -57,7 +77,7 @@ impl ProtectPrompt {
                 return ProtectOutcome::Cancel;
             }
             KeyCode::Enter => {
-                if self.input.value().trim() == self.ambiente {
+                if !self.typed || self.input.value().trim() == self.ambiente {
                     return ProtectOutcome::Confirm(self.action.clone());
                 }
                 self.error = Some(if self.input.is_empty() {
@@ -74,19 +94,28 @@ impl ProtectPrompt {
     }
 
     fn lines(&self) -> (String, String, &'static str) {
+        let at = if self.ambiente.is_empty() {
+            String::new()
+        } else {
+            format!(" en «{}»", self.ambiente)
+        };
         match &self.action {
             Guarded::Run(req) => {
                 let n = req.steps.len();
                 let noun = if n == 1 { "paso" } else { "pasos" };
                 (
-                    format!(" Ejecutar en «{}» ", self.ambiente),
+                    format!(" Ejecutar{at} "),
                     format!("Vas a ejecutar {n} {noun} de «{}».", self.plan),
                     "ejecutar",
                 )
             }
             Guarded::Rollback => (
-                format!(" Rollback en «{}» ", self.ambiente),
-                format!("Vas a deshacer pasos de «{}».", self.plan),
+                format!(" Rollback{at} "),
+                if self.list.is_empty() {
+                    format!("Vas a deshacer pasos de «{}».", self.plan)
+                } else {
+                    format!("Se deshace, del último al primero, en «{}»:", self.plan)
+                },
                 "hacer rollback",
             ),
         }
@@ -94,8 +123,18 @@ impl ProtectPrompt {
 
     /// Dibuja la caja centrada sobre `over`.
     pub fn render(&self, buf: &mut Buffer, over: Rect) {
-        let w = 62.min(over.width);
-        let h = 7.min(over.height);
+        let w = if self.list.is_empty() { 62 } else { 76 }.min(over.width);
+        // aviso + texto, la lista (con una fila de aire), la pregunta escrita y la ayuda
+        let typed_rows = if self.typed { 3 } else { 0 };
+        let room = over.height.saturating_sub(2 + 1 + typed_rows + 1 + 1 + 1) as usize;
+        let shown = self.list.len().min(room);
+        let hidden = self.list.len() - shown;
+        let list_rows = if self.list.is_empty() {
+            0
+        } else {
+            shown + usize::from(hidden > 0) + 1
+        } as u16;
+        let h = (2 + 1 + list_rows + typed_rows + 1 + u16::from(self.typed)).min(over.height);
         if w < 20 || h < 5 {
             return;
         }
@@ -116,6 +155,7 @@ impl ProtectPrompt {
             ));
         let inner = block.inner(area);
         block.render(area, buf);
+        let mut y = inner.y;
         let mut line = |y: u16, spans: Vec<Span<'static>>| {
             if y < inner.bottom() {
                 Line::from(spans).render(
@@ -124,32 +164,49 @@ impl ProtectPrompt {
                 );
             }
         };
-        line(inner.y, vec![Span::raw(what)]);
-        line(
-            inner.y + 1,
-            vec![Span::styled(
-                "Es un ambiente protegido (config.toml).",
-                theme::secondary(),
-            )],
-        );
-        let mut ask = vec![Span::styled(
-            format!("Para confirmar escribe {}  ", self.ambiente),
-            theme::secondary(),
-        )];
-        ask.extend(self.input.spans(inner.width.saturating_sub(40), true, None));
-        line(inner.y + 3, ask);
-        match &self.error {
-            Some(e) => line(
-                inner.y + 4,
-                vec![Span::styled(e.clone(), Style::new().fg(theme::WARN))],
-            ),
-            None => line(
-                inner.y + 4,
-                vec![Span::styled(
-                    format!("[enter] {verb}  [esc] cancelar"),
-                    theme::secondary(),
-                )],
-            ),
+        line(y, vec![Span::raw(what)]);
+        y += 1;
+        if !self.list.is_empty() {
+            y += 1;
+            let room_w = inner.width.saturating_sub(4) as usize;
+            for item in self.list.iter().take(shown) {
+                line(
+                    y,
+                    vec![
+                        Span::raw("  "),
+                        Span::raw(crate::widgets::truncate(item, room_w)),
+                    ],
+                );
+                y += 1;
+            }
+            if hidden > 0 {
+                line(
+                    y,
+                    vec![Span::styled(format!("  … {hidden} más"), theme::muted())],
+                );
+                y += 1;
+            }
         }
+        if self.typed {
+            y += 1;
+            let mut ask = vec![Span::styled(
+                format!("Para confirmar escribe {}  ", self.ambiente),
+                theme::secondary(),
+            )];
+            ask.extend(self.input.spans(inner.width.saturating_sub(40), true, None));
+            line(y, ask);
+            y += 1;
+        }
+        let tail = match &self.error {
+            Some(e) => Span::styled(e.clone(), Style::new().fg(theme::WARN)),
+            None => Span::styled(
+                format!("[enter] {verb}  [esc] cancelar"),
+                theme::secondary(),
+            ),
+        };
+        line(
+            y + u16::from(!self.typed && self.list.is_empty()),
+            vec![tail],
+        );
     }
 }

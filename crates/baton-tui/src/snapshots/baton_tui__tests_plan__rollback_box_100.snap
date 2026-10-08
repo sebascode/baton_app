@@ -1,0 +1,34 @@
+---
+source: crates/baton-tui/src/tests_plan.rs
+expression: t
+---
+╭─ ✗ Paso 6 falló · Levantar servicios ───────────────────────────────────────────────── 00:04:07 ─╮
+│                                                                                                  │
+│  El servidor rechazó la autenticación                                                            │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ ▸ ssh deploy@10.0.4.12 "docker compose up -d"                                              │  │
+│  │   Permission denied (publickey)                                                            │  │
+│  └────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ¿Qué quie┌ ! Rollback ──────────────────────────────────────────────────────────────┐           │
+│    1 Actua│ Se deshace, del último al primero, en «instalar»:                        │           │
+│    2 Reint│                                                                          │           │
+│  › 3 Rollb│    6 Levantar servicios  nada que deshacer                               │           │
+│    4 Ver e│    5 Gate: healthcheck   nada que deshacer                               │           │
+│    5 Abrir│    4 Levantar DB         nada que deshacer                               │           │
+│    6 Abort│    3 Build imágenes      nada que deshacer                               │           │
+│           │    2 Backup volúmenes    docker compose down                             │           │
+│    deshace│    1 Pre-checks          nada que deshacer                               │           │
+│           │ [enter] hacer rollback  [esc] cancelar                                   │           │
+│           └──────────────────────────────────────────────────────────────────────────┘           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [↑↓] elegir  [1-9] directo  [enter] confirmar  [l] ver log  [v] pipeline                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

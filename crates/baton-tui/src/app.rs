@@ -134,6 +134,39 @@ pub struct App {
     protect: Option<crate::protect::ProtectPrompt>,
 }
 
+/// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
+/// lo que hace su rollback, o "nada que deshacer".
+fn rollback_list(r: &RunState) -> Vec<String> {
+    use baton_core::events::StepStatus;
+    let width = r
+        .rows
+        .iter()
+        .map(|row| row.info.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(28);
+    r.rows
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, row)| {
+            matches!(
+                row.info.status,
+                StepStatus::Done | StepStatus::Failed | StepStatus::Gate | StepStatus::Running
+            )
+        })
+        .map(|(i, row)| {
+            let what = row.info.undo.as_deref().unwrap_or("nada que deshacer");
+            format!(
+                "{:>2} {:<w$}  {what}",
+                i + 1,
+                crate::widgets::truncate(&row.info.name, width),
+                w = width
+            )
+        })
+        .collect()
+}
+
 impl App {
     pub fn new(preview: PreviewState) -> App {
         App {
@@ -594,8 +627,16 @@ impl App {
                 },
             },
             Mode::Run(r) => match r.handle_key(key)? {
-                RunAction::Command(RunCommand::Rollback) if self.protected.is_some() => {
-                    self.ask_protection(Guarded::Rollback);
+                // un rollback siempre muestra antes lo que va a deshacer (y, en un ambiente
+                // protegido, pide su nombre)
+                RunAction::Command(RunCommand::Rollback) => {
+                    let list = rollback_list(r);
+                    let plan = r.plan.clone();
+                    self.protect = Some(crate::protect::ProtectPrompt::rollback(
+                        self.protected.as_deref(),
+                        &plan,
+                        list,
+                    ));
                     None
                 }
                 RunAction::Command(c) => Some(Effect::Command(c)),

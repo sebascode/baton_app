@@ -664,3 +664,41 @@ fn a_rollback_in_a_protected_environment_asks_too() {
         Some(Effect::Command(RunCommand::Rollback))
     );
 }
+
+#[test]
+fn a_rollback_lists_what_it_undoes_from_the_last_step_to_the_first() {
+    use baton_core::events::RunCommand;
+    let mut app = App::new(crate::fake::preview());
+    let mut failed = crate::fake::failed();
+    failed.rows[1].info.undo = Some("docker compose down".into());
+    app.mode = Mode::Run(Box::new(failed));
+    assert!(
+        app.handle_key(key(KeyCode::Char('3'))).is_none(),
+        "primero muestra la lista"
+    );
+    let t = screen(&app, 100, 30);
+    insta::assert_snapshot!("rollback_box_100", t);
+    assert!(t.contains("Se deshace, del último al primero"), "{t}");
+    assert!(
+        t.contains("docker compose down") && t.contains("nada que deshacer"),
+        "{t}"
+    );
+    // el último paso aparece antes que el primero
+    let first = t.find("nada que deshacer").unwrap();
+    assert!(first < t.find("docker compose down").unwrap(), "{t}");
+    // sin ambiente protegido basta enter
+    assert!(!t.contains("Para confirmar escribe"));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::Command(RunCommand::Rollback))
+    );
+}
+
+#[test]
+fn cancelling_a_rollback_changes_nothing() {
+    let mut app = App::new(crate::fake::preview());
+    app.mode = Mode::Run(Box::new(crate::fake::failed()));
+    app.handle_key(key(KeyCode::Char('3')));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 30).contains("Se deshace"));
+}

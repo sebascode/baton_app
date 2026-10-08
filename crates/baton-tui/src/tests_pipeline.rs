@@ -409,8 +409,10 @@ fn run_shortcuts_still_work_from_the_pipeline_view() {
         screen(&app, 100, 30).contains("en pausa")
             && screen(&app, 100, 30).contains("[p] reanudar")
     );
+    // el rollback muestra primero lo que deshace y se confirma con enter
+    assert_eq!(press(&mut app, KeyCode::Char('r')), None);
     assert_eq!(
-        press(&mut app, KeyCode::Char('r')),
+        press(&mut app, KeyCode::Enter),
         Some(Effect::Command(RunCommand::Rollback))
     );
     assert_eq!(

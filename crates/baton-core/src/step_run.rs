@@ -225,6 +225,11 @@ pub fn step_info(step: &Step, target: &str) -> StepInfo {
         kind: step.kind.label().to_string(),
         target: target.to_string(),
         gate: step.gate.as_ref().map(gate_info),
+        undo: step
+            .rollback
+            .as_deref()
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty()),
     }
 }
 
