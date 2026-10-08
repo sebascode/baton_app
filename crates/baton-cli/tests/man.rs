@@ -120,12 +120,21 @@ fn code_blocks(page: &str) -> Vec<String> {
 #[test]
 fn the_toml_examples_in_the_manual_are_valid_toml_for_baton() {
     let page = page();
-    let (mut plans, mut configs) = (0, 0);
+    let (mut plans, mut configs, mut manifests) = (0, 0, 0);
     for block in code_blocks(&page) {
         if block.starts_with("name = \"") {
             baton_core::Plan::parse(&block)
                 .unwrap_or_else(|e| panic!("plan de ejemplo: {e}\n{block}"));
             plans += 1;
+        } else if block.starts_with("api = ") {
+            let m = baton_core::plugin::Manifest::parse(&block)
+                .unwrap_or_else(|e| panic!("manifiesto de ejemplo: {e}\n{block}"));
+            let issues = baton_core::plugin::validate_manifest(&m);
+            assert!(
+                issues.is_empty(),
+                "manifiesto de ejemplo: {issues:?}\n{block}"
+            );
+            manifests += 1;
         } else if block.starts_with("[defaults]") || block.starts_with("[secrets.") {
             baton_core::Config::parse(&block)
                 .unwrap_or_else(|e| panic!("config de ejemplo: {e}\n{block}"));
@@ -133,8 +142,8 @@ fn the_toml_examples_in_the_manual_are_valid_toml_for_baton() {
         }
     }
     assert_eq!(
-        (plans, configs),
-        (1, 2),
-        "se esperaba 1 plan y 2 configuraciones de ejemplo"
+        (plans, configs, manifests),
+        (1, 2, 1),
+        "se esperaba 1 plan, 2 configuraciones y 1 manifiesto de ejemplo"
     );
 }

@@ -33,3 +33,9 @@ build.rs                            @sebascode
 /crates/baton-cli/src/config_run.rs      @sebascode
 /crates/baton-cli/src/tui_run.rs         @sebascode
 /crates/baton-cli/src/main.rs            @sebascode
+
+# Plugins: deciden qué comandos se ejecutan en la máquina de quien los instala
+/crates/baton-core/src/kind.rs           @sebascode
+/crates/baton-core/src/plugin.rs         @sebascode
+/crates/baton-store/src/plugins.rs       @sebascode
+/crates/baton-cli/src/plugin_cmd.rs      @sebascode

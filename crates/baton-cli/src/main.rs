@@ -11,6 +11,7 @@ mod last;
 mod overview;
 mod pick;
 mod plans_cmd;
+mod plugin_cmd;
 mod proc;
 mod run;
 mod shell_init;
@@ -67,6 +68,11 @@ enum Command {
         /// Vuelve a la versión que había antes de la última actualización
         #[arg(long)]
         rollback: bool,
+    },
+    /// Plugins: tipos de paso que no vienen con baton (no necesita proyecto)
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
     },
     /// Valida la configuración y los planes (todos, o solo el indicado)
     Validate {
@@ -296,6 +302,17 @@ enum Command {
     External(Vec<OsString>),
 }
 
+#[derive(Subcommand)]
+enum PluginAction {
+    /// Lista los plugins instalados y si se pueden cargar
+    List,
+    /// Revisa el manifiesto de un plugin y muestra lo que ejecutaría
+    Validate {
+        /// El archivo baton-plugin.toml o la carpeta que lo contiene
+        ruta: PathBuf,
+    },
+}
+
 #[derive(Args, Debug, Clone)]
 struct RunArgs {
     /// Nombre del plan (archivo en baton/plans/); sin él, el único del proyecto o se pregunta
@@ -493,6 +510,16 @@ fn main() -> ExitCode {
         _ => {}
     }
 
+    // `plugin` informa por su cuenta de lo que no se pudo cargar: no se registra antes.
+    if let Some(Command::Plugin { action }) = &cli.command {
+        return match action {
+            PluginAction::List => plugin_cmd::list(),
+            PluginAction::Validate { ruta } => plugin_cmd::validate(ruta),
+        };
+    }
+    // Los tipos de paso de los plugins instalados tienen que existir antes de leer cualquier plan.
+    plugin_cmd::register_at_startup();
+
     let start = match cli.dir {
         Some(d) => d,
         None => match std::env::current_dir() {
@@ -682,7 +709,8 @@ fn main() -> ExitCode {
         | Command::Create { .. }
         | Command::Import { .. }
         | Command::Update { .. }
-        | Command::Version => unreachable!("se atiende antes de buscar el proyecto"),
+        | Command::Version
+        | Command::Plugin { .. } => unreachable!("se atiende antes de buscar el proyecto"),
     }
 }
 

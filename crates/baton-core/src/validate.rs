@@ -569,7 +569,8 @@ fn validate_step(
             }
         }
         Requires::Command => {
-            if step.command.as_deref().is_none_or(|c| c.trim().is_empty()) {
+            // el comando propio o, si el tipo trae uno por defecto (los de plugins), ese
+            if step.command_template().is_none() {
                 out.push(Issue::error(
                     p("command"),
                     format!("un paso {} necesita command", step.kind.label()),

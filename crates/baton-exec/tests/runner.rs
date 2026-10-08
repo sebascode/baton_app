@@ -3141,6 +3141,9 @@ fn register_iac() -> baton_core::kind::StepKind {
         runs_command: true,
         own_interpreter: false,
         requires: baton_core::kind::Requires::Source,
+        dry_run: None,
+        detect: &[],
+        binaries: &[],
     })
     .unwrap()
 }
