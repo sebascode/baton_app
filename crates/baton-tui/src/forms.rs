@@ -431,7 +431,9 @@ impl Field {
                     Span::styled(" ]", bracket),
                 ]
             }
-            Kind::Choice { options, idx } => choice_spans(options, *idx, focused),
+            Kind::Choice { options, idx } => {
+                choice_spans_fit(options, *idx, focused, usize::from(width))
+            }
             Kind::Radio { options, idx } => {
                 let mut out = Vec::new();
                 for (i, o) in options.iter().enumerate() {
@@ -481,6 +483,100 @@ impl Field {
         };
         Span::styled(format!("{:<label_w$}", self.label), style)
     }
+}
+
+/// Lo que ocupa una opción en pantalla (la elegida lleva corchetes).
+fn option_width(label: &str, selected: bool) -> usize {
+    unicode_width::UnicodeWidthStr::width(label) + if selected { 2 } else { 0 }
+}
+
+/// Lo que ocupan las opciones `lo..=hi` con sus separadores, más los marcadores de lo que queda
+/// oculto a cada lado (`‹2 ` y ` 3›`).
+fn window_width(options: &[(String, bool)], idx: usize, lo: usize, hi: usize) -> usize {
+    let items: usize = (lo..=hi)
+        .map(|i| option_width(&options[i].0, i == idx))
+        .sum();
+    let separators = 2 * (hi - lo);
+    let left = if lo > 0 { marker_width(lo) } else { 0 };
+    let right = if hi + 1 < options.len() {
+        marker_width(options.len() - 1 - hi)
+    } else {
+        0
+    };
+    items + separators + left + right
+}
+
+/// `‹2 ` o ` 3›`: el número más un símbolo y un espacio.
+fn marker_width(hidden: usize) -> usize {
+    hidden.to_string().len() + 2
+}
+
+/// Como [`choice_spans`], pero nunca pasa de `width`: si las opciones no caben todas, muestra
+/// una ventana alrededor de la elegida (que siempre se ve entera) con `‹N` y `N›` donde quedan
+/// opciones ocultas. Al moverse con las flechas la ventana acompaña a la elegida. Si caben todas,
+/// es idéntica a `choice_spans`.
+pub fn choice_spans_fit(
+    options: &[(String, bool)],
+    idx: usize,
+    focused: bool,
+    width: usize,
+) -> Vec<Span<'static>> {
+    if options.is_empty() {
+        return Vec::new();
+    }
+    let idx = idx.min(options.len() - 1);
+    if window_width(options, idx, 0, options.len() - 1) <= width {
+        return choice_spans(options, idx, focused);
+    }
+
+    // se crece desde la elegida hacia los lados mientras quepa: en cada vuelta, una opción más a
+    // la derecha (lo que viene) y otra a la izquierda
+    let (mut lo, mut hi) = (idx, idx);
+    loop {
+        let mut grew = false;
+        if hi + 1 < options.len() && window_width(options, idx, lo, hi + 1) <= width {
+            hi += 1;
+            grew = true;
+        }
+        if lo > 0 && window_width(options, idx, lo - 1, hi) <= width {
+            lo -= 1;
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    let mut out = Vec::new();
+    if lo > 0 {
+        out.push(Span::styled(format!("‹{} ", lo), theme::muted()));
+    }
+    let mut spans = choice_spans(&options[lo..=hi], idx - lo, focused);
+    // la elegida no cabe sola (ancho mínimo): se acorta en vez de salirse de la fila
+    if window_width(options, idx, lo, hi) > width {
+        let room = width
+            .saturating_sub(if lo > 0 { marker_width(lo) } else { 0 })
+            .saturating_sub(if hi + 1 < options.len() {
+                marker_width(options.len() - 1 - hi)
+            } else {
+                0
+            })
+            .saturating_sub(2)
+            .max(1);
+        let label = truncate(&options[idx].0, room);
+        spans = vec![Span::styled(
+            format!("[{label}]"),
+            Style::new().fg(theme::INFO),
+        )];
+    }
+    out.extend(spans);
+    if hi + 1 < options.len() {
+        out.push(Span::styled(
+            format!(" {}›", options.len() - 1 - hi),
+            theme::muted(),
+        ));
+    }
+    out
 }
 
 /// `[compose]  dockerfile  script`: la opción activa entre corchetes y en azul.
@@ -811,5 +907,146 @@ mod tests {
         });
         let col: Vec<_> = (1..4).map(|y| buf[(2, y)].symbol().to_string()).collect();
         assert_eq!(col, ["4", "5", "6"]);
+    }
+
+    // ------------------------------------------------ selector que no cabe (tipos de plugins)
+
+    fn kinds(names: &[&str]) -> Vec<(String, bool)> {
+        names.iter().map(|n| (n.to_string(), false)).collect()
+    }
+
+    const BUILTIN: [&str; 8] = [
+        "compose",
+        "dockerfile",
+        "script",
+        "sql",
+        "comando",
+        "check",
+        "backup",
+        "gate",
+    ];
+
+    fn plain(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// `(ocultas a la izquierda, opciones visibles, ocultas a la derecha)` de lo que se dibujó.
+    fn parse_window(text: &str) -> (usize, Vec<String>, usize) {
+        let mut body = text.to_string();
+        let mut left = 0;
+        let mut right = 0;
+        if let Some(rest) = body.strip_prefix('‹') {
+            let (n, rest) = rest.split_once(' ').unwrap();
+            left = n.parse().unwrap();
+            body = rest.to_string();
+        }
+        if let Some(rest) = body.strip_suffix('›') {
+            let (rest, n) = rest.rsplit_once(' ').unwrap();
+            right = n.parse().unwrap();
+            body = rest.to_string();
+        }
+        (left, body.split("  ").map(String::from).collect(), right)
+    }
+
+    #[test]
+    fn when_everything_fits_the_selector_looks_exactly_as_before() {
+        let opts = kinds(&["compose", "script", "sql"]);
+        for idx in 0..opts.len() {
+            let fit = choice_spans_fit(&opts, idx, true, 80);
+            let old = choice_spans(&opts, idx, true);
+            assert_eq!(format!("{fit:?}"), format!("{old:?}"), "idx {idx}");
+        }
+    }
+
+    #[test]
+    fn the_selected_type_is_always_visible_and_whole_whatever_the_width_and_the_number_of_types() {
+        let mut names: Vec<&str> = BUILTIN.to_vec();
+        names.extend(["terraform", "bicep", "make-build", "kubectl-apply"]);
+        let opts = kinds(&names);
+        // el mínimo con el que la elegida más larga cabe entera junto a sus dos marcadores:
+        // `[kubectl-apply]` (15) + `‹11 ` y ` 11›` (8). Más angosto se acorta (prueba aparte).
+        for width in 23..=90 {
+            for idx in 0..opts.len() {
+                let spans = choice_spans_fit(&opts, idx, false, width);
+                let text = plain(&spans);
+                assert!(
+                    text.contains(&format!("[{}]", opts[idx].0)),
+                    "ancho {width}, elegida {}: {text:?}",
+                    opts[idx].0
+                );
+                assert!(
+                    unicode_width::UnicodeWidthStr::width(text.as_str()) <= width,
+                    "ancho {width}: se sale de la fila ({text:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_markers_say_how_many_types_are_hidden_on_each_side() {
+        let opts = kinds(&BUILTIN);
+        for idx in 0..opts.len() {
+            let text = plain(&choice_spans_fit(&opts, idx, false, 34));
+            let (left, visible, right) = parse_window(&text);
+            assert_eq!(left + visible.len() + right, opts.len(), "{text:?}");
+            // lo visible es un tramo seguido de la lista, y contiene la elegida
+            let first = left;
+            for (k, label) in visible.iter().enumerate() {
+                let want = &opts[first + k].0;
+                let want = if first + k == idx {
+                    format!("[{want}]")
+                } else {
+                    want.clone()
+                };
+                assert_eq!(label, &want, "{text:?}");
+            }
+            assert!(first <= idx && idx < first + visible.len(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_type_has_no_left_marker_and_the_last_has_no_right_one() {
+        let opts = kinds(&BUILTIN);
+        let first = plain(&choice_spans_fit(&opts, 0, false, 34));
+        assert!(!first.contains('‹') && first.contains('›'), "{first:?}");
+        let last = plain(&choice_spans_fit(&opts, 7, false, 34));
+        assert!(last.contains('‹') && !last.contains('›'), "{last:?}");
+    }
+
+    #[test]
+    fn moving_with_the_arrows_keeps_the_bar_following_the_selection() {
+        // el caso de la captura: 8 tipos en un campo de ~59 columnas y la opción elegida cortada
+        let opts = kinds(&BUILTIN);
+        let mut f = Field::choice(
+            "tipo",
+            &BUILTIN.iter().map(|n| (*n, false)).collect::<Vec<_>>(),
+            "compose",
+        );
+        for step in 0..BUILTIN.len() {
+            let text = plain(&f.control(56, true));
+            let current = f.value();
+            assert!(
+                text.contains(&format!("[{current}]")),
+                "paso {step}: {text:?}"
+            );
+            assert!(
+                unicode_width::UnicodeWidthStr::width(text.as_str()) <= 56,
+                "{text:?}"
+            );
+            f.handle_key(&key(KeyCode::Right));
+        }
+        let _ = opts;
+    }
+
+    #[test]
+    fn at_an_impossible_width_the_selected_type_is_shortened_instead_of_overflowing() {
+        let opts = kinds(&["una-etiqueta-larguisima", "otra"]);
+        let text = plain(&choice_spans_fit(&opts, 0, false, 10));
+        assert!(
+            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 10,
+            "{text:?}"
+        );
+        assert!(text.contains('['), "{text:?}");
+        assert!(plain(&choice_spans_fit(&[], 0, false, 10)).is_empty());
     }
 }
