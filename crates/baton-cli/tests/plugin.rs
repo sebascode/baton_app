@@ -546,3 +546,181 @@ fn validate_of_the_manifest_tells_what_triggers_the_confirmation() {
         out(&o)
     );
 }
+
+// ------------------------------------------------------- add, remove, new y el registro
+
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+impl Fx {
+    /// Un plugin instalado como lo deja `baton plugin add`: su carpeta y su entrada en el registro.
+    fn install_locked(&self, name: &str, manifest: &str) {
+        self.install(name, manifest);
+        let sha = baton_core::hash::sha256_hex(manifest.as_bytes());
+        let lock = self.plugins.join("plugins.lock");
+        let mut text = fs::read_to_string(&lock).unwrap_or_default();
+        text.push_str(&format!(
+            "[plugins.{name}]\nsource = \"github:o/r\"\nref = \"v1\"\ncommit = \"{SHA}\"\nverification = \"valid\"\nsha256 = \"{sha}\"\ninstalled_at = \"2026-10-09T00:00:00-03:00\"\n\n"
+        ));
+        fs::write(lock, text).unwrap();
+    }
+}
+
+#[test]
+fn add_needs_a_terminal_and_touches_neither_the_network_nor_the_disk_without_one() {
+    let fx = Fx::new();
+    // un curl que delata cualquier llamada
+    let bin = fx.write(
+        "_bin/curl",
+        "#!/bin/sh\necho llamado >> \"$BATON_CALLS\"\nexit 1\n",
+    );
+    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    for source in ["github:o/r@v1", "./una-carpeta", "https://github.com/o/r"] {
+        let o = fx.baton_path(&["plugin", "add", source], true);
+        assert_eq!(code(&o), 2, "{source}: {}{}", out(&o), err(&o));
+        assert!(err(&o).contains("necesita una terminal"), "{}", err(&o));
+    }
+    assert!(!fx.root.join("_calls").exists(), "no se llamó a curl");
+    assert_eq!(
+        fs::read_dir(&fx.plugins).unwrap().count(),
+        0,
+        "no se instaló nada"
+    );
+}
+
+#[test]
+fn remove_deletes_a_plugin_and_its_registry_entry_when_given_yes() {
+    let fx = Fx::new();
+    fx.install_locked("terraform", TERRAFORM);
+    fx.install_locked("otro", &TERRAFORM.replace("\"terraform\"", "\"otro\""));
+    let o = fx.baton(&["plugin", "remove", "terraform", "--yes"]);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(!fx.plugins.join("terraform").exists());
+    assert!(fx.plugins.join("otro").exists());
+    let lock = fs::read_to_string(fx.plugins.join("plugins.lock")).unwrap();
+    assert!(
+        !lock.contains("[plugins.terraform]") && lock.contains("[plugins.otro]"),
+        "{lock}"
+    );
+}
+
+#[test]
+fn remove_without_yes_and_without_a_terminal_asks_for_it_and_removes_nothing() {
+    let fx = Fx::new();
+    fx.install_locked("terraform", TERRAFORM);
+    let o = fx.baton(&["plugin", "remove", "terraform"]);
+    assert_eq!(code(&o), 2);
+    assert!(err(&o).contains("--yes"), "{}", err(&o));
+    assert!(fx.plugins.join("terraform").exists());
+    let o = fx.baton(&["plugin", "remove", "no-existe", "--yes"]);
+    assert_eq!(code(&o), 2);
+    let o = fx.baton(&["plugin", "remove", "../afuera", "--yes"]);
+    assert_eq!(code(&o), 2);
+}
+
+#[test]
+fn new_creates_a_manifest_that_validate_accepts_without_warnings() {
+    let fx = Fx::new();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_baton"))
+            .args(args)
+            .current_dir(&fx.root)
+            .env("BATON_PLUGINS_DIR", &fx.plugins)
+            .output()
+            .unwrap()
+    };
+    let o = run(&["plugin", "new", "mi-tipo"]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert!(fx.root.join("mi-tipo/baton-plugin.toml").exists());
+    let v = run(&["plugin", "validate", "mi-tipo"]);
+    assert_eq!(code(&v), 0, "{}{}", out(&v), err(&v));
+    assert!(err(&v).is_empty(), "sin avisos: {}", err(&v));
+    assert_eq!(
+        code(&run(&["plugin", "new", "mi-tipo"])),
+        2,
+        "no pisa uno existente"
+    );
+    assert_eq!(code(&run(&["plugin", "new", "compose"])), 2);
+}
+
+#[test]
+fn list_shows_where_each_plugin_came_from_and_which_ones_baton_did_not_install() {
+    let fx = Fx::new();
+    fx.install_locked("terraform", TERRAFORM);
+    fx.install("a-mano", &TERRAFORM.replace("\"terraform\"", "\"a-mano\""));
+    let o = fx.baton(&["plugin", "list"]);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    let shown = out(&o);
+    assert!(
+        shown.contains(&format!(
+            "github:o/r@v1 · commit {} · firma: valid",
+            &SHA[..12]
+        )),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("sin registro (no lo instaló baton plugin add)"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_plugin_modified_after_install_is_not_loaded_listed_as_broken_and_its_type_stops_working() {
+    let fx = Fx::new();
+    fx.install_locked("terraform", TERRAFORM);
+    fx.write("infra/a/main.tf", "");
+    fx.write("baton/plans/infra.toml", &plan_with("terraform"));
+    let bin = fx.write("_bin/terraform", "#!/bin/sh\n");
+    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // mientras no cambie, funciona
+    let ok = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&ok), 0, "{}{}", out(&ok), err(&ok));
+
+    // alguien le cambia el comando después de que se revisó
+    fs::write(
+        fx.plugins.join("terraform/baton-plugin.toml"),
+        TERRAFORM.replace("aplicado", "robado"),
+    )
+    .unwrap();
+
+    let o = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&o), 1, "{}{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("advertencia: plugin no cargado"),
+        "{}",
+        err(&o)
+    );
+    assert!(
+        err(&o).contains("cambió desde que se instaló"),
+        "{}",
+        err(&o)
+    );
+    assert!(
+        err(&o).contains("tipo de paso desconocido 'terraform'"),
+        "{}",
+        err(&o)
+    );
+
+    let l = fx.baton(&["plugin", "list"]);
+    assert!(out(&l).contains("✗ terraform"), "{}", out(&l));
+    assert!(
+        out(&l).contains("cambió desde que se instaló"),
+        "{}",
+        out(&l)
+    );
+}
+
+#[test]
+fn a_corrupt_registry_stops_every_plugin_from_loading_and_says_why() {
+    let fx = Fx::new();
+    fx.install("terraform", TERRAFORM);
+    fs::write(fx.plugins.join("plugins.lock"), "esto no es toml =").unwrap();
+    fx.write("infra/a/main.tf", "");
+    fx.write("baton/plans/infra.toml", &plan_with("terraform"));
+    let o = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&o), 1);
+    assert!(
+        err(&o).contains("no se puede comprobar que el plugin sea el que se instaló"),
+        "{}",
+        err(&o)
+    );
+}

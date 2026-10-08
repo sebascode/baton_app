@@ -201,6 +201,15 @@ Cuántas ejecuciones se muestran (20 por defecto).
 Lista los plugins instalados en esta máquina (ver \fBPLUGINS\fR), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. No necesita proyecto.
 .SS baton plugin validate ruta
 Revisa el manifiesto de un plugin (el archivo \fIbaton\-plugin.toml\fR o la carpeta que lo contiene) y muestra, tal cual, los comandos que ejecutaría: \fBes lo que hay que leer antes de instalar un plugin\fR. Sale con 1 si el manifiesto tiene errores y con 2 si la ruta no existe. No necesita proyecto ni instala nada.
+.SS baton plugin add fuente
+Instala un plugin: \fBgithub:dueño/repo@versión\fR (un tag o un commit; no una rama, que puede cambiar) o una carpeta local. De GitHub, baton pregunta por el commit al que apunta esa versión y \fBsolo lo instala si GitHub verificó su firma, sin excepción\fR; baja el manifiesto de ese SHA exacto (no del tag, que puede moverse), lo valida y \fBmuestra los comandos que ejecutará\fR antes de preguntar. Instala el manifiesto en la carpeta de plugins y deja su origen, el commit y su sha256 en \fIplugins.lock\fR. \fBNecesita una terminal\fR: sin ella no consulta la red ni instala nada, porque baton no instala un plugin sin que alguien lea antes qué va a ejecutar (en CI se usa un plugin ya instalado). Si ya está instalado y es idéntico no hace nada; si cambió, muestra qué cambió y pregunta; no reemplaza uno del mismo nombre que vino de otro origen ni uno que no instaló \fBplugin add\fR (por ejemplo, el que alguien enlazó para desarrollarlo). Una carpeta local no tiene commit ni firma que verificar: se instala igual, tras confirmar, y queda registrada como local. Sale con 1 si se rechaza (sin firma verificada, manifiesto inválido, nombre ocupado, o respuesta negativa) y con 2 si no hay terminal o la fuente no se entiende.
+.SS baton plugin remove nombre
+Quita un plugin instalado y su entrada de \fIplugins.lock\fR. Pregunta antes; sin terminal necesita \fB\-\-yes\fR. Si el plugin es un enlace a otra carpeta (alguien lo desarrolla), solo se quita el enlace, nunca la carpeta de destino.
+.TP
+.B \-\-yes
+No pregunta.
+.SS baton plugin new nombre
+Crea \fI./nombre/baton\-plugin.toml\fR con un manifiesto para empezar (que pasa \fBplugin validate\fR) y dice los siguientes pasos. No pisa uno existente. No necesita proyecto.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
 .SS baton config
@@ -336,6 +345,9 @@ Un log por ejecución (por defecto \fI{plan}\-{fecha}.log\fR, con \fB\-2\fR, \fB
 .I .baton/backups/
 Backups de volúmenes (un \fI.tgz\fR por volumen).
 .TP
+.I ~/.config/baton/plugins/plugins.lock
+Lo que instaló \fBbaton plugin add\fR: origen, versión, commit, firma y sha256 de cada manifiesto. No se edita a mano.
+.TP
 .I ~/.config/baton/plugins/<nombre>/baton\-plugin.toml
 Los plugins instalados de este usuario (o la carpeta de \fBBATON_PLUGINS_DIR\fR). Viven fuera del proyecto: el plan solo nombra el tipo de paso y cada máquina decide qué plugins tiene.
 .
@@ -467,6 +479,8 @@ destructive = ["will be destroyed", "must be replaced"]
 \fBdry_run\fR es el comando que se usa con \fB\-\-dry\-run\fR y \fBtiene que ser de solo lectura\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): se rechaza uno igual a \fBcommand\fR o que use palabras como \fBapply\fR, \fBdestroy\fR, \fBcreate\fR o \fBdeploy\fR. Es un chequeo de apariencia, no una garantía: un comando puede esconder lo que hace, así que lee los comandos con \fBbaton plugin validate\fR antes de instalar un plugin ajeno.
 .PP
 Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). \fBdestructive\fR son frases que se buscan en la salida del \fBdry_run\fR (texto literal, sin distinguir mayúsculas ni colores; hace falta un \fBdry_run\fR). Antes de ejecutar un paso de ese tipo, baton corre el \fBdry_run\fR de todas sus carpetas y, si alguna frase aparece (en Terraform, un recurso que \fBwill be destroyed\fR o \fBmust be replaced\fR; un resumen como \fB0 to destroy\fR no cuenta), deja en el log cada línea con \fBatención:\fR y pregunta una sola vez antes de respaldar o aplicar nada. Rechazar detiene el plan como abortado. \fBSin terminal el paso falla antes de aplicar\fR, salvo con \fB\-\-assume\-yes\fR. En un \fB\-\-dry\-run\fR solo se deja a la vista. La revisión se hace sobre un plan anterior al del comando: si algo cambia entre uno y otro, lo que se aplique podría diferir. Un paso de ese tipo que reescribe \fBcommand\fR debe declarar su propio \fBdry_run\fR (con el plan equivalente); si no, \fBbaton validate\fR lo rechaza, para que la revisión no se pierda sin que nadie lo note.
+.PP
+\fBInstalar un plugin ajeno es darle a alguien órdenes que se ejecutan con tus permisos.\fR Por eso \fBbaton plugin add\fR muestra los comandos antes de instalar, exige una firma verificada en GitHub y fija lo instalado. Una firma verificada prueba que el commit es de quien dice ser, no que sus comandos sean inofensivos: lo que protege es leerlos. \fBplugins.lock\fR (en la carpeta de plugins) guarda de dónde vino cada plugin, el commit y el sha256 del manifiesto; en cada arranque, un plugin registrado cuyo manifiesto ya no coincide \fBno se carga\fR y se avisa, y si el propio \fIplugins.lock\fR no se puede leer no se carga ninguno. Un plugin copiado o enlazado a mano no tiene registro (\fBplugin list\fR lo marca) y se carga como antes.
 .PP
 Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
 .PP
