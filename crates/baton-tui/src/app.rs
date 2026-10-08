@@ -126,6 +126,8 @@ struct Stash {
 pub struct App {
     pub mode: Mode,
     stash: Stash,
+    /// La ayuda `?` abierta sobre la pantalla actual.
+    help: Option<crate::help::Help>,
 }
 
 impl App {
@@ -133,6 +135,7 @@ impl App {
         App {
             mode: Mode::Preview(preview),
             stash: Stash::default(),
+            help: None,
         }
     }
 
@@ -141,6 +144,7 @@ impl App {
         App {
             mode: Mode::Editor(Box::new(editor)),
             stash: Stash::default(),
+            help: None,
         }
     }
 
@@ -149,6 +153,7 @@ impl App {
         App {
             mode: Mode::Config(Box::new(config)),
             stash: Stash::default(),
+            help: None,
         }
     }
 
@@ -182,6 +187,7 @@ impl App {
 
     /// Guarda la pantalla actual en la reserva y deja `mode` con el valor dado.
     fn switch(&mut self, next: Mode) {
+        self.help = None;
         match std::mem::replace(&mut self.mode, next) {
             Mode::Preview(p) => self.stash.preview = Some(p),
             Mode::Credentials(c) => self.stash.credentials = Some(c),
@@ -435,6 +441,24 @@ impl App {
             key
         };
 
+        // La ayuda se cierra con esc, ? o q; mientras está abierta ninguna otra tecla llega abajo.
+        if self.help.is_some() {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
+            ) {
+                self.help = None;
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('?')
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && let Some(help) = crate::help::for_mode(&self.mode)
+        {
+            self.help = Some(help);
+            return None;
+        }
+
         match &mut self.mode {
             Mode::Preview(p) => match p.handle_key(key)? {
                 PreviewAction::Run(req) => self.start_or_confirm_credentials(req),
@@ -627,6 +651,9 @@ impl App {
                 Phase::Failed(_) => failure_view::render(r, buf, area),
                 Phase::Finished { .. } => summary_view::render(r, buf, area),
             },
+        }
+        if let Some(help) = &self.help {
+            crate::help::render(help, buf, area);
         }
     }
 }

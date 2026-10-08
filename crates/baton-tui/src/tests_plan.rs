@@ -446,3 +446,50 @@ fn plans_changed_refreshes_the_list_the_current_name_and_shows_the_message() {
     };
     assert_eq!(p.plan, "tienda");
 }
+
+#[test]
+fn question_mark_opens_the_help_and_esc_closes_it() {
+    let mut app = app();
+    assert!(app.handle_key(key(KeyCode::Char('?'))).is_none());
+    let t = screen(&app, 100, 30);
+    assert!(t.contains("Atajos · vista del plan"), "{t}");
+    assert!(t.contains("en todas las pantallas") && t.contains("en esta pantalla"));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!screen(&app, 100, 30).contains("Atajos"));
+}
+
+#[test]
+fn keys_do_not_reach_the_screen_while_the_help_is_open() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    // `q` cierra la ayuda, no la aplicación
+    assert!(app.handle_key(key(KeyCode::Char('q'))).is_none());
+    let t = screen(&app, 100, 30);
+    assert!(!t.contains("Atajos") && t.contains("Revisar plan"), "{t}");
+}
+
+#[test]
+fn the_help_fits_the_smallest_terminal() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    let t = screen(&app, 80, 16);
+    assert!(t.contains("Atajos") && t.contains("esc cierra"), "{t}");
+}
+
+#[test]
+fn the_help_is_not_offered_inside_a_form() {
+    use crate::EditorState;
+    let editor = EditorState::from_plan(&plan(), &["local".to_string()], "local", &[]);
+    let mut app = App::editor_only(editor);
+    // en el editor `?` es texto, no abre nada
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(!screen(&app, 100, 30).contains("Atajos"));
+}
+
+#[test]
+fn snapshot_help_on_the_plan_view() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    insta::assert_snapshot!("help_plan_100", screen(&app, 100, 30));
+    insta::assert_snapshot!("help_plan_80x16", screen(&app, 80, 16));
+}

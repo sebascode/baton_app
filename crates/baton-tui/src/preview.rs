@@ -266,6 +266,7 @@ impl PreviewState {
                 items.insert(at + n, e);
             }
         }
+        items.insert(items.len() - 1, ("?", "ayuda"));
         items
     }
 
@@ -325,6 +326,11 @@ impl PreviewState {
         }
         self.steps.swap(self.cursor, target);
         self.cursor = target;
+    }
+
+    /// `?` abre la ayuda salvo mientras una caja o el selector de planes usan las teclas.
+    pub fn accepts_help(&self) -> bool {
+        self.prompt.is_none() && self.switcher.is_none()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {

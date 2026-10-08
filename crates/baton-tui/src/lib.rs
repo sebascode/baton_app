@@ -13,6 +13,7 @@ pub mod failure_view;
 pub mod fake;
 pub mod forms;
 pub mod gate_view;
+pub mod help;
 pub mod history_view;
 pub mod pipeline_view;
 pub mod plan_prompt;
