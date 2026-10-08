@@ -77,8 +77,8 @@ impl Source {
 
 fn parse_github(rest: &str) -> Result<Source, String> {
     let (path, git_ref) = rest.split_once('@').ok_or_else(|| {
-        "indica la versión: github:dueño/repo@v1.0.0 (un tag o un commit; baton no instala \
-         una rama que puede cambiar)"
+        "indica la versión: github:dueño/repo@v1.0.0 (un tag o un commit; con una rama, \
+         baton fija el commit en que está ese día y no la sigue)"
             .to_string()
     })?;
     let (owner, repo) = path
@@ -261,6 +261,8 @@ mod tests {
             ("github:sebascode/baton-terraform@v0.1.0", "v0.1.0"),
             ("github:sebascode/baton-terraform@1.2.3", "1.2.3"),
             ("github:a/b@release/1.0", "release/1.0"),
+            // una rama se acepta: baton fija el commit de ese momento y no la sigue
+            ("github:a/b@main", "main"),
             (
                 "github:a/b@0123456789abcdef0123456789abcdef01234567",
                 "0123456789abcdef0123456789abcdef01234567",
@@ -278,6 +280,9 @@ mod tests {
     fn the_version_is_required_so_nothing_floating_is_installed() {
         let e = Source::parse("github:o/r").unwrap_err();
         assert!(e.contains("indica la versión"), "{e}");
+        // y dice la verdad sobre las ramas: no afirma que se rechacen
+        assert!(e.contains("fija el commit"), "{e}");
+        assert!(!e.contains("no instala una rama"), "{e}");
         assert!(Source::parse("github:o/r@").is_err());
     }
 

@@ -296,7 +296,8 @@ git push origin v0.1.0
 ```
 
 El commit al que apunta el tag es el que debe estar firmado. baton pide siempre una versión (un tag
-o un commit), nunca una rama.
+o un commit). Si das una rama, baton fija el commit en que está ese día y no la sigue; para que
+otras personas puedan repetir tu instalación, publica un tag.
 
 **3. Compruébalo como lo haría otra persona.**
 

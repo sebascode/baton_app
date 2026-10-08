@@ -100,6 +100,9 @@ pub fn explain_curl_failure(stderr: &str) -> String {
     let why = stderr.trim();
     if why.contains("404") {
         "no se encontró el repositorio, la versión o el manifiesto en GitHub (¿es privado o el nombre está mal escrito?)".to_string()
+    } else if why.contains("422") {
+        // la API contesta 422 cuando el tag, la rama o el commit no existen en un repositorio que sí existe
+        "GitHub no encontró esa versión (tag, rama o commit) en el repositorio: revisa cómo está escrita".to_string()
     } else if why.contains("403") || why.contains("429") {
         "GitHub rechazó la consulta (suele ser el límite de uso sin autenticar): espera unos minutos y vuelve a intentarlo".to_string()
     } else {
@@ -792,6 +795,11 @@ mod tests {
             .get("https://x/y", 10, false)
             .unwrap_err();
         assert!(missing.contains("no se encontró `curl`"), "{missing}");
+
+        // una versión que no existe en un repositorio que sí existe: GitHub contesta 422
+        let e = explain_curl_failure("curl: (22) The requested URL returned error: 422");
+        assert!(e.contains("no encontró esa versión"), "{e}");
+        assert!(!e.contains("422"), "sin el código crudo: {e}");
 
         // el límite de uso de la API sin autenticar
         for status in ["403", "429"] {
