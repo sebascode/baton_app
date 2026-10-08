@@ -341,6 +341,23 @@ pub fn prepare_run(
             }
         }
 
+        // Los programas que pide su tipo (un plugin), donde va a correr el paso. En un destino ssh
+        // no se comprueba: desde aquí no hay una conexión que preguntar. Un dry-run solo los
+        // necesita si su tipo ejecuta algo en él.
+        let remote = matches!(config.targets.get(&target), Some(Target::Ssh(_)));
+        if !remote && (!opts.dry_run || s.kind.dry_run_command().is_some()) {
+            let path = search_path(opts);
+            for bin in s.kind.binaries() {
+                if !on_path(bin, &path) {
+                    errors.push(format!(
+                        "{}: falta el programa '{bin}' en el PATH (lo necesita el tipo '{}')",
+                        label(s),
+                        s.kind.label()
+                    ));
+                }
+            }
+        }
+
         if let Some(g) = &s.gate {
             match g.mode {
                 GateMode::Auto => {}
@@ -494,6 +511,26 @@ pub(crate) fn describe_risks(risks: &[Risk]) -> String {
         parts.push(format!("y {} más", risks.len() - SHOWN));
     }
     parts.join("; ")
+}
+
+/// El `PATH` donde buscar programas: el de las opciones de la ejecución o, sin él, el del proceso.
+fn search_path(opts: &RunOptions) -> String {
+    opts.env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default()
+}
+
+/// `bin` es un archivo ejecutable en alguna carpeta de `path`.
+fn on_path(bin: &str, path: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(path).any(|dir| {
+        std::fs::metadata(dir.join(bin))
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
 }
 
 #[cfg(test)]
@@ -1065,5 +1102,101 @@ mod tests {
         assert_eq!(steps[0].files.len(), 1);
         let e = prepare_rollback(&proj, &p, None).unwrap_err();
         assert!(e.0[0].contains("no hay una ejecución previa"));
+    }
+
+    // ------------------------------------------------ programas que pide un tipo de plugin
+
+    /// Registra un tipo que exige `binary`; con `dry` ejecuta algo en un dry-run.
+    fn kind_needing(name: &'static str, binary: &'static str, dry: Option<&'static str>) {
+        let binaries: &'static [&'static str] = Box::leak(vec![binary].into_boxed_slice());
+        baton_core::kind::register(baton_core::kind::KindSpec {
+            name,
+            scanned: false,
+            has_services: false,
+            default_command: Some("true"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: baton_core::kind::Requires::Command,
+            dry_run: dry,
+            detect: &[],
+            binaries,
+        })
+        .unwrap();
+    }
+
+    fn step_of(kind: &str) -> Plan {
+        plan(&format!(
+            "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"{kind}\"\n"
+        ))
+    }
+
+    fn problems(proj: &Project, cfg: &Config, p: &Plan, o: &RunOptions) -> String {
+        format!("{:?}", prepare_run(proj, cfg, p, o).unwrap_err())
+    }
+
+    #[test]
+    fn a_missing_program_of_a_plugin_type_is_reported_with_the_step_and_the_type() {
+        kind_needing("t-bin-missing", "baton-no-such-program-xyz", None);
+        let (_t, proj) = project(&[]);
+        let p = step_of("t-bin-missing");
+        let e = problems(&proj, &Config::default(), &p, &opts(&p));
+        assert!(
+            e.contains("falta el programa 'baton-no-such-program-xyz'"),
+            "{e}"
+        );
+        assert!(e.contains("el tipo 't-bin-missing'"), "{e}");
+    }
+
+    #[test]
+    fn a_program_that_exists_is_accepted_and_the_run_options_path_wins() {
+        kind_needing("t-bin-here", "baton-fake-tool", None);
+        let (tmp, proj) = project(&[]);
+        let p = step_of("t-bin-here");
+        let mut o = opts(&p);
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_err());
+
+        // un archivo sin permiso de ejecución no cuenta
+        let bin = tmp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("baton-fake-tool"), "#!/bin/sh\n").unwrap();
+        o.env = vec![("PATH".into(), bin.display().to_string())];
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_err());
+
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            bin.join("baton-fake-tool"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+    }
+
+    #[test]
+    fn a_dry_run_only_needs_the_programs_when_its_type_runs_something() {
+        kind_needing("t-bin-nodry", "baton-no-such-program-xyz", None);
+        kind_needing("t-bin-withdry", "baton-no-such-program-xyz", Some("true"));
+        let (_t, proj) = project(&[]);
+        for (kind, fails) in [("t-bin-nodry", false), ("t-bin-withdry", true)] {
+            let p = step_of(kind);
+            let mut o = opts(&p);
+            o.dry_run = true;
+            assert_eq!(
+                prepare_run(&proj, &Config::default(), &p, &o).is_err(),
+                fails,
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn programs_are_not_checked_for_a_step_that_runs_over_ssh() {
+        kind_needing("t-bin-ssh", "baton-no-such-program-xyz", None);
+        let (_t, proj) = project(&[]);
+        let config =
+            cfg("[targets.remoto]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\nsync = false\n");
+        let p = plan(
+            "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"t-bin-ssh\"\ntarget = \"remoto\"\n",
+        );
+        assert!(prepare_run(&proj, &config, &p, &opts(&p)).is_ok());
     }
 }

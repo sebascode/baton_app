@@ -1,0 +1,18 @@
+# Plugin de ejemplo: Terraform, una vez por carpeta con un main.tf.
+#
+# Instalar a mano: copiar esta carpeta a ~/.config/baton/plugins/terraform/ y revisarla antes con
+#   baton plugin validate ~/.config/baton/plugins/terraform
+#
+# Usa el flujo que recomienda Terraform: guarda el plan (-out) y aplica exactamente ese plan, no
+# uno nuevo. El dry-run de baton solo planifica: no guarda ni aplica nada.
+api = 1
+name = "terraform"
+version = "0.1.0"
+description = "Terraform: init, plan y apply del plan guardado, una vez por carpeta"
+requires = ["terraform"]
+
+[type]
+scanned = true
+detect = ["**/main.tf"]
+command = "terraform init -input=false && terraform plan -input=false -out=tfplan && terraform apply -input=false tfplan"
+dry_run = "terraform init -input=false && terraform plan -input=false"

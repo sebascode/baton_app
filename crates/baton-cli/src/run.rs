@@ -241,6 +241,17 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
                 "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
             );
         }
+        let plugin_kinds: Vec<&str> = steps
+            .iter()
+            .filter(|s| !s.kind.is_builtin())
+            .map(|s| s.kind.label())
+            .collect();
+        if !plugin_kinds.is_empty() {
+            println!(
+                "los pasos de plugins ({}) quedaron desactivados porque modifican cosas fuera de esta máquina: revisa su origen y su comando (baton plugin validate) y actívalos cuando corresponda",
+                plugin_kinds.join(", ")
+            );
+        }
     }
     if !ambientes.is_empty() {
         println!(

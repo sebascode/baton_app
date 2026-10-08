@@ -318,7 +318,7 @@ impl Ctx {
             Some(dir) => self.project.root.join(dir),
             None => self.project.root.clone(),
         };
-        let mut secrets = self.secrets_for(&line, ps.step.kind.is_scanned());
+        let mut secrets = self.secrets_for(&line, ps.step.kind.receives_all_credentials());
         if ps.step.kind == StepKind::Sql {
             let own = self.plan.db_for_step(&ps.step).map(|c| c.id.as_str());
             let foreign = self.foreign_db_vars(own);
@@ -443,7 +443,11 @@ impl Ctx {
             }
         }
         if self.opts.dry_run {
-            self.log(step, LogKind::Output, "dry-run: no se sincroniza");
+            self.log(
+                step,
+                LogKind::Output,
+                "dry-run: no se sincroniza (se usan los archivos que ya hay en el destino)",
+            );
             return Ok(());
         }
         let dest = format!(
@@ -809,12 +813,24 @@ async fn run_command(
     cmd: Command,
     retries: u32,
 ) -> Result<u32, StepEnd> {
-    ctx.log(step, LogKind::Command, cmd.line.clone());
     if ctx.opts.dry_run {
+        ctx.log(step, LogKind::Command, cmd.line.clone());
         ctx.log(step, LogKind::Success, "dry-run: no se ejecutó");
         return Ok(0);
     }
+    execute_command(ctx, cmds, step, cmd, retries).await
+}
 
+/// Ejecuta de verdad un comando con los reintentos del paso, aunque sea un dry-run: es lo que usa
+/// el `dry_run` de solo lectura de un tipo de plugin.
+async fn execute_command(
+    ctx: &Ctx,
+    cmds: &mut Rx<RunCommand>,
+    step: usize,
+    cmd: Command,
+    retries: u32,
+) -> Result<u32, StepEnd> {
+    ctx.log(step, LogKind::Command, cmd.line.clone());
     let mut last = String::new();
     for attempt in 0..=retries {
         if attempt > 0 {
@@ -1053,6 +1069,37 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
     }
 }
 
+/// El comando de solo lectura que un `--dry-run` ejecuta de verdad para este paso, si lo tiene:
+/// el `dry_run` de su tipo (un plugin). Si el paso declara su propio `command` no se usa, porque
+/// el del tipo ya no describiría lo que el paso haría de verdad; se avisa en el log.
+fn dry_run_probe(ctx: &Ctx, ps: &PStep) -> Option<&'static str> {
+    if !ctx.opts.dry_run {
+        return None;
+    }
+    let dry = ps.step.kind.dry_run_command()?;
+    if ps
+        .step
+        .command
+        .as_deref()
+        .is_some_and(|c| !c.trim().is_empty())
+    {
+        return None;
+    }
+    Some(dry)
+}
+
+/// ¿Algún paso va a ejecutar un dry-run de verdad? Entonces hay que resolver las credenciales.
+fn has_dry_run_probe(steps: &[PStep]) -> bool {
+    steps.iter().any(|ps| {
+        ps.step.kind.dry_run_command().is_some()
+            && ps
+                .step
+                .command
+                .as_deref()
+                .is_none_or(|c| c.trim().is_empty())
+    })
+}
+
 /// Ejecuta un paso completo: backup previo, comando por archivo y gate manual.
 /// `skip_action`: el comando ya corrió bien y solo se repite el gate (reintento tras un gate fallido).
 async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: bool) -> StepEnd {
@@ -1077,7 +1124,30 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     // usan su comando (declarado o el de su tipo).
     let template = ps.step.command_template();
     let is_sql = ps.step.kind == StepKind::Sql;
+    let probe = dry_run_probe(ctx, ps);
+    if let Some(dry) = probe {
+        // `--dry-run` de un tipo de plugin: ejecuta de verdad su comando de solo lectura
+        let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
+            vec![None]
+        } else {
+            ps.files.iter().map(Some).collect()
+        };
+        for file in files {
+            let vars = ctx.vars(ps, file.map(PathBuf::as_path));
+            let cmd = ctx.command(ps, vars.render(dry), file.map(PathBuf::as_path));
+            if let Err(end) = execute_command(ctx, cmds, i, cmd, ps.step.retries).await {
+                return end;
+            }
+        }
+    } else if ctx.opts.dry_run && ps.step.kind.dry_run_command().is_some() {
+        ctx.log(
+            i,
+            LogKind::Output,
+            "dry-run: el paso declara su propio command, no se ejecuta el dry_run de su tipo",
+        );
+    }
     if !skip_action
+        && probe.is_none()
         && ps.step.kind.runs_command()
         && (template.is_some() || ps.step.kind.has_own_interpreter())
     {
@@ -1493,7 +1563,9 @@ async fn run(
         .flatten();
     let (transports, ssh_conns) =
         build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
-    let (secrets, mut redacted) = if opts.dry_run {
+    // Un dry-run no resuelve credenciales, salvo que algún paso ejecute el dry_run de su tipo
+    // (`terraform plan` las necesita para consultar la nube).
+    let (secrets, mut redacted) = if opts.dry_run && !has_dry_run_probe(&steps) {
         (Vec::new(), Vec::new())
     } else {
         resolve_credentials(&project, &config, &plan, opts.ambiente.as_deref())
