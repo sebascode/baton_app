@@ -8,9 +8,9 @@ expression: "screen(&app, 100, 24)"
 │ escaneo     services/*/docker-compose.yml · 4 servicios · hace 2 min                             │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
 │      servicio    tipo de check   objetivo                                                        │
-│ [✓]  api ★       [healthcheck]   definido en compose                                             │
-│ [✓]  web         [http]          [ http://{destino}:3000/health                                ] │
-│ [✓]  worker      [running]       sin puertos · contenedor arriba 30s                             │
+│ [x]  api ★       [healthcheck]   definido en compose                                             │
+│ [x]  web         [http]          [ http://{destino}:3000/health                                ] │
+│ [x]  worker      [running]       sin puertos · contenedor arriba 30s                             │
 │ [+]  notifier    [http]          nuevo · detectado en el escaneo                                 │
 │ [+]  check extra                 comando o URL que no venga de un servicio                       │
 │                                                                                                  │

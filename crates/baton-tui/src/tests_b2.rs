@@ -974,7 +974,7 @@ fn gate_screen_shows_the_design() {
         "servicio",
         "tipo de check",
         "objetivo",
-        "[✓]  api ★",
+        "[x]  api ★",
         "[healthcheck]",
         "definido en compose",
         "http://{destino}:3000/health",
@@ -1008,8 +1008,8 @@ fn gate_styles() {
         style_at(&buf, find(&buf, "nuevo · detectado")).fg,
         Some(theme::WARN)
     );
-    // activos en verde; crítico con estrella
-    assert_eq!(style_at(&buf, find(&buf, "[✓]")).fg, Some(theme::OK));
+    // activos en color neutro (el verde queda para completado); crítico con estrella
+    assert_eq!(style_at(&buf, find(&buf, "[x]")).fg, Some(Color::Reset));
     assert_eq!(style_at(&buf, find(&buf, "★")).fg, Some(Color::Reset));
     // "check extra" en azul; opción activa del modo y condición en azul
     assert_eq!(
@@ -1063,7 +1063,7 @@ fn a_new_service_is_never_active_until_the_user_activates_it() {
     assert_eq!(gate(&mut app).new_count(), 0);
     let t = screen(&app, 100, 24);
     assert!(
-        t.contains("[✓]  notifier") && !t.contains("nuevo · detectado"),
+        t.contains("[x]  notifier") && !t.contains("nuevo · detectado"),
         "{t}"
     );
     // ahora se puede desactivar como cualquier otro
@@ -1146,7 +1146,7 @@ fn manual_extra_checks_can_be_added_and_edited() {
     assert!(g.rows[4].extra && g.rows[4].enabled && g.rows[4].kind == CheckKind::Command);
     let t = screen(&app, 100, 24);
     assert!(
-        t.contains("[✓]  extra") && t.contains("rurl -fsS http://x/ready"),
+        t.contains("[x]  extra") && t.contains("rurl -fsS http://x/ready"),
         "{t}"
     );
     assert!(t.contains("check extra"));

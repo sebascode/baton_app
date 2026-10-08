@@ -31,6 +31,7 @@ use baton_core::plan::{Plan, Step};
 use crate::gate_view::ScannedService;
 use crate::history_view::{HistoryAction, HistoryState, LogFileAction, LogFileState};
 use crate::preview::{PreviewAction, PreviewState, RunRequest};
+use crate::protect::{Guarded, ProtectOutcome};
 use crate::run::{Phase, RunAction, RunState};
 use crate::{failure_view, pipeline_view, run_view, summary_view, theme};
 
@@ -126,6 +127,44 @@ struct Stash {
 pub struct App {
     pub mode: Mode,
     stash: Stash,
+    /// La ayuda `?` abierta sobre la pantalla actual.
+    help: Option<crate::help::Help>,
+    /// Ambiente protegido de esta ejecución: antes de ejecutar o hacer rollback se pide su nombre.
+    protected: Option<String>,
+    protect: Option<crate::protect::ProtectPrompt>,
+}
+
+/// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
+/// lo que hace su rollback, o "nada que deshacer".
+fn rollback_list(r: &RunState) -> Vec<String> {
+    use baton_core::events::StepStatus;
+    let width = r
+        .rows
+        .iter()
+        .map(|row| row.info.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(28);
+    r.rows
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, row)| {
+            matches!(
+                row.info.status,
+                StepStatus::Done | StepStatus::Failed | StepStatus::Gate | StepStatus::Running
+            )
+        })
+        .map(|(i, row)| {
+            let what = row.info.undo.as_deref().unwrap_or("nada que deshacer");
+            format!(
+                "{:>2} {:<w$}  {what}",
+                i + 1,
+                crate::widgets::truncate(&row.info.name, width),
+                w = width
+            )
+        })
+        .collect()
 }
 
 impl App {
@@ -133,6 +172,9 @@ impl App {
         App {
             mode: Mode::Preview(preview),
             stash: Stash::default(),
+            help: None,
+            protected: None,
+            protect: None,
         }
     }
 
@@ -141,6 +183,9 @@ impl App {
         App {
             mode: Mode::Editor(Box::new(editor)),
             stash: Stash::default(),
+            help: None,
+            protected: None,
+            protect: None,
         }
     }
 
@@ -149,7 +194,16 @@ impl App {
         App {
             mode: Mode::Config(Box::new(config)),
             stash: Stash::default(),
+            help: None,
+            protected: None,
+            protect: None,
         }
+    }
+
+    /// Marca el ambiente de esta ejecución como protegido (lo decide el usuario en `config.toml`).
+    pub fn protecting(mut self, ambiente: &str) -> App {
+        self.protected = Some(ambiente.to_string());
+        self
     }
 
     pub fn with_editor(mut self, editor: EditorState) -> App {
@@ -182,6 +236,7 @@ impl App {
 
     /// Guarda la pantalla actual en la reserva y deja `mode` con el valor dado.
     fn switch(&mut self, next: Mode) {
+        self.help = None;
         match std::mem::replace(&mut self.mode, next) {
             Mode::Preview(p) => self.stash.preview = Some(p),
             Mode::Credentials(c) => self.stash.credentials = Some(c),
@@ -435,6 +490,45 @@ impl App {
             key
         };
 
+        if let Some(prompt) = &mut self.protect {
+            return match prompt.handle_key(key) {
+                ProtectOutcome::Open => None,
+                ProtectOutcome::Cancel => {
+                    self.protect = None;
+                    // si venía de las credenciales, esa ejecución pendiente ya no va
+                    if matches!(self.mode, Mode::Credentials(_)) {
+                        self.stash.pending = None;
+                        return self.back_to_preview();
+                    }
+                    None
+                }
+                ProtectOutcome::Confirm(action) => {
+                    self.protect = None;
+                    Some(match action {
+                        Guarded::Run(req) => Effect::StartRun(req),
+                        Guarded::Rollback => Effect::Command(RunCommand::Rollback),
+                    })
+                }
+            };
+        }
+        // La ayuda se cierra con esc, ? o q; mientras está abierta ninguna otra tecla llega abajo.
+        if self.help.is_some() {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter
+            ) {
+                self.help = None;
+            }
+            return None;
+        }
+        if key.code == KeyCode::Char('?')
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && let Some(help) = crate::help::for_mode(&self.mode)
+        {
+            self.help = Some(help);
+            return None;
+        }
+
         match &mut self.mode {
             Mode::Preview(p) => match p.handle_key(key)? {
                 PreviewAction::Run(req) => self.start_or_confirm_credentials(req),
@@ -488,7 +582,10 @@ impl App {
                 },
             },
             Mode::Credentials(c) => match c.handle_key(key)? {
-                CredAction::Continue => self.stash.pending.take().map(Effect::StartRun),
+                CredAction::Continue => {
+                    let pending = self.stash.pending.take()?;
+                    self.start(pending)
+                }
                 CredAction::Back => self.back_to_preview(),
                 CredAction::Test(i) => Some(Effect::TestCredential(i)),
             },
@@ -530,6 +627,18 @@ impl App {
                 },
             },
             Mode::Run(r) => match r.handle_key(key)? {
+                // un rollback siempre muestra antes lo que va a deshacer (y, en un ambiente
+                // protegido, pide su nombre)
+                RunAction::Command(RunCommand::Rollback) => {
+                    let list = rollback_list(r);
+                    let plan = r.plan.clone();
+                    self.protect = Some(crate::protect::ProtectPrompt::rollback(
+                        self.protected.as_deref(),
+                        &plan,
+                        list,
+                    ));
+                    None
+                }
                 RunAction::Command(c) => Some(Effect::Command(c)),
                 RunAction::Quit => Some(Effect::Quit),
                 // la ejecución terminó: se vuelve al plan (con su franja de estado), no se cierra
@@ -567,7 +676,28 @@ impl App {
             self.switch(Mode::Credentials(creds));
             return None;
         }
+        self.start(req)
+    }
+
+    /// Arranca la ejecución; en un ambiente protegido pide antes su nombre. Un dry-run no cambia
+    /// nada, así que no pregunta.
+    fn start(&mut self, req: RunRequest) -> Option<Effect> {
+        if self.protected.is_some() && !req.dry_run {
+            self.ask_protection(Guarded::Run(req));
+            return None;
+        }
         Some(Effect::StartRun(req))
+    }
+
+    fn ask_protection(&mut self, action: Guarded) {
+        let Some(ambiente) = self.protected.clone() else {
+            return;
+        };
+        let plan = match (&self.mode, &self.stash.preview) {
+            (Mode::Preview(p), _) | (_, Some(p)) => p.plan.clone(),
+            _ => String::new(),
+        };
+        self.protect = Some(crate::protect::ProtectPrompt::new(&ambiente, &plan, action));
     }
 
     /// ¿Se está en la vista previa del plan?
@@ -627,6 +757,12 @@ impl App {
                 Phase::Failed(_) => failure_view::render(r, buf, area),
                 Phase::Finished { .. } => summary_view::render(r, buf, area),
             },
+        }
+        if let Some(help) = &self.help {
+            crate::help::render(help, buf, area);
+        }
+        if let Some(prompt) = &self.protect {
+            prompt.render(buf, area);
         }
     }
 }

@@ -151,7 +151,7 @@ fn a_too_small_terminal_shows_a_clear_message() {
 
 #[test]
 fn preview_styles() {
-    let buf = render(100, 30, |b, a| fake::preview().render(b, a));
+    let buf = render(90, 30, |b, a| fake::preview().render(b, a));
 
     // paso desactivado: gris y tachado
     let pos = find(&buf, "Smoke tests");
@@ -339,7 +339,10 @@ fn summary_styles() {
         style_at(&buf, find(&buf, "1 reintento")).fg,
         Some(theme::SECONDARY)
     );
-    assert_eq!(style_at(&buf, find(&buf, "»")).fg, Some(theme::MUTED));
+    assert_eq!(
+        style_at(&buf, find(&buf, "- omitido")).fg,
+        Some(theme::MUTED)
+    );
     assert_eq!(
         style_at(&buf, find(&buf, "contenedores")).fg,
         Some(theme::SECONDARY)
@@ -655,9 +658,12 @@ fn full_flow_preview_run_failure_retry_summary() {
 
     let t = text(&render(100, 30, |b, a| app.render(b, a)));
     assert!(t.contains("✓ Plan instalar completado"), "{t}");
-    assert!(t.contains("↻ Levantar servicios  1 reintento"), "{t}");
-    assert!(t.contains("» Smoke tests"), "{t}");
-    assert!(t.contains("✓ Gate: confirmar despliegue"), "{t}");
+    assert!(
+        t.contains("Levantar servicios") && t.contains("↻ ok · 1 reintento"),
+        "{t}"
+    );
+    assert!(t.contains("Smoke tests") && t.contains("- omitido"), "{t}");
+    assert!(t.contains("Gate: confirmar despliegue"), "{t}");
     // enter vuelve a la vista del plan (no cierra la app) y deja la franja con cómo terminó
     assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
     assert!(matches!(app.mode, Mode::Preview(_)), "{:?}", app.mode);
@@ -746,4 +752,51 @@ fn step_status_helpers_agree_with_the_design_table() {
     assert_eq!(theme::status_symbol(StepStatus::Pending), "○");
     assert_eq!(theme::status_symbol(StepStatus::Skipped), "»");
     assert_eq!(theme::status_color(StepStatus::Skipped), Color::DarkGray);
+}
+
+// ----------------------------------------------------- ejecución: barra y gates
+
+#[test]
+fn running_shows_a_counter_and_one_cell_per_step() {
+    let s = fake::running();
+    let t = text(&render(100, 30, |b, a| crate::run_view::render(&s, b, a)));
+    assert!(t.contains(" 3/7"), "{t}");
+    assert!(t.contains("✓✓✓◐◆○○  7 se ejecutan · 2 gates"), "{t}");
+}
+
+#[test]
+fn a_retrying_gate_is_explained_above_the_log() {
+    let mut s = fake::running();
+    let gate = s
+        .rows
+        .iter()
+        .position(|r| r.info.name.starts_with("Gate"))
+        .unwrap();
+    s.rows[gate].gate = Some((3, 6));
+    let t = text(&render(100, 30, |b, a| crate::run_view::render(&s, b, a)));
+    assert!(
+        t.contains("◆ Gate · intento 3 de 6 · Gate: healthcheck"),
+        "{t}"
+    );
+    // y el log sigue debajo
+    assert!(t.contains("log en vivo"), "{t}");
+}
+
+#[test]
+fn many_steps_show_counts_instead_of_a_sentence() {
+    use baton_core::events::StepStatus;
+    let statuses: Vec<StepStatus> = (0..30)
+        .map(|i| {
+            if i < 22 {
+                StepStatus::Done
+            } else {
+                StepStatus::Pending
+            }
+        })
+        .collect();
+    let counts = crate::widgets::status_counts(&statuses);
+    assert_eq!(counts, [(22, StepStatus::Done), (8, StepStatus::Pending)]);
+    // si no caben, se corta con … en vez de salirse
+    let line = crate::widgets::cell_rail(10, &statuses);
+    assert_eq!(line.width(), 10);
 }

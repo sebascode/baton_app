@@ -122,6 +122,36 @@ fn a_query_prints_a_table_with_aligned_numbers_null_and_the_row_count() {
 }
 
 #[test]
+fn the_record_format_prints_one_block_per_row() {
+    if !have_sqlite() {
+        return;
+    }
+    let fx = Fx::sqlite();
+    let o = fx.baton(&[
+        "-c",
+        "select id, nombre, nota from clientes order by id",
+        "--formato",
+        "registro",
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let t = out(&o);
+    for frag in [
+        "─ fila 1 de 3 ",
+        "  id      1",
+        "  nombre  Ana",
+        "  nota    NULL",
+        "─ fila 3 de 3 ",
+        "  nota    a↵b",
+        "(3 filas)",
+    ] {
+        assert!(t.contains(frag), "falta {frag:?}:\n{t}");
+    }
+    // por una tubería la tabla no se cambia aunque sea ancha
+    let o = fx.baton(&["-c", "select id, nombre from clientes"]);
+    assert!(out(&o).contains("┌"), "{}", out(&o));
+}
+
+#[test]
 fn csv_and_json_formats_keep_types_and_never_leak_the_null_mark() {
     if !have_sqlite() {
         return;

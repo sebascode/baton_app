@@ -26,7 +26,7 @@ const HELP: &str = "\
 consultas   escribe una sentencia terminada en ; (puede ocupar varias líneas)
 \\tablas      las tablas y vistas de la base
 \\columnas T  las columnas de la tabla T
-\\formato F   tabla, csv o json (sin argumento muestra el actual)
+\\formato F   tabla, registro, csv o json (sin argumento muestra el actual)
 \\limite N    filas que muestra la tabla (0: todas)
 \\completo    alterna recortar las celdas largas
 \\escribir    permite modificar datos (una sentencia destructiva pide confirmar)
@@ -258,7 +258,7 @@ impl Session<'_> {
                     self.view.format = f;
                     println!("formato: {}", format_name(f));
                 }
-                None => eprintln!("error: el formato es tabla, csv o json"),
+                None => eprintln!("error: el formato es tabla, registro, csv o json"),
             },
             Meta::Limit(None) => println!("límite: {}", self.view.limit),
             Meta::Limit(Some(n)) => match n.parse::<usize>() {
@@ -304,6 +304,7 @@ impl Session<'_> {
 fn format_name(f: Format) -> &'static str {
     match f {
         Format::Tabla => "tabla",
+        Format::Registro => "registro",
         Format::Csv => "csv",
         Format::Json => "json",
     }
@@ -312,6 +313,7 @@ fn format_name(f: Format) -> &'static str {
 fn parse_format(name: &str) -> Option<Format> {
     match name.to_lowercase().as_str() {
         "tabla" => Some(Format::Tabla),
+        "registro" => Some(Format::Registro),
         "csv" => Some(Format::Csv),
         "json" => Some(Format::Json),
         _ => None,

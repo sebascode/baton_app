@@ -12,17 +12,17 @@ expression: text(&buf)
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  ¿Qué quieres hacer?                                                         │
-│  › Actualizar credencial y reintentar                                        │
-│    Reintentar sin cambios                                                    │
-│    Rollback a antes del paso 4                                               │
-│    Ver el log completo                                                       │
-│    Abrir shell para investigar                                               │
-│    Abortar y guardar estado                                                  │
+│  › 1 Actualizar credencial y reintentar                                      │
+│    2 Reintentar sin cambios                                                  │
+│    3 Rollback a antes del paso 4                                             │
+│    4 Ver el log completo                                                     │
+│    5 Abrir shell para investigar                                             │
+│    6 Abortar y guardar estado                                                │
 │                                                                              │
-│                                                                              │
+│    abre la credencial y repite el paso 6                                     │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ [↑↓] elegir  [enter] confirmar  [l] ver log  [v] pipeline                    │
+│ [↑↓] elegir  [1-9] directo  [enter] confirmar  [l] ver log  [v] pipeline     │
 ╰──────────────────────────────────────────────────────────────────────────────╯

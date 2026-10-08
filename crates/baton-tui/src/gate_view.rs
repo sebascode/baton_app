@@ -5,7 +5,7 @@ use baton_core::units::{Dur, format_duration};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -829,7 +829,7 @@ impl GateState {
             } else if r.is_new {
                 ("[+]", theme::WARN)
             } else if r.enabled {
-                ("[✓]", theme::OK)
+                ("[x]", Color::Reset)
             } else {
                 ("[ ]", theme::MUTED)
             };

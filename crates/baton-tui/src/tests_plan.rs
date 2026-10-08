@@ -446,3 +446,259 @@ fn plans_changed_refreshes_the_list_the_current_name_and_shows_the_message() {
     };
     assert_eq!(p.plan, "tienda");
 }
+
+#[test]
+fn question_mark_opens_the_help_and_esc_closes_it() {
+    let mut app = app();
+    assert!(app.handle_key(key(KeyCode::Char('?'))).is_none());
+    let t = screen(&app, 100, 30);
+    assert!(t.contains("Atajos · vista del plan"), "{t}");
+    assert!(t.contains("en todas las pantallas") && t.contains("en esta pantalla"));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!screen(&app, 100, 30).contains("Atajos"));
+}
+
+#[test]
+fn keys_do_not_reach_the_screen_while_the_help_is_open() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    // `q` cierra la ayuda, no la aplicación
+    assert!(app.handle_key(key(KeyCode::Char('q'))).is_none());
+    let t = screen(&app, 100, 30);
+    assert!(!t.contains("Atajos") && t.contains("Revisar plan"), "{t}");
+}
+
+#[test]
+fn the_help_fits_the_smallest_terminal() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    let t = screen(&app, 80, 16);
+    assert!(t.contains("Atajos") && t.contains("esc cierra"), "{t}");
+}
+
+#[test]
+fn the_help_is_not_offered_inside_a_form() {
+    use crate::EditorState;
+    let editor = EditorState::from_plan(&plan(), &["local".to_string()], "local", &[]);
+    let mut app = App::editor_only(editor);
+    // en el editor `?` es texto, no abre nada
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(!screen(&app, 100, 30).contains("Atajos"));
+}
+
+#[test]
+fn snapshot_help_on_the_plan_view() {
+    let mut app = app();
+    app.handle_key(key(KeyCode::Char('?')));
+    insta::assert_snapshot!("help_plan_100", screen(&app, 100, 30));
+    insta::assert_snapshot!("help_plan_80x16", screen(&app, 80, 16));
+}
+
+fn long_app(n: usize) -> App {
+    let mut toml = String::from("name = \"largo\"\n");
+    for i in 1..=n {
+        let kind = if i % 3 == 0 { "build" } else { "paso" };
+        toml.push_str(&format!(
+            "\n[[steps]]\nid = \"s{i}\"\nname = \"{kind} {i}\"\ntype = \"check\"\ncommand = \"true\"\n"
+        ));
+    }
+    let p = Plan::parse(&toml).unwrap();
+    App::new(PreviewState::from_plan(&p))
+}
+
+fn preview_of_app(app: &mut App) -> &mut PreviewState {
+    match &mut app.mode {
+        Mode::Preview(p) => p,
+        other => panic!("se esperaba la vista del plan, hay {other:?}"),
+    }
+}
+
+#[test]
+fn a_long_list_says_how_many_steps_are_out_of_view() {
+    let mut app = long_app(40);
+    let t = screen(&app, 100, 24);
+    assert!(
+        t.contains("↓ ") && t.contains("pasos más abajo") && !t.contains("más arriba"),
+        "{t}"
+    );
+    preview_of_app(&mut app).cursor = 20;
+    let t = screen(&app, 100, 24);
+    assert!(
+        t.contains("pasos más arriba") && t.contains("pasos más abajo"),
+        "{t}"
+    );
+    assert!(
+        t.contains("build 21"),
+        "el paso elegido tiene que verse\n{t}"
+    );
+    app.handle_key(key(KeyCode::End));
+    let t = screen(&app, 100, 24);
+    assert!(t.contains("paso 40") && !t.contains("más abajo"), "{t}");
+}
+
+#[test]
+fn the_filter_narrows_the_list_and_keeps_real_positions() {
+    let mut app = long_app(40);
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "build".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let t = screen(&app, 100, 24);
+    assert!(t.contains("/ build▌ · 13 de 40"), "{t}");
+    assert!(t.contains("build 3") && !t.contains("paso 1"), "{t}");
+    // enter deja el filtro puesto y las letras vuelven a ser atajos
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(
+        preview_of_app(&mut app).cursor,
+        5,
+        "salta al siguiente visible (build 6)"
+    );
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert!(!preview_of_app(&mut app).steps[5].enabled);
+    // esc quita el filtro sin salir
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 24).contains("13 de 40"));
+}
+
+#[test]
+fn letters_are_text_while_typing_the_filter() {
+    let mut app = long_app(10);
+    app.handle_key(key(KeyCode::Char('/')));
+    // `e` escribiría el filtro, no abriría el editor
+    assert!(app.handle_key(key(KeyCode::Char('e'))).is_none());
+    assert_eq!(preview_of_app(&mut app).filter, "e");
+    // y `?` tampoco abre la ayuda mientras se escribe
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(!screen(&app, 100, 24).contains("Atajos"));
+}
+
+#[test]
+fn steps_cannot_be_moved_while_filtered_and_no_match_is_said() {
+    let mut app = long_app(10);
+    app.handle_key(key(KeyCode::Char('/')));
+    app.handle_key(key(KeyCode::Char('1')));
+    app.handle_key(key(KeyCode::Enter));
+    let before = preview_of_app(&mut app).steps.clone();
+    let shift_down = KeyEvent {
+        modifiers: KeyModifiers::SHIFT,
+        ..key(KeyCode::Down)
+    };
+    app.handle_key(shift_down);
+    assert_eq!(preview_of_app(&mut app).steps, before);
+    assert!(screen(&app, 100, 24).contains("no se mueven pasos"));
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "zzz".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert!(screen(&app, 100, 24).contains("Ningún paso coincide con «zzz»"));
+}
+
+// ------------------------------------------------------------ ambiente protegido
+
+#[test]
+fn a_protected_environment_asks_for_its_name_before_running() {
+    let mut app = app().protecting("produccion");
+    assert!(
+        app.handle_key(key(KeyCode::Enter)).is_none(),
+        "todavía no ejecuta"
+    );
+    let t = screen(&app, 100, 30);
+    assert!(
+        t.contains("Ejecutar en «produccion»") && t.contains("Para confirmar escribe produccion"),
+        "{t}"
+    );
+    // un nombre distinto no pasa, ni siquiera el "prod" de siempre
+    type_text(&mut app, "prod");
+    assert!(app.handle_key(key(KeyCode::Enter)).is_none());
+    assert!(screen(&app, 100, 30).contains("no coincide"));
+    type_text(&mut app, "uccion");
+    assert!(
+        matches!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Effect::StartRun(_))
+        ),
+        "el nombre completo confirma"
+    );
+    assert!(!screen(&app, 100, 30).contains("Ejecutar en"));
+}
+
+#[test]
+fn cancelling_the_protection_runs_nothing() {
+    let mut app = app().protecting("produccion");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 30).contains("Ejecutar en"));
+    // y las teclas de la caja no llegaron a la vista (la q no sale)
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.handle_key(key(KeyCode::Char('q'))).is_none());
+}
+
+#[test]
+fn an_unprotected_environment_and_a_dry_run_do_not_ask() {
+    let mut plain = app();
+    assert!(matches!(
+        plain.handle_key(key(KeyCode::Enter)),
+        Some(Effect::StartRun(_))
+    ));
+    let mut app = app().protecting("produccion");
+    app.handle_key(key(KeyCode::Char('d'))); // dry-run
+    assert!(
+        matches!(app.handle_key(key(KeyCode::Enter)), Some(Effect::StartRun(r)) if r.dry_run),
+        "un dry-run no cambia nada"
+    );
+}
+
+#[test]
+fn a_rollback_in_a_protected_environment_asks_too() {
+    use baton_core::events::RunCommand;
+    let mut app = App::new(crate::fake::preview()).protecting("produccion");
+    app.mode = Mode::Run(Box::new(crate::fake::failed()));
+    // el menú de fallo: 3 es el rollback
+    assert!(app.handle_key(key(KeyCode::Char('3'))).is_none());
+    assert!(screen(&app, 100, 30).contains("Rollback en «produccion»"));
+    type_text(&mut app, "produccion");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::Command(RunCommand::Rollback))
+    );
+}
+
+#[test]
+fn a_rollback_lists_what_it_undoes_from_the_last_step_to_the_first() {
+    use baton_core::events::RunCommand;
+    let mut app = App::new(crate::fake::preview());
+    let mut failed = crate::fake::failed();
+    failed.rows[1].info.undo = Some("docker compose down".into());
+    app.mode = Mode::Run(Box::new(failed));
+    assert!(
+        app.handle_key(key(KeyCode::Char('3'))).is_none(),
+        "primero muestra la lista"
+    );
+    let t = screen(&app, 100, 30);
+    insta::assert_snapshot!("rollback_box_100", t);
+    assert!(t.contains("Se deshace, del último al primero"), "{t}");
+    assert!(
+        t.contains("docker compose down") && t.contains("nada que deshacer"),
+        "{t}"
+    );
+    // el último paso aparece antes que el primero
+    let first = t.find("nada que deshacer").unwrap();
+    assert!(first < t.find("docker compose down").unwrap(), "{t}");
+    // sin ambiente protegido basta enter
+    assert!(!t.contains("Para confirmar escribe"));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::Command(RunCommand::Rollback))
+    );
+}
+
+#[test]
+fn cancelling_a_rollback_changes_nothing() {
+    let mut app = App::new(crate::fake::preview());
+    app.mode = Mode::Run(Box::new(crate::fake::failed()));
+    app.handle_key(key(KeyCode::Char('3')));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 30).contains("Se deshace"));
+}

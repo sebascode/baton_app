@@ -14,6 +14,10 @@ use crate::plan_prompt::{PlanOp, PlanPrompt, PlanRequest, PromptOutcome};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, spans_width, truncate};
 
+/// Ancho del panel derecho de la vista del plan y desde qué ancho útil se muestra.
+const SIDE_W: u16 = 36;
+const SIDE_MIN_INNER: u16 = 98;
+
 /// Etiqueta de tipo entre corchetes: `[check]`, `[gate auto]`...
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tag {
@@ -37,6 +41,8 @@ pub struct PreviewStep {
     pub meta: String,
     pub tag: Tag,
     pub enabled: bool,
+    /// Lo que muestra el panel de la derecha: (campo, valor) del paso, en orden.
+    pub detail: Vec<(&'static str, String)>,
 }
 
 /// Lo que se decidió en la vista previa al pulsar enter.
@@ -88,6 +94,58 @@ pub struct PreviewState {
     pub prompt: Option<Box<PlanPrompt>>,
     /// Cómo terminó la última ejecución (la franja de estado de arriba); `None` si nunca se ejecutó.
     pub last_run: Option<LastRunBanner>,
+    /// Texto con el que se filtra la lista (nombre, tipo o línea gris); vacío = sin filtro.
+    pub filter: String,
+    /// Se está escribiendo el filtro: las letras son texto, no atajos.
+    pub filtering: bool,
+    /// Dónde se va a ejecutar (ambiente y destino), a la derecha de la cabecera.
+    pub context: Option<String>,
+}
+
+/// Los campos del paso que interesan antes de ejecutar (panel derecho de la vista del plan).
+fn step_detail(step: &Step) -> Vec<(&'static str, String)> {
+    let mut out = vec![("tipo", step.kind.label().to_string())];
+    let src: Vec<&str> = step.source.iter().collect();
+    if !src.is_empty() {
+        out.push(("origen", src.join(", ")));
+    }
+    out.push((
+        "destino",
+        step.target.clone().unwrap_or_else(|| "por defecto".into()),
+    ));
+    let mut limits = Vec::new();
+    if let Some(t) = step.timeout {
+        limits.push(widgets::fmt_duration(t.as_duration()));
+    }
+    if step.retries > 0 {
+        let noun = if step.retries == 1 {
+            "reintento"
+        } else {
+            "reintentos"
+        };
+        limits.push(format!("{} {noun}", step.retries));
+    }
+    if !limits.is_empty() {
+        out.push(("límites", limits.join(" · ")));
+    }
+    if let Some(cmd) = step.command.as_deref().filter(|c| !c.trim().is_empty()) {
+        out.push(("comando", cmd.trim().to_string()));
+    }
+    if !step.depends_on.is_empty() {
+        out.push(("depende de", step.depends_on.join(", ")));
+    }
+    if step.kind != StepKind::Gate
+        && let Some(g) = &step.gate
+    {
+        out.push(("gate", gate_info(g).summary));
+    }
+    if let Some(r) = step.rollback.as_deref() {
+        out.push(("rollback", r.to_string()));
+    }
+    if step.backup_before {
+        out.push(("backup antes", "sí".into()));
+    }
+    out
 }
 
 /// Línea gris de un paso: su descripción o, si no la tiene, lo que hace.
@@ -168,6 +226,7 @@ impl PreviewState {
                     (kind, _) => kind.label().to_string(),
                 }),
                 enabled: s.enabled,
+                detail: step_detail(s),
             })
             .collect();
         PreviewState {
@@ -182,6 +241,9 @@ impl PreviewState {
             switcher: None,
             prompt: None,
             last_run: None,
+            filter: String::new(),
+            filtering: false,
+            context: None,
         }
     }
 
@@ -266,6 +328,11 @@ impl PreviewState {
                 items.insert(at + n, e);
             }
         }
+        // con listas largas el filtro es la forma de llegar a un paso
+        if self.steps.len() > 8 || !self.filter.is_empty() {
+            items.insert(items.len() - 1, ("/", "filtrar"));
+        }
+        items.insert(items.len() - 1, ("?", "ayuda"));
         items
     }
 
@@ -310,21 +377,76 @@ impl PreviewState {
     }
 
     fn move_cursor(&mut self, delta: isize) {
-        if self.steps.is_empty() {
+        let shown = self.visible();
+        if shown.is_empty() {
             return;
         }
-        let last = self.steps.len() - 1;
-        self.cursor = self.cursor.saturating_add_signed(delta).min(last);
+        let at = shown.iter().position(|&i| i == self.cursor).unwrap_or(0);
+        let to = at.saturating_add_signed(delta).min(shown.len() - 1);
+        self.cursor = shown[to];
+    }
+
+    /// Posiciones (en `steps`) de los pasos que pasan el filtro, en orden.
+    pub fn visible(&self) -> Vec<usize> {
+        let needle = self.filter.trim().to_lowercase();
+        (0..self.steps.len())
+            .filter(|&i| {
+                let s = &self.steps[i];
+                needle.is_empty()
+                    || [s.name.as_str(), s.meta.as_str(), s.tag.label.as_str()]
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&needle))
+            })
+            .collect()
+    }
+
+    /// Tras cambiar el filtro, el cursor no puede quedar en un paso oculto.
+    fn keep_cursor_visible(&mut self) {
+        let shown = self.visible();
+        if !shown.contains(&self.cursor)
+            && let Some(&first) = shown.first()
+        {
+            self.cursor = first;
+        }
+    }
+
+    fn filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.filter.clear();
+                self.filtering = false;
+            }
+            KeyCode::Enter => self.filtering = false,
+            KeyCode::Backspace => {
+                self.filter.pop();
+            }
+            KeyCode::Up => self.move_cursor(-1),
+            KeyCode::Down => self.move_cursor(1),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.filter.push(c);
+            }
+            _ => {}
+        }
+        self.keep_cursor_visible();
     }
 
     /// Mueve el paso bajo el cursor una posición; el cursor lo acompaña.
     fn move_step(&mut self, delta: isize) {
+        if !self.filter.is_empty() {
+            self.notice = vec!["con un filtro activo no se mueven pasos: quítalo con esc".into()];
+            return;
+        }
         let target = self.cursor.saturating_add_signed(delta);
         if self.steps.is_empty() || target >= self.steps.len() || target == self.cursor {
             return;
         }
         self.steps.swap(self.cursor, target);
         self.cursor = target;
+    }
+
+    /// `?` abre la ayuda salvo mientras una caja o el selector de planes usan las teclas.
+    pub fn accepts_help(&self) -> bool {
+        self.prompt.is_none() && self.switcher.is_none() && !self.filtering
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
@@ -335,14 +457,23 @@ impl PreviewState {
         if self.switcher.is_some() {
             return self.switcher_key(key);
         }
+        if self.filtering {
+            self.filter_key(key);
+            return None;
+        }
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            KeyCode::Char('/') if !self.steps.is_empty() => self.filtering = true,
+            // con un filtro puesto, esc lo quita antes de salir
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+            }
             KeyCode::Up if shift => self.move_step(-1),
             KeyCode::Down if shift => self.move_step(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_cursor(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.steps.len().saturating_sub(1),
+            KeyCode::Home => self.cursor = self.visible().first().copied().unwrap_or(0),
+            KeyCode::End => self.cursor = self.visible().last().copied().unwrap_or(0),
             KeyCode::Char(' ') => {
                 if let Some(s) = self.steps.get_mut(self.cursor) {
                     s.enabled = !s.enabled;
@@ -399,14 +530,24 @@ impl PreviewState {
                 format!("Revisar plan: {}", self.plan),
                 theme::bold(),
             )],
-            vec![Span::styled(
-                format!(
-                    "{} pasos · {} activos",
-                    self.steps.len(),
-                    self.active_count()
-                ),
-                theme::secondary(),
-            )],
+            {
+                let mut right = Vec::new();
+                if let Some(ctx) = &self.context {
+                    // el espacio separa el título de la unión `┬` del panel derecho
+                    right.push(Span::raw("  "));
+                    right.push(Span::styled(ctx.clone(), Style::new().fg(theme::INFO)));
+                    right.push(Span::styled(" · ", theme::muted()));
+                }
+                right.push(Span::styled(
+                    format!(
+                        "{} pasos · {} activos",
+                        self.steps.len(),
+                        self.active_count()
+                    ),
+                    theme::secondary(),
+                ));
+                right
+            },
             theme::border(),
         );
 
@@ -424,14 +565,22 @@ impl PreviewState {
 
         // los avisos ocupan las últimas filas del área de la lista
         let notice_h = (self.notice.len().min(4) as u16).min(sep_high.saturating_sub(inner.y + 3));
+        // con espacio, el paso elegido se muestra a la derecha; bajo 100 columnas no hay panel
+        let wide = inner.width >= SIDE_MIN_INNER && !self.steps.is_empty();
+        let main_w = if wide {
+            inner.width - SIDE_W - 1
+        } else {
+            inner.width
+        };
         let list = Rect::new(
             inner.x,
             inner.y + 1, // una línea de aire arriba, como en la maqueta
             inner.width,
             sep_high.saturating_sub(inner.y + 1 + notice_h),
         );
-        self.render_banner(buf, Rect::new(inner.x, inner.y, inner.width, 1));
-        self.render_list(buf, list);
+        self.render_banner(buf, Rect::new(inner.x, inner.y, main_w, 1));
+        self.render_filter(buf, Rect::new(inner.x, inner.y, main_w, 1));
+        self.render_list(buf, Rect::new(list.x, list.y, main_w, list.height));
         for (n, line) in self.notice.iter().take(notice_h as usize).enumerate() {
             Line::from(Span::styled(
                 truncate(line, content_w as usize),
@@ -444,6 +593,19 @@ impl PreviewState {
         }
 
         hsep(buf, area, sep_high, theme::border());
+        if wide {
+            let x = inner.x + main_w;
+            widgets::vsep(buf, x, area.y, sep_high, theme::border());
+            self.render_side(
+                buf,
+                Rect::new(
+                    x + 1,
+                    inner.y + 1,
+                    SIDE_W,
+                    sep_high.saturating_sub(inner.y + 1),
+                ),
+            );
+        }
         self.render_toggles(buf, Rect::new(inner.x, toggles_y, inner.width, 1));
         hsep(buf, area, sep_low, theme::border());
         widgets::render_shortcuts(
@@ -584,22 +746,58 @@ impl PreviewState {
             }
             return;
         }
-        let visible = (list.height / 2) as usize;
-        if visible == 0 {
+        let shown = self.visible();
+        if shown.is_empty() {
+            Line::from(Span::styled(
+                format!("Ningún paso coincide con «{}».", self.filter.trim()),
+                theme::muted(),
+            ))
+            .render(
+                Rect::new(list.x + 2, list.y + 1, list.width.saturating_sub(2), 1),
+                buf,
+            );
             return;
         }
-        let offset = (self.cursor + 1).saturating_sub(visible);
+        // Ventana sobre los pasos visibles. Cada paso ocupa 2 filas; si queda algo fuera por
+        // arriba o por abajo se reserva una fila para decir cuántos, en vez de cortar en silencio.
+        let at = shown.iter().position(|&i| i == self.cursor).unwrap_or(0);
+        let mut capacity = (list.height / 2) as usize;
+        let mut offset = (at + 1).saturating_sub(capacity);
+        for _ in 0..2 {
+            let above = u16::from(offset > 0);
+            let below = u16::from(offset + capacity < shown.len());
+            capacity = (list.height.saturating_sub(above + below) / 2) as usize;
+            offset = (at + 1).saturating_sub(capacity);
+        }
+        if capacity == 0 {
+            return;
+        }
+        let above = offset;
+        let below = shown.len().saturating_sub(offset + capacity);
+        let top = list.y + u16::from(above > 0);
         let digits = self.steps.len().to_string().len();
+        let note = |n: usize, arrow: &str, y: u16, buf: &mut Buffer| {
+            let noun = if n == 1 { "paso" } else { "pasos" };
+            let place = if arrow == "↑" { "arriba" } else { "abajo" };
+            Line::from(Span::styled(
+                format!("{arrow} {n} {noun} más {place}"),
+                theme::muted(),
+            ))
+            .render(
+                Rect::new(list.x + 2, y, list.width.saturating_sub(2), 1),
+                buf,
+            );
+        };
+        if above > 0 {
+            note(above, "↑", list.y, buf);
+        }
+        if below > 0 {
+            note(below, "↓", top + (capacity as u16) * 2, buf);
+        }
 
-        for (row, (i, step)) in self
-            .steps
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(visible)
-            .enumerate()
-        {
-            let y = list.y + (row as u16) * 2;
+        for (row, &i) in shown.iter().skip(offset).take(capacity).enumerate() {
+            let step = &self.steps[i];
+            let y = top + (row as u16) * 2;
             let rect = Rect::new(list.x, y, list.width, 2);
             let selected = i == self.cursor;
             if selected {
@@ -610,6 +808,81 @@ impl PreviewState {
             title.render(Rect::new(content.x, y, content.width, 1), buf);
             meta.render(Rect::new(content.x, y + 1, content.width, 1), buf);
         }
+    }
+
+    /// Panel derecho: el paso bajo el cursor, con lo que importa saber antes de ejecutarlo.
+    fn render_side(&self, buf: &mut Buffer, area: Rect) {
+        let Some(step) = self.steps.get(self.cursor) else {
+            return;
+        };
+        let w = area.width.saturating_sub(2) as usize;
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(Span::styled(
+                format!("paso {} de {}", self.cursor + 1, self.steps.len()),
+                theme::muted(),
+            )),
+            Line::from(Span::styled(truncate(&step.name, w), theme::bold())),
+            Line::raw(""),
+        ];
+        const KEY_W: usize = 12;
+        for (key, value) in &step.detail {
+            let room = w.saturating_sub(KEY_W).max(8);
+            // un valor largo sigue en las filas de abajo (hasta 3) en vez de cortarse en seco
+            let mut chunks = crate::run_view::wrap_text(value, room);
+            if chunks.len() > 3 {
+                chunks.truncate(3);
+                if let Some(last) = chunks.last_mut() {
+                    *last = truncate(&format!("{last}…"), room);
+                }
+            }
+            for (n, chunk) in chunks.into_iter().enumerate() {
+                let label = if n == 0 {
+                    format!("{key:<KEY_W$}")
+                } else {
+                    " ".repeat(KEY_W)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(label, theme::muted()),
+                    Span::raw(chunk),
+                ]));
+            }
+        }
+        if !step.enabled {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                "desactivado: no se ejecuta",
+                Style::new().fg(theme::WARN),
+            )));
+        }
+        for (i, line) in lines.into_iter().enumerate() {
+            let y = area.y + i as u16;
+            if y >= area.bottom() {
+                break;
+            }
+            line.render(
+                Rect::new(area.x + 1, y, area.width.saturating_sub(2), 1),
+                buf,
+            );
+        }
+    }
+
+    /// El filtro, a la derecha de la franja de arriba: lo escrito y cuántos pasos pasan.
+    fn render_filter(&self, buf: &mut Buffer, area: Rect) {
+        if !self.filtering && self.filter.is_empty() {
+            return;
+        }
+        let cursor = if self.filtering { "▌" } else { "" };
+        let text = format!(
+            "/ {}{cursor} · {} de {}",
+            self.filter,
+            self.visible().len(),
+            self.steps.len()
+        );
+        let w = (text.chars().count() as u16 + 2).min(area.width);
+        let x = area.right().saturating_sub(w + 1);
+        let style = Style::new().fg(theme::INFO);
+        buf.set_style(Rect::new(x, area.y, w, 1), Style::new());
+        Line::from(Span::styled(format!(" {text}"), style)).render(Rect::new(x, area.y, w, 1), buf);
     }
 
     fn render_toggles(&self, buf: &mut Buffer, area: Rect) {
@@ -657,7 +930,7 @@ fn step_lines(
             Style::new(),
             Style::new(),
             Style::new().fg(theme::tag_color(&step.tag.label)),
-            Span::styled("[✓]", Style::new().fg(theme::OK)),
+            Span::raw("[x]"),
         )
     } else {
         (

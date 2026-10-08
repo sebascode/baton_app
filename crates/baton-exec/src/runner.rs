@@ -1389,7 +1389,14 @@ async fn run(
     let fecha = clock::fecha();
     let infos: Vec<_> = steps
         .iter()
-        .map(|p| step_info(&p.step, &p.target))
+        .map(|p| {
+            let mut info = step_info(&p.step, &p.target);
+            // un paso de respaldo sin rollback propio restaura el último volcado de la base
+            if info.undo.is_none() && p.restore_db {
+                info.undo = Some("restaura el último respaldo de la base".into());
+            }
+            info
+        })
         .collect();
     let rollback_mode = opts.mode == Mode::Rollback;
 

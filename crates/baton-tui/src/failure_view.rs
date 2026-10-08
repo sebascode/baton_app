@@ -10,8 +10,9 @@ use crate::run::{Phase, RunState};
 use crate::theme;
 use crate::widgets::{self, fmt_clock, frame, hsep, truncate};
 
-const SHORTCUTS: [(&str, &str); 4] = [
+const SHORTCUTS: [(&str, &str); 5] = [
     ("↑↓", "elegir"),
+    ("1-9", "directo"),
     ("enter", "confirmar"),
     ("l", "ver log"),
     ("v", "pipeline"),
@@ -46,7 +47,7 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     let w = inner.width.saturating_sub(4);
     let options = s.failure_options();
     // arriba: 1 aire + 1 mensaje + caja + 1 aire; abajo: separador + pregunta + opciones
-    let below = 1 + 1 + options.len() as u16;
+    let below = 1 + 1 + options.len() as u16 + 2;
     let room_for_box = sep_low
         .saturating_sub(below)
         .saturating_sub(inner.y + 3)
@@ -119,9 +120,22 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
         Line::from(vec![
             Span::styled(marker, Style::new().fg(theme::INFO)),
             Span::raw(" "),
+            Span::styled(format!("{} ", i + 1), theme::muted()),
             Span::styled(opt.label(), style),
         ])
         .render(Rect::new(x, y, w, 1), buf);
+    }
+
+    // La consecuencia solo de la opción seleccionada, para no recargar el menú.
+    if let (Some(opt), Some((n, _))) = (options.get(s.failure_cursor), step) {
+        let y = sep_menu + 3 + options.len() as u16;
+        if y < sep_low {
+            Line::from(Span::styled(
+                truncate(&opt.consequence(n + 1), w as usize),
+                theme::secondary(),
+            ))
+            .render(Rect::new(x + 2, y, w.saturating_sub(2), 1), buf);
+        }
     }
 
     hsep(buf, area, sep_low, theme::border());

@@ -118,6 +118,9 @@ pub struct StepInfo {
     pub target: String,
     /// Gate para avanzar. Un paso de tipo `gate` lo tiene como contenido principal.
     pub gate: Option<GateInfo>,
+    /// Qué hace su rollback (su comando, o "restaura el último respaldo"); `None` si no hay
+    /// nada que deshacer. Sirve para listar lo que se deshace antes de confirmar.
+    pub undo: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

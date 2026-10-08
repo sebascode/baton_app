@@ -305,6 +305,50 @@ pub fn segmented_bar(width: u16, statuses: &[StepStatus]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Una celda por paso (`✓✓✓◐◆○○○-`), cada una con el color de su estado. Si no caben, se corta con
+/// `…` (el resumen de al lado cuenta lo que quedó fuera).
+pub fn cell_rail(width: u16, statuses: &[StepStatus]) -> Line<'static> {
+    let width = width as usize;
+    let cut = statuses.len() > width;
+    let shown = if cut {
+        width.saturating_sub(1)
+    } else {
+        statuses.len()
+    };
+    let mut spans: Vec<Span<'static>> = statuses
+        .iter()
+        .take(shown)
+        .map(|st| {
+            let glyph = if *st == StepStatus::Skipped {
+                "-"
+            } else {
+                theme::status_symbol(*st)
+            };
+            Span::styled(glyph, Style::new().fg(theme::status_color(*st)))
+        })
+        .collect();
+    if cut {
+        spans.push(Span::styled("…", theme::muted()));
+    }
+    Line::from(spans)
+}
+
+/// Cuántos pasos hay de cada estado, con su símbolo, sin los estados vacíos.
+pub fn status_counts(statuses: &[StepStatus]) -> Vec<(usize, StepStatus)> {
+    [
+        StepStatus::Done,
+        StepStatus::Running,
+        StepStatus::Gate,
+        StepStatus::Failed,
+        StepStatus::Pending,
+        StepStatus::Skipped,
+    ]
+    .into_iter()
+    .map(|st| (statuses.iter().filter(|s| **s == st).count(), st))
+    .filter(|(n, _)| *n > 0)
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

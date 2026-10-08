@@ -1,0 +1,34 @@
+---
+source: crates/baton-tui/src/tests_plan.rs
+expression: "screen(&app, 100, 30)"
+---
+╭─ Revisar plan: instalar ────────────────────────────────────┬────────────── 5 pasos · 4 activos ─╮
+│                                                             │                                    │
+│ › ⋮⋮ [x] 1  Pre-checks                              [check] │ paso 1 de 5                        │
+│             scripts/prechecks.sh                            │ Pre-checks                         │
+│   ⋮⋮ [x] 2  Bui┌ Atajos · vista del plan ─────────────────────────── esc cierra ┐                │
+│             api│ en todas las pantallas                                         │                │
+│   ⋮⋮ [x] 3  Lev│ ?         esta ayuda                                           │ecto            │
+│             db/│ esc       volver o cancelar                                    │/prechecks.sh   │
+│   ⋮⋮ [x] 4  Con│ ↑↓ j k    moverse                                              │                │
+│             man│ ctrl+c    interrumpir (pregunta antes)                         │                │
+│   ⋮⋮ [ ] 5  Smo│                                                                │                │
+│             scr│ en esta pantalla                                               │                │
+│                │ enter     ejecutar los pasos activos                           │                │
+│                │ espacio   activar o desactivar el paso                         │                │
+│                │ shift+↑↓  mover el paso                                        │                │
+│                │ /         filtrar los pasos (esc lo quita)                     │                │
+│                │ e         editar pasos                                         │                │
+│                │ g         añadir un gate al paso                               │                │
+│                │ b r d     backup, rollback, dry-run                            │                │
+│                │ u         reanudar la última ejecución                         │                │
+│                │ h l       historial, último log                                │                │
+│                │ v         pipeline                                             │                │
+│                │ p         cambiar de plan                                      │                │
+│                │ q         salir de baton                                       │                │
+├────────────────└────────────────────────────────────────────────────────────────┘────────────────┤
+│ (●) Backup antes de ejecutar   (●) Rollback automático   ( ) Dry-run                             │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline  [?] ayuda   │
+│ [enter] ejecutar                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

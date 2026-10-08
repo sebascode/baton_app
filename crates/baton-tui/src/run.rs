@@ -56,6 +56,28 @@ impl FailureOption {
             FailureOption::Abort => "Abortar y guardar estado".into(),
         }
     }
+
+    /// Qué pasa si se elige esta opción; `step` es el número (desde 1) del paso que falló.
+    pub fn consequence(self, step: usize) -> String {
+        match self {
+            FailureOption::UpdateCredentialAndRetry => {
+                format!("abre la credencial y repite el paso {step}")
+            }
+            FailureOption::Retry => format!("repite el paso {step} tal cual"),
+            FailureOption::Rollback(to) if to + 1 < step => {
+                format!(
+                    "deshace los pasos {} a {step}, del último al primero",
+                    to + 1
+                )
+            }
+            FailureOption::Rollback(_) => format!("deshace el paso {step}"),
+            FailureOption::ViewLog => format!("abre el log, parado en el paso {step}"),
+            FailureOption::OpenShell => {
+                "abre una sesión para investigar; al salir vuelves aquí".into()
+            }
+            FailureOption::Abort => "guarda el estado; podrás reanudar con u desde el plan".into(),
+        }
+    }
 }
 
 /// Qué pide una tecla a quien maneja la ejecución.
@@ -520,6 +542,14 @@ impl RunState {
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.failure_cursor = (self.failure_cursor + 1).min(options.len() - 1);
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                // tecla directa: elige y confirma la opción con ese número
+                let at = c as usize - '1' as usize;
+                if at < options.len() {
+                    self.failure_cursor = at;
+                    return self.handle_failure_key(KeyEvent::from(KeyCode::Enter));
+                }
             }
             KeyCode::Enter => {
                 let cmd = match options.get(self.failure_cursor)? {
@@ -996,6 +1026,25 @@ mod tests {
             "no pide nada al runner"
         );
         assert!(s.log_view);
+    }
+
+    #[test]
+    fn a_number_key_picks_and_confirms_that_failure_option() {
+        let mut s = failed_run();
+        let options = s.failure_options();
+        let retry = options
+            .iter()
+            .position(|o| *o == FailureOption::Retry)
+            .unwrap();
+        let key_n = char::from_digit(retry as u32 + 1, 10).unwrap();
+        assert_eq!(
+            s.handle_key(key(KeyCode::Char(key_n))),
+            Some(RunAction::Command(RunCommand::Retry {
+                update_credentials: false
+            }))
+        );
+        // un número fuera del menú no hace nada
+        assert_eq!(s.handle_key(key(KeyCode::Char('9'))), None);
     }
 
     #[test]

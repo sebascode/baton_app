@@ -59,7 +59,7 @@ Una condición que debe cumplirse antes de pasar al paso siguiente: una confirma
 Dónde corre un paso: \fBlocal\fR, \fBssh\fR (host, usuario, directorio remoto, bastion opcional) o \fBcontext\fR (un docker context). Cada paso elige su destino.
 .TP
 .B ambiente
-Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar.
+Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar. Los nombres son libres: baton no sabe cuál es producción. Para que lo trate con cuidado, márcalo con \fBprotegido = true\fR en \fB[ambientes.<nombre>]\fR de \fI.baton/config.toml\fR; en la interfaz, antes de ejecutar (salvo con dry\-run) y antes de un rollback en ese ambiente se pide escribir su nombre. Sin terminal no se pregunta nada, así que una ejecución de CI con \fB\-\-ambiente\fR no se detiene.
 .TP
 .B credencial
 Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAMPO\fR (por ejemplo \fIdocker.env#GHCR\fR agrupa \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR y \fBGHCR_TOKEN\fR). El plan guarda la referencia, nunca el valor.
@@ -169,8 +169,8 @@ Lee la consulta de un archivo; \fB\-\fR la lee de la entrada estándar (\fBbaton
 .BI \-\-plan " plan"
 Plan del que se toman las credenciales (por defecto, el único del proyecto).
 .TP
-.BI \-\-formato " tabla|csv|json"
-Cómo se muestra el resultado. La tabla alinea los números a la derecha, muestra NULL y recorta las celdas largas; \fBcsv\fR es la salida del motor (con un NULL como campo vacío); \fBjson\fR es un arreglo de objetos con las columnas en orden, los números como números y NULL como \fBnull\fR.
+.BI \-\-formato " tabla|registro|csv|json"
+Cómo se muestra el resultado. La tabla alinea los números a la derecha, muestra NULL y recorta las celdas largas; si estás en una terminal y la tabla es más ancha que la pantalla, se muestra sola como \fBregistro\fR (por una tubería, como \fB| less \-S\fR, la tabla se deja entera); \fBregistro\fR escribe un bloque por fila, con cada columna en su línea (\fB\- fila 1 de 3\fR); \fBcsv\fR es la salida del motor (con un NULL como campo vacío); \fBjson\fR es un arreglo de objetos con las columnas en orden, los números como números y NULL como \fBnull\fR.
 .TP
 .BI \-\-limite " n"
 Cuántas filas se muestran en la tabla (200 por defecto; 0 las muestra todas). Con \fBcsv\fR y \fBjson\fR siempre salen todas.
@@ -191,7 +191,7 @@ Ambiente del que se resuelven las credenciales.
 Cuánto se espera la respuesta (60s por defecto).
 .TP
 .BR \-i ", " \-\-interactivo
-Abre una sesión interactiva: escribes consultas terminadas en \fB;\fR (en una o varias líneas) y comandos que empiezan con \fB\\\fR. Se abre sola cuando das una base, no das consulta y estás en una terminal. Los comandos son \fB\\tablas\fR, \fB\\columnas T\fR, \fB\\formato tabla|csv|json\fR, \fB\\limite N\fR, \fB\\completo\fR, \fB\\escribir\fR (permite modificar datos; una sentencia destructiva pide confirmar), \fB\\lectura\fR, \fB\\bases\fR, \fB\\?\fR y \fB\\q\fR (o ctrl+d). Un error no cierra la sesión. Cada consulta abre su propia conexión, así que una transacción no se mantiene abierta entre una y otra. El historial se guarda en \fI.baton/db_history\fR (permisos 600) y deja fuera lo que parece una contraseña o un token.
+Abre una sesión interactiva: escribes consultas terminadas en \fB;\fR (en una o varias líneas) y comandos que empiezan con \fB\\\fR. Se abre sola cuando das una base, no das consulta y estás en una terminal. Los comandos son \fB\\tablas\fR, \fB\\columnas T\fR, \fB\\formato tabla|registro|csv|json\fR, \fB\\limite N\fR, \fB\\completo\fR, \fB\\escribir\fR (permite modificar datos; una sentencia destructiva pide confirmar), \fB\\lectura\fR, \fB\\bases\fR, \fB\\?\fR y \fB\\q\fR (o ctrl+d). Un error no cierra la sesión. Cada consulta abre su propia conexión, así que una transacción no se mantiene abierta entre una y otra. El historial se guarda en \fI.baton/db_history\fR (permisos 600) y deja fuera lo que parece una contraseña o un token.
 .SS baton history [plan]
 Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Sale con 1 si el plan todavía no se ejecutó.
 .TP
@@ -399,6 +399,9 @@ Los pasos se ejecutan en el orden del archivo. \fBdepends_on\fR se valida (exist
 target = "local"
 secrets = "vault"         # proveedor de secretos por defecto
 ambiente = "dev"          # ambiente si no das \-\-ambiente ni BATON_AMBIENTE
+
+[ambientes.produccion]    # el nombre lo eliges tú; baton no conoce ninguno
+protegido = true          # pide escribir el nombre antes de ejecutar o hacer rollback
 
 [targets.prod\-app]
 type = "ssh"

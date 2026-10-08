@@ -13,10 +13,12 @@ pub mod failure_view;
 pub mod fake;
 pub mod forms;
 pub mod gate_view;
+pub mod help;
 pub mod history_view;
 pub mod pipeline_view;
 pub mod plan_prompt;
 pub mod preview;
+pub mod protect;
 pub mod run;
 pub mod run_view;
 pub mod summary_view;
@@ -45,3 +47,8 @@ pub use config_view::ConfigState;
 pub use editor::EditorState;
 pub use preview::{PreviewState, PreviewStep, RunRequest, Tag, plan_step_infos};
 pub use run::RunState;
+
+/// Ancho de la terminal en columnas, si se puede saber (para quien dibuja fuera de la TUI).
+pub fn terminal_width() -> Option<u16> {
+    ratatui::crossterm::terminal::size().ok().map(|(w, _)| w)
+}

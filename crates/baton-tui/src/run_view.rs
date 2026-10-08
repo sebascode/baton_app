@@ -1,6 +1,6 @@
 //! Pantalla 3: ejecución. Cabecera con badges, progreso segmentado, log en vivo y pipeline.
 
-use baton_core::events::{LogKind, LogLine, StepStatus};
+use baton_core::events::{CheckState, LogKind, LogLine, StepStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -50,7 +50,8 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     let sc_h = shortcuts_height(&items, content_w.saturating_sub(prompt_width(&prompt))).max(1);
     let sc_y = inner.bottom().saturating_sub(sc_h);
     let sep_low = sc_y.saturating_sub(1);
-    let sep_high = inner.y + 2;
+    // 3 filas de cabecera: el paso y el reloj, la barra con su contador y una celda por paso
+    let sep_high = inner.y + 3;
     if sep_low <= sep_high + 1 {
         return;
     }
@@ -81,8 +82,25 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     step_line.render(Rect::new(inner.x + 1, inner.y, content_w, 1), buf);
 
     let statuses: Vec<StepStatus> = s.rows.iter().map(|r| r.info.status).collect();
-    segmented_bar(content_w, &statuses)
-        .render(Rect::new(inner.x + 1, inner.y + 1, content_w, 1), buf);
+    // la barra deja a la derecha el contador (`3/9`)
+    let counter = format!(
+        "{}/{}",
+        s.finished_steps().min(s.total_steps()),
+        s.total_steps()
+    );
+    let counter_w = counter.chars().count() as u16;
+    let bar_w = content_w.saturating_sub(counter_w + 1);
+    segmented_bar(bar_w, &statuses).render(Rect::new(inner.x + 1, inner.y + 1, bar_w, 1), buf);
+    Line::from(Span::styled(counter, theme::secondary())).render(
+        Rect::new(inner.x + 1 + bar_w + 1, inner.y + 1, counter_w, 1),
+        buf,
+    );
+    render_rail(
+        s,
+        buf,
+        Rect::new(inner.x + 1, inner.y + 2, content_w, 1),
+        &statuses,
+    );
 
     hsep(buf, area, sep_high, theme::border());
     hsep(buf, area, sep_low, theme::border());
@@ -93,7 +111,19 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     } else {
         let pw: u16 = if area.width >= WIDE { 30 } else { 24 };
         let vx = inner.right().saturating_sub(pw + 1);
-        let log = Rect::new(body.x, body.y, vx.saturating_sub(body.x), body.height);
+        let mut log = Rect::new(body.x, body.y, vx.saturating_sub(body.x), body.height);
+        // un gate que espera (manual) o reintenta (automático) se explica arriba del log
+        let block = gate_block(s, log.width.saturating_sub(2) as usize);
+        let used = (block.len() as u16).min(log.height.saturating_sub(3));
+        for (i, line) in block.into_iter().take(used as usize).enumerate() {
+            line.render(
+                Rect::new(log.x + 1, log.y + i as u16, log.width.saturating_sub(2), 1),
+                buf,
+            );
+        }
+        if used > 0 {
+            log = Rect::new(log.x, log.y + used, log.width, log.height - used);
+        }
         render_log(s, buf, log, false);
         vsep(buf, vx, sep_high, sep_low, theme::border());
         let pipeline = Rect::new(vx + 1, body.y, pw, body.height);
@@ -115,6 +145,136 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
         }
         None => widgets::render_shortcuts(buf, bar, &items),
     }
+}
+
+/// La fila de celdas con su resumen: lo que se ejecuta, lo omitido y los gates.
+fn render_rail(s: &RunState, buf: &mut Buffer, area: Rect, statuses: &[StepStatus]) {
+    let n = statuses.len() as u16;
+    let rail = widgets::cell_rail(area.width, statuses);
+    rail.render(area, buf);
+    let x = area.x + n.min(area.width) + 2;
+    if x >= area.right() {
+        return;
+    }
+    // con muchos pasos, las cuentas por estado; con pocos, la frase
+    let spans: Vec<Span<'static>> = if statuses.len() > 20 {
+        let mut out = Vec::new();
+        for (count, st) in widgets::status_counts(statuses) {
+            if !out.is_empty() {
+                out.push(Span::raw(" "));
+            }
+            let glyph = if st == StepStatus::Skipped {
+                "-"
+            } else {
+                theme::status_symbol(st)
+            };
+            out.push(Span::styled(
+                format!("{count} {glyph}"),
+                Style::new().fg(theme::status_color(st)),
+            ));
+        }
+        out
+    } else {
+        let skipped = statuses
+            .iter()
+            .filter(|st| **st == StepStatus::Skipped)
+            .count();
+        let gates = s.rows.iter().filter(|r| r.info.gate.is_some()).count();
+        let mut parts = vec![format!("{} se ejecutan", statuses.len() - skipped)];
+        if skipped > 0 {
+            parts.push(format!(
+                "{skipped} omitido{}",
+                if skipped == 1 { "" } else { "s" }
+            ));
+        }
+        if gates > 0 {
+            parts.push(format!("{gates} gate{}", if gates == 1 { "" } else { "s" }));
+        }
+        vec![Span::styled(parts.join(" · "), theme::secondary())]
+    };
+    Line::from(spans).render(Rect::new(x, area.y, area.right() - x, 1), buf);
+}
+
+/// Explicación del gate del paso en curso: qué se espera y cómo van sus checks. Vacío si no hay.
+fn gate_block(s: &RunState, width: usize) -> Vec<Line<'static>> {
+    // el paso que pregunta, o el primero que está en un gate (el actual manda si lo está)
+    let i = match (&s.ask, s.current) {
+        (Some((step, _)), _) => *step,
+        (None, Some(c))
+            if s.rows
+                .get(c)
+                .is_some_and(|r| r.info.status == StepStatus::Gate) =>
+        {
+            c
+        }
+        _ => match s
+            .rows
+            .iter()
+            .position(|r| r.info.status == StepStatus::Gate)
+        {
+            Some(g) => g,
+            None => return Vec::new(),
+        },
+    };
+    let Some(row) = s.rows.get(i) else {
+        return Vec::new();
+    };
+    if row.info.status != StepStatus::Gate {
+        return Vec::new();
+    }
+    let warn = Style::new().fg(theme::WARN);
+    let mut out = Vec::new();
+    if let Some((_, message)) = &s.ask {
+        out.push(Line::from(vec![
+            Span::styled("◆ ", warn),
+            Span::styled(
+                truncate(
+                    &format!(
+                        "Esperando tu confirmación · paso {} de {}",
+                        i + 1,
+                        s.total_steps()
+                    ),
+                    width.saturating_sub(2),
+                ),
+                warn,
+            ),
+        ]));
+        out.push(Line::from(Span::raw(truncate(
+            &format!("  {message}"),
+            width,
+        ))));
+    } else if let Some((attempt, of)) = row.gate {
+        out.push(Line::from(vec![
+            Span::styled("◆ ", warn),
+            Span::styled(
+                truncate(
+                    &format!("Gate · intento {attempt} de {of} · {}", row.info.name),
+                    width.saturating_sub(2),
+                ),
+                warn,
+            ),
+        ]));
+        if let Some(g) = &row.info.gate {
+            let mut spans = vec![Span::raw("  ")];
+            for c in g.checks.iter().filter(|c| !c.is_new) {
+                let (glyph, color) = match c.state {
+                    CheckState::Passed => ("✓", theme::OK),
+                    CheckState::Failed => ("✗", theme::ERR),
+                    CheckState::Warning => ("!", theme::WARN),
+                    CheckState::Running => ("◐", theme::INFO),
+                    CheckState::Pending => ("○", theme::MUTED),
+                    CheckState::Skipped => ("»", theme::MUTED),
+                };
+                spans.push(Span::styled(format!("{glyph} "), Style::new().fg(color)));
+                spans.push(Span::raw(format!("{} {}   ", c.label, c.kind)));
+            }
+            out.push(Line::from(truncate_spans(spans, width)));
+        }
+    }
+    if !out.is_empty() {
+        out.push(Line::raw(""));
+    }
+    out
 }
 
 pub(crate) fn prompt_text(s: &RunState) -> Option<String> {
@@ -236,7 +396,7 @@ pub(crate) fn log_lines(
 
 /// Parte `text` en líneas de a lo sumo `room` columnas, cortando en espacios cuando se puede
 /// y a media palabra solo si una palabra sola no cabe.
-fn wrap_text(text: &str, room: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, room: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
     let mut w = 0;

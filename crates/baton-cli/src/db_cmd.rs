@@ -24,6 +24,8 @@ use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Format {
     Tabla,
+    /// Un bloque por fila, con cada columna en su línea: para filas que no caben a lo ancho.
+    Registro,
     Csv,
     Json,
 }
@@ -376,6 +378,7 @@ pub fn show(csv: &str, truncated: bool, tsv: bool, view: &View) -> Result<(), St
         Format::Csv => print!("{}", db_console::to_csv(&table()?)),
         Format::Json => println!("{}", db_console::to_json(&table()?)),
         Format::Tabla => print_table(&table()?, view),
+        Format::Registro => print_records(&table()?, view, 60),
     }
     Ok(())
 }
@@ -432,9 +435,97 @@ fn print_table(t: &Table, view: &View) {
     }
     let limit = (view.limit > 0).then_some(view.limit);
     let cap = (!view.full).then_some(MAX_CELL);
+    // En una terminal, una tabla más ancha que la pantalla se parte y no se lee: se muestra un
+    // registro por bloque. En una tubería (`| less -S`, un archivo) la tabla se deja entera.
+    if std::io::stdout().is_terminal()
+        && let Some(cols) = baton_tui::terminal_width()
+        && table_width(t, limit, cap) > cols as usize
+    {
+        println!(
+            "{}",
+            style.dim(&format!(
+                "(no cabe en {cols} columnas: un registro por bloque; con | less -S sigue la tabla)"
+            ))
+        );
+        print_records(t, view, cols as usize);
+        return;
+    }
     for line in render_table(t, limit, cap, &style) {
         println!("{line}");
     }
+}
+
+/// Un bloque por fila: `─ fila 1 de 3 ───` y debajo cada columna con su valor.
+fn print_records(t: &Table, view: &View, term_width: usize) {
+    let style = Style::detect();
+    if t.columns.is_empty() {
+        print_table(t, view);
+        return;
+    }
+    let limit = (view.limit > 0).then_some(view.limit);
+    let cap = (!view.full).then_some(MAX_CELL);
+    for line in render_records(t, limit, cap, term_width.clamp(20, 100), &style) {
+        println!("{line}");
+    }
+}
+
+/// El ancho que tendría la tabla dibujada (bordes incluidos).
+fn table_width(t: &Table, limit: Option<usize>, cap: Option<usize>) -> usize {
+    let shown = limit.map_or(t.rows.len(), |l| l.min(t.rows.len()));
+    let cols = t.columns.len();
+    let cells: usize = (0..cols)
+        .map(|c| {
+            t.rows[..shown]
+                .iter()
+                .map(|r| width(&cell_text(r.get(c).unwrap_or(&None), cap)))
+                .chain(std::iter::once(width(&cell_text(
+                    &Some(t.columns[c].clone()),
+                    cap,
+                ))))
+                .max()
+                .unwrap_or(0)
+        })
+        .sum();
+    cells + cols * 3 + 1
+}
+
+/// Los registros uno bajo otro: el nombre de la columna a la izquierda, el valor a la derecha.
+pub fn render_records(
+    t: &Table,
+    limit: Option<usize>,
+    cap: Option<usize>,
+    rule_width: usize,
+    style: &Style,
+) -> Vec<String> {
+    let shown = limit.map_or(t.rows.len(), |l| l.min(t.rows.len()));
+    let key_w = t.columns.iter().map(|c| width(c)).max().unwrap_or(0);
+    let total = t.rows.len();
+    let mut out = Vec::new();
+    for (n, row) in t.rows[..shown].iter().enumerate() {
+        let head = format!("─ fila {} de {total} ", n + 1);
+        let fill = "─".repeat(rule_width.saturating_sub(width(&head)));
+        out.push(style.dim(&format!("{head}{fill}")));
+        for (c, name) in t.columns.iter().enumerate() {
+            let value = row.get(c).unwrap_or(&None);
+            let text = cell_text(value, cap);
+            let text = if value.is_none() {
+                style.paint(Tone::Gray, &text)
+            } else {
+                text
+            };
+            let fill = " ".repeat(key_w.saturating_sub(width(name)));
+            out.push(format!("  {}{fill}  {text}", style.bold(name)));
+        }
+    }
+    let noun = |n: usize| if n == 1 { "fila" } else { "filas" };
+    out.push(if shown < total {
+        style.dim(&format!(
+            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)"
+        ))
+    } else {
+        style.dim(&format!("({total} {})", noun(total)))
+    });
+    out
 }
 
 /// Texto de una celda en la tabla: NULL visible, saltos de línea como `↵`, sin controles.
@@ -613,6 +704,44 @@ mod tests {
                 .map(|r| r.iter().map(|v| v.map(String::from)).collect())
                 .collect(),
         }
+    }
+
+    #[test]
+    fn records_put_each_column_on_its_own_line_with_aligned_names() {
+        let t = table(
+            &["id", "correo"],
+            &[
+                &[Some("912"), Some("ana@ejemplo.com")],
+                &[Some("911"), None],
+            ],
+        );
+        let lines = render_records(&t, None, Some(60), 30, &Style::plain());
+        assert_eq!(
+            lines,
+            [
+                "─ fila 1 de 2 ────────────────",
+                "  id      912",
+                "  correo  ana@ejemplo.com",
+                "─ fila 2 de 2 ────────────────",
+                "  id      911",
+                "  correo  NULL",
+                "(2 filas)",
+            ]
+        );
+        // con límite, avisa cuántas quedaron fuera
+        let lines = render_records(&t, Some(1), Some(60), 30, &Style::plain());
+        assert_eq!(
+            lines.last().unwrap(),
+            "(mostrando 1 de 2 filas; --limite 0 las muestra todas)"
+        );
+    }
+
+    #[test]
+    fn the_table_width_counts_borders_and_padding() {
+        let t = table(&["id", "nombre"], &[&[Some("1"), Some("Ana")]]);
+        // ┌────┬────────┐ = 2 + 4 + 1 + 8 + 1... lo que dibuja render_table
+        let drawn = render_table(&t, None, Some(60), &Style::plain());
+        assert_eq!(table_width(&t, None, Some(60)), width(&drawn[0]));
     }
 
     #[test]
