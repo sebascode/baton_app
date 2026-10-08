@@ -3127,3 +3127,58 @@ fn backing_up_mysql_without_a_database_is_refused_before_running_anything() {
         "{text}"
     );
 }
+
+// ------------------------------------------------- tipos de paso de plugins
+
+/// Registra un tipo como lo haría un plugin: se escanea y trae su comando por defecto. El comando
+/// anota en `$BATON_TRACE` el nombre de la carpeta donde corre.
+fn register_iac() -> baton_core::kind::StepKind {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: "t-iac",
+        scanned: true,
+        has_services: false,
+        default_command: Some("basename \"$PWD\" >> \"$BATON_TRACE\""),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_plugin_kind_runs_its_default_command_once_per_file_in_each_folder_without_touching_the_runner()
+{
+    register_iac();
+    let fx = Fx::new(&["infra/b/main.tf", "infra/a/main.tf"]);
+    let p = plan(
+        "[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-iac\"\nsource = \"infra/*/main.tf\"\n",
+    );
+    assert_eq!(p.steps[0].kind.label(), "t-iac");
+    let mut options = fx.options(&p);
+    options.env.push((
+        "BATON_TRACE".into(),
+        fx.root().join("trace.txt").display().to_string(),
+    ));
+    let events = run(&fx, &p, options);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        fs::read_to_string(fx.root().join("trace.txt")).unwrap(),
+        "a\nb\n"
+    );
+}
+
+#[test]
+fn a_plugin_kind_with_a_source_requirement_is_rejected_without_one() {
+    register_iac();
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-iac\"\n");
+    let issues = baton_core::validate_plan(&p, None);
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.message.contains("un paso t-iac necesita source")),
+        "{issues:?}"
+    );
+    // y el runner no lo deja arrancar
+    assert!(spawn(fx.input(&p, fx.options(&p))).is_err());
+}

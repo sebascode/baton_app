@@ -395,10 +395,7 @@ pub fn prepare_run(
             }
         }
 
-        if matches!(
-            s.kind,
-            StepKind::Comando | StepKind::Check | StepKind::Compose | StepKind::Dockerfile
-        ) && s.command_template().is_none()
+        if s.kind.runs_command() && !s.kind.has_own_interpreter() && s.command_template().is_none()
         {
             errors.push(format!("{}: no tiene comando", label(s)));
         }
