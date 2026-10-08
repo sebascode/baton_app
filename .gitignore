@@ -8,6 +8,11 @@ CLAUDE.md
 !/README.md
 !/docs/ai-guide.md
 
+# gobernanza del repositorio: GitHub los lee desde el repo
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/.github/pull_request_template.md
+
 # imágenes de diseño: solo locales
 /docs/design/
 /docs/design_2/
