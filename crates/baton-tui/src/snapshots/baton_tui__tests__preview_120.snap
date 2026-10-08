@@ -2,32 +2,32 @@
 source: crates/baton-tui/src/tests.rs
 expression: text(&buf)
 ---
-╭─ Revisar plan: instalar ─────────────────────────────────────────────────────────────────────── 7 pasos · 6 activos ─╮
-│                                                                                                                      │
-│   ⋮⋮ [x] 1  Pre-checks                                                                                       [check] │
-│             docker ≥24, puertos 5432, 8080                                                                           │
-│   ⋮⋮ [x] 2  Backup volúmenes (opcional)                                                                     [backup] │
-│             pg_data → .baton/backups/                                                                                │
-│ › ⋮⋮ [x] 3  Build imágenes                                                                              [dockerfile] │
-│             api/, worker/, web/Dockerfile                                                                            │
-│   ⋮⋮ [x] 4  Levantar DB                                                                                    [compose] │
-│             db/docker-compose.yml                                                                                    │
-│   ⋮⋮ [x] 5  Gate: healthcheck postgres                                                                   [gate auto] │
-│             pg_isready · 6 intentos · 60s                                                                            │
-│   ⋮⋮ [x] 6  Gate: confirmar despliegue                                                                 [gate manual] │
-│             pregunta antes de continuar                                                                              │
-│   ⋮⋮ [ ] 7  Smoke tests                                                                                      [check] │
-│             desactivado por ti                                                                                       │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+╭─ Revisar plan: instalar ──────────────────────────────────────────────────────  ┬demo · local · 7 pasos · 6 activos ─╮
+│                                                                                 │                                    │
+│   ⋮⋮ [x] 1  Pre-checks                                                  [check] │ paso 3 de 7                        │
+│             docker ≥24, puertos 5432, 8080                                      │ Build imágenes                     │
+│   ⋮⋮ [x] 2  Backup volúmenes (opcional)                                [backup] │                                    │
+│             pg_data → .baton/backups/                                           │ tipo        dockerfile             │
+│ › ⋮⋮ [x] 3  Build imágenes                                         [dockerfile] │ origen      api/, worker/,         │
+│             api/, worker/, web/Dockerfile                                       │             web/Dockerfile         │
+│   ⋮⋮ [x] 4  Levantar DB                                               [compose] │ destino     local                  │
+│             db/docker-compose.yml                                               │                                    │
+│   ⋮⋮ [x] 5  Gate: healthcheck postgres                              [gate auto] │                                    │
+│             pg_isready · 6 intentos · 60s                                       │                                    │
+│   ⋮⋮ [x] 6  Gate: confirmar despliegue                            [gate manual] │                                    │
+│             pregunta antes de continuar                                         │                                    │
+│   ⋮⋮ [ ] 7  Smoke tests                                                 [check] │                                    │
+│             desactivado por ti                                                  │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+│                                                                                 │                                    │
+├─────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────┤
 │ (●) Backup antes de ejecutar   (●) Rollback automático   ( ) Dry-run                                                 │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline  [?] ayuda  [enter] ejecutar     │

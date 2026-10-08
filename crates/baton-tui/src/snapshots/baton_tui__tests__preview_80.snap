@@ -2,7 +2,7 @@
 source: crates/baton-tui/src/tests.rs
 expression: text(&buf)
 ---
-╭─ Revisar plan: instalar ─────────────────────────────── 7 pasos · 6 activos ─╮
+╭─ Revisar plan: instalar ──────────────   demo · local · 7 pasos · 6 activos ─╮
 │                                                                              │
 │   ⋮⋮ [x] 1  Pre-checks                                               [check] │
 │             docker ≥24, puertos 5432, 8080                                   │

@@ -118,6 +118,7 @@ impl RunDriver {
                 preview.select_step(&id);
             }
         }
+        preview.context = Some(run_context(&self.config, self.flags.ambiente.as_deref()));
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_editor(self.editor())
@@ -519,6 +520,27 @@ fn credential_item(
 }
 
 /// El árbol de `.baton/` que se muestra a la izquierda de la pantalla de credenciales.
+/// Dónde se va a ejecutar, para la cabecera: el ambiente (tal cual lo nombró el usuario, con
+/// "protegido" si lo marcó) y el destino por defecto (`ssh usuario@host` si es remoto).
+fn run_context(config: &Config, ambiente: Option<&str>) -> String {
+    use baton_core::config::Target;
+    let mut parts = Vec::new();
+    if let Some(a) = ambiente {
+        parts.push(if config.is_protected(a) {
+            format!("{a} (protegido)")
+        } else {
+            a.to_string()
+        });
+    }
+    let name = config.default_target();
+    parts.push(match config.targets.get(name) {
+        Some(Target::Ssh(t)) => format!("{name} ssh {}@{}", t.user, t.host),
+        Some(Target::Context(_)) => format!("{name} docker context"),
+        _ => name.to_string(),
+    });
+    parts.join(" · ")
+}
+
 fn credentials_tree(files: &[String], ambiente: Option<&str>) -> Vec<String> {
     let mut out = vec![
         ".baton/".to_string(),

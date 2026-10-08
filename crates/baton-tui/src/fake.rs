@@ -36,6 +36,11 @@ fn pstep(id: &str, name: &str, meta: &str, tag: &str, enabled: bool) -> PreviewS
         meta: meta.into(),
         tag: Tag::new(tag),
         enabled,
+        detail: vec![
+            ("tipo", tag.to_string()),
+            ("origen", meta.to_string()),
+            ("destino", "local".to_string()),
+        ],
     }
 }
 
@@ -182,6 +187,7 @@ pub fn preview() -> PreviewState {
         last_run: None,
         filter: String::new(),
         filtering: false,
+        context: Some("demo · local".into()),
     }
 }
 

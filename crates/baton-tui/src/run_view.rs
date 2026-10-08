@@ -236,7 +236,7 @@ pub(crate) fn log_lines(
 
 /// Parte `text` en líneas de a lo sumo `room` columnas, cortando en espacios cuando se puede
 /// y a media palabra solo si una palabra sola no cabe.
-fn wrap_text(text: &str, room: usize) -> Vec<String> {
+pub(crate) fn wrap_text(text: &str, room: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
     let mut w = 0;

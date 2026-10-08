@@ -151,7 +151,7 @@ fn a_too_small_terminal_shows_a_clear_message() {
 
 #[test]
 fn preview_styles() {
-    let buf = render(100, 30, |b, a| fake::preview().render(b, a));
+    let buf = render(90, 30, |b, a| fake::preview().render(b, a));
 
     // paso desactivado: gris y tachado
     let pos = find(&buf, "Smoke tests");
