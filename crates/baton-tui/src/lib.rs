@@ -18,6 +18,7 @@ pub mod history_view;
 pub mod pipeline_view;
 pub mod plan_prompt;
 pub mod preview;
+pub mod protect;
 pub mod run;
 pub mod run_view;
 pub mod summary_view;

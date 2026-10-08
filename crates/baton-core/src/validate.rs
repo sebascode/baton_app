@@ -49,6 +49,15 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         ));
     }
 
+    for name in config.ambientes.keys() {
+        if !crate::secrets::is_safe_ambiente(name) {
+            out.push(Issue::error(
+                path!["ambientes", name.as_str()],
+                format!("el ambiente '{name}' no es válido (solo letras, números, . - _)"),
+            ));
+        }
+    }
+
     validate_secret_providers(config, &mut out);
 
     for (name, target) in &config.targets {
@@ -826,6 +835,18 @@ fn is_slug(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_environment_name_must_be_a_simple_name() {
+        let c = Config::parse("[ambientes.\"a b\"]\nprotegido = true\n").unwrap();
+        let issues = validate_config(&c);
+        assert!(
+            issues.iter().any(|i| i.message.contains("no es válido")),
+            "{issues:?}"
+        );
+        let ok = Config::parse("[ambientes.produccion]\nprotegido = true\n").unwrap();
+        assert!(validate_config(&ok).is_empty());
+    }
+
     use super::*;
     use crate::issue::has_errors;
 

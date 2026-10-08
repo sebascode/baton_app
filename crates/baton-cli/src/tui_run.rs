@@ -129,6 +129,12 @@ impl RunDriver {
         if let Some(creds) = self.build_credentials() {
             app = app.with_credentials(creds);
         }
+        // un ambiente que el usuario marcó como protegido pide su nombre antes de ejecutar
+        if let Some(amb) = self.flags.ambiente.as_deref()
+            && self.config.is_protected(amb)
+        {
+            app = app.protecting(amb);
+        }
         app
     }
 

@@ -59,7 +59,7 @@ Una condición que debe cumplirse antes de pasar al paso siguiente: una confirma
 Dónde corre un paso: \fBlocal\fR, \fBssh\fR (host, usuario, directorio remoto, bastion opcional) o \fBcontext\fR (un docker context). Cada paso elige su destino.
 .TP
 .B ambiente
-Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar.
+Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar. Los nombres son libres: baton no sabe cuál es producción. Para que lo trate con cuidado, márcalo con \fBprotegido = true\fR en \fB[ambientes.<nombre>]\fR de \fI.baton/config.toml\fR; en la interfaz, antes de ejecutar (salvo con dry\-run) y antes de un rollback en ese ambiente se pide escribir su nombre. Sin terminal no se pregunta nada, así que una ejecución de CI con \fB\-\-ambiente\fR no se detiene.
 .TP
 .B credencial
 Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAMPO\fR (por ejemplo \fIdocker.env#GHCR\fR agrupa \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR y \fBGHCR_TOKEN\fR). El plan guarda la referencia, nunca el valor.
@@ -399,6 +399,9 @@ Los pasos se ejecutan en el orden del archivo. \fBdepends_on\fR se valida (exist
 target = "local"
 secrets = "vault"         # proveedor de secretos por defecto
 ambiente = "dev"          # ambiente si no das \-\-ambiente ni BATON_AMBIENTE
+
+[ambientes.produccion]    # el nombre lo eliges tú; baton no conoce ninguno
+protegido = true          # pide escribir el nombre antes de ejecutar o hacer rollback
 
 [targets.prod\-app]
 type = "ssh"

@@ -451,6 +451,7 @@ impl ConfigState {
             logs,
             // los proveedores de secretos no se editan en esta pantalla: se conservan tal cual
             secrets: self.base.secrets.clone(),
+            ambientes: self.base.ambientes.clone(),
         })
     }
 

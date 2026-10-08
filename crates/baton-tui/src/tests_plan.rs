@@ -594,3 +594,73 @@ fn steps_cannot_be_moved_while_filtered_and_no_match_is_said() {
     }
     assert!(screen(&app, 100, 24).contains("Ningún paso coincide con «zzz»"));
 }
+
+// ------------------------------------------------------------ ambiente protegido
+
+#[test]
+fn a_protected_environment_asks_for_its_name_before_running() {
+    let mut app = app().protecting("produccion");
+    assert!(
+        app.handle_key(key(KeyCode::Enter)).is_none(),
+        "todavía no ejecuta"
+    );
+    let t = screen(&app, 100, 30);
+    assert!(
+        t.contains("Ejecutar en «produccion»") && t.contains("Para confirmar escribe produccion"),
+        "{t}"
+    );
+    // un nombre distinto no pasa, ni siquiera el "prod" de siempre
+    type_text(&mut app, "prod");
+    assert!(app.handle_key(key(KeyCode::Enter)).is_none());
+    assert!(screen(&app, 100, 30).contains("no coincide"));
+    type_text(&mut app, "uccion");
+    assert!(
+        matches!(
+            app.handle_key(key(KeyCode::Enter)),
+            Some(Effect::StartRun(_))
+        ),
+        "el nombre completo confirma"
+    );
+    assert!(!screen(&app, 100, 30).contains("Ejecutar en"));
+}
+
+#[test]
+fn cancelling_the_protection_runs_nothing() {
+    let mut app = app().protecting("produccion");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 30).contains("Ejecutar en"));
+    // y las teclas de la caja no llegaron a la vista (la q no sale)
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.handle_key(key(KeyCode::Char('q'))).is_none());
+}
+
+#[test]
+fn an_unprotected_environment_and_a_dry_run_do_not_ask() {
+    let mut plain = app();
+    assert!(matches!(
+        plain.handle_key(key(KeyCode::Enter)),
+        Some(Effect::StartRun(_))
+    ));
+    let mut app = app().protecting("produccion");
+    app.handle_key(key(KeyCode::Char('d'))); // dry-run
+    assert!(
+        matches!(app.handle_key(key(KeyCode::Enter)), Some(Effect::StartRun(r)) if r.dry_run),
+        "un dry-run no cambia nada"
+    );
+}
+
+#[test]
+fn a_rollback_in_a_protected_environment_asks_too() {
+    use baton_core::events::RunCommand;
+    let mut app = App::new(crate::fake::preview()).protecting("produccion");
+    app.mode = Mode::Run(Box::new(crate::fake::failed()));
+    // el menú de fallo: 3 es el rollback
+    assert!(app.handle_key(key(KeyCode::Char('3'))).is_none());
+    assert!(screen(&app, 100, 30).contains("Rollback en «produccion»"));
+    type_text(&mut app, "produccion");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::Command(RunCommand::Rollback))
+    );
+}

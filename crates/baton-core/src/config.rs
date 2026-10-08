@@ -30,10 +30,31 @@ pub struct Config {
     /// credenciales además del `.env`. Es de esta máquina, nunca viaja con el plan.
     #[serde(default)]
     pub secrets: IndexMap<String, SecretProvider>,
+    /// Ajustes por ambiente (`[ambientes.<nombre>]`). El nombre lo pone cada persona; no hay
+    /// ambientes con significado especial. Es de esta máquina, como todo `config.toml`.
+    #[serde(default)]
+    pub ambientes: IndexMap<String, AmbienteConfig>,
+}
+
+/// Ajustes de un ambiente.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AmbienteConfig {
+    /// Ambiente protegido: antes de ejecutar y de hacer rollback en él, la TUI pide escribir su
+    /// nombre. Sin ninguno marcado no se pregunta nada.
+    #[serde(default)]
+    pub protegido: bool,
 }
 
 fn one() -> u32 {
     1
+}
+
+impl Config {
+    /// ¿El usuario marcó este ambiente como protegido?
+    pub fn is_protected(&self, ambiente: &str) -> bool {
+        self.ambientes.get(ambiente).is_some_and(|a| a.protegido)
+    }
 }
 
 impl Default for Config {
@@ -44,6 +65,7 @@ impl Default for Config {
             targets: IndexMap::new(),
             logs: LogsConfig::default(),
             secrets: IndexMap::new(),
+            ambientes: IndexMap::new(),
         }
     }
 }
@@ -269,6 +291,24 @@ pub enum ExportKind {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_environment_is_protected_only_if_the_user_says_so() {
+        let c = Config::parse(
+            "[ambientes.produccion]\nprotegido = true\n\n[ambientes.qa]\n\n[ambientes.dev]\nprotegido = false\n",
+        )
+        .unwrap();
+        assert!(c.is_protected("produccion"));
+        assert!(!c.is_protected("qa") && !c.is_protected("dev"));
+        // un nombre que nadie declaró no es protegido, se llame como se llame
+        assert!(!c.is_protected("prod") && !c.is_protected("production"));
+        assert!(Config::default().ambientes.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_environment_field_is_a_read_error() {
+        assert!(Config::parse("[ambientes.x]\nprotegdio = true\n").is_err());
+    }
+
     use super::*;
 
     #[test]

@@ -411,6 +411,22 @@ mod tests {
     }
 
     #[test]
+    fn protected_environments_survive_saving_a_change_elsewhere() {
+        let original = "# ojo con este\n[ambientes.produccion]\nprotegido = true\n\n[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n";
+        let (_t, p) = project_with(original);
+        let mut c = Config::parse(&read(&p)).unwrap();
+        let Target::Context(t) = c.targets.get_mut("prod").unwrap() else {
+            panic!()
+        };
+        t.context = "otro".into();
+        save_config(&p, &c).unwrap();
+        let text = read(&p);
+        assert!(text.contains("# ojo con este"), "{text}");
+        assert!(text.contains("protegido = true"), "{text}");
+        assert!(Config::parse(&text).unwrap().is_protected("produccion"));
+    }
+
+    #[test]
     fn secret_providers_survive_saving_a_change_elsewhere() {
         let original = "[defaults]\nsecrets = \"vault\"\n\n# de dónde salen los tokens\n[secrets.vault]\ntype = \"command\"\nget = \"vault kv get -field={campo} secret/{prefijo}\"\ntimeout = \"10s\"\n\n[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n";
         let (_t, p) = project_with(original);
