@@ -114,7 +114,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "baton"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "baton-core",
  "baton-exec",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "baton-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "glob",
  "humantime",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "baton-exec"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "baton-core",
  "baton-store",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "baton-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "baton-core",
  "chrono",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "baton-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "baton-core",
  "indexmap",

@@ -158,6 +158,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-07 | **0.2.0.** `baton update` y binarios en cada release. `{ambiente}` en los comandos. `baton last` y `baton history`, y un resumen visual en `baton`. Llaves ssh con frase secreta y bastion con llave propia. Exportación de logs a OTLP y syslog. |
 | 2026-10-07 | **0.3.0.** Varias bases de datos por plan y SQLite junto a PostgreSQL. Probar la conexión de una credencial `db`. "Abrir shell" en el destino del paso que falló. `baton db`: consultas de solo lectura contra las bases del plan, en tabla, CSV o JSON. |
 | 2026-10-07 | **0.4.0.** MySQL y MariaDB. Sesión interactiva de `baton db`, con historial y comandos para ver tablas y columnas. Instalador de una línea y paquetes `.deb` y `.rpm`. |
+| 2026-10-08 | **0.5.0.** Diseño nuevo de la interfaz: ayuda con `?`, filtro `/` y panel del paso en la vista del plan, ejecución con una celda por paso, resumen con barras de tiempo y teclas `1` a `9` en el fallo. El rollback muestra antes lo que deshace. Ambientes protegidos (`[ambientes.<nombre>] protegido = true`) que piden escribir su nombre. `baton db` muestra un registro por bloque cuando la tabla no cabe. |
 
 ## Desarrollo
 
