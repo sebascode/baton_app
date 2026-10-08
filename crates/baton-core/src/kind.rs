@@ -28,6 +28,18 @@ pub enum Requires {
     Nothing,
 }
 
+/// Una credencial que un tipo de plugin usa, y cómo llega a sus comandos: cada variable de entorno
+/// se arma con una plantilla sobre los campos de la credencial (`AWS_ACCESS_KEY_ID` =
+/// `{ACCESS_KEY_ID}`). Los nombres de las variables los pone el plugin, porque cada herramienta
+/// espera los suyos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CredUse {
+    /// Nombre del tipo de credencial (`aws`).
+    pub kind: &'static str,
+    /// `(variable, plantilla)`.
+    pub env: &'static [(&'static str, &'static str)],
+}
+
 /// Lo que un tipo de paso sabe hacer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindSpec {
@@ -55,6 +67,8 @@ pub struct KindSpec {
     /// Frases que, si aparecen en la salida del `dry_run`, indican que el paso destruye o reemplaza
     /// algo (`will be destroyed`): antes de ejecutarlo se pide confirmación.
     pub destructive: &'static [&'static str],
+    /// Credenciales que usa el tipo y cómo las recibe su comando.
+    pub credentials: &'static [CredUse],
 }
 
 /// Tipos nativos, en el orden en que los ofrece el editor. El índice es el identificador del
@@ -72,6 +86,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "dockerfile",
@@ -85,6 +100,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "script",
@@ -98,6 +114,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "sql",
@@ -111,6 +128,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "comando",
@@ -124,6 +142,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "check",
@@ -137,6 +156,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "backup",
@@ -150,6 +170,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
     KindSpec {
         name: "gate",
@@ -163,6 +184,7 @@ static BUILTIN: [KindSpec; 8] = [
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     },
 ];
 
@@ -264,6 +286,11 @@ impl StepKind {
     /// Programas que tienen que existir donde corre el paso.
     pub fn binaries(self) -> &'static [&'static str] {
         self.spec().binaries
+    }
+
+    /// Las credenciales que usa este tipo (los nativos no usan ninguna así: reciben las del plan).
+    pub fn credential_uses(self) -> &'static [CredUse] {
+        self.spec().credentials
     }
 
     /// Frases que marcan como destructivo lo que dice el `dry_run` de este tipo.
@@ -369,6 +396,7 @@ mod tests {
             detect: &[],
             binaries: &[],
             destructive: &[],
+            credentials: &[],
         }
     }
 

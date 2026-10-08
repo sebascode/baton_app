@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 
 use crate::credential::CredentialRef;
+pub use crate::credential_kind::CredentialKind;
 pub use crate::kind::StepKind;
 use crate::units::Dur;
 
@@ -171,31 +172,6 @@ pub struct CredentialReq {
     /// solo el `.env`). Sin valor se usa `[defaults].secrets`. Es solo un nombre: dónde vive el
     /// secreto se decide en la configuración local.
     pub provider: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CredentialKind {
-    Git,
-    Docker,
-    Ssh,
-    /// PostgreSQL (`psql`, directo o con `docker exec`).
-    Db,
-    /// Un archivo SQLite (`sqlite3`).
-    Sqlite,
-    /// MySQL o MariaDB (`mysql`, directo o con `docker exec`).
-    Mysql,
-    Otro,
-}
-
-impl CredentialKind {
-    /// Una base de datos a la que se conecta un paso `sql` y que puede respaldarse.
-    pub fn is_database(self) -> bool {
-        matches!(
-            self,
-            CredentialKind::Db | CredentialKind::Sqlite | CredentialKind::Mysql
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

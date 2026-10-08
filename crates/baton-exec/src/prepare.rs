@@ -1121,6 +1121,7 @@ mod tests {
             detect: &[],
             binaries,
             destructive: &[],
+            credentials: &[],
         })
         .unwrap();
     }

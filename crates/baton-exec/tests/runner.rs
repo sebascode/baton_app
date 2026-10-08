@@ -3145,6 +3145,7 @@ fn register_iac() -> baton_core::kind::StepKind {
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     })
     .unwrap()
 }
@@ -3204,6 +3205,7 @@ fn register_planner(name: &'static str, command: &'static str, dry_run: &'static
         detect: &[],
         binaries: &[],
         destructive: &[],
+        credentials: &[],
     })
     .unwrap();
 }
@@ -3461,6 +3463,7 @@ fn register_reviewer(name: &'static str) {
         detect: &[],
         binaries: &[],
         destructive: &["will be destroyed", "must be replaced"],
+        credentials: &[],
     })
     .unwrap();
 }
@@ -3676,6 +3679,7 @@ fn a_failing_plan_stops_the_step_before_applying() {
         detect: &[],
         binaries: &[],
         destructive: &["will be destroyed"],
+        credentials: &[],
     })
     .unwrap();
     let fx = Fx::new(&["infra/a/main.tf"]);
@@ -3717,4 +3721,251 @@ fn a_type_without_destructive_phrases_is_not_planned_before_running() {
     let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
     assert_eq!(outcome(&events), RunOutcome::Completed);
     assert_eq!(trace(&fx), "aplicado:a\n", "ni siquiera corre su dry_run");
+}
+
+// ------------------------------- credenciales declaradas por un plugin
+
+use baton_core::credential::FieldSpec;
+
+/// Un tipo de credencial `nube` (como lo definiría un plugin) y un tipo de paso que lo usa, con las
+/// variables que espera su herramienta. Su comando vuelca esas variables en `$BATON_TRACE`.
+fn register_cloud(step: &'static str, kind: &'static str, command: &'static str) {
+    static FIELDS: &[FieldSpec] = &[
+        FieldSpec {
+            key: "ACCESS_KEY_ID",
+            label: "access key id",
+            secret: false,
+            optional: false,
+        },
+        FieldSpec {
+            key: "SECRET_ACCESS_KEY",
+            label: "secret access key",
+            secret: true,
+            optional: false,
+        },
+        FieldSpec {
+            key: "REGION",
+            label: "region",
+            secret: false,
+            optional: true,
+        },
+    ];
+    baton_core::credential_kind::register(baton_core::credential_kind::PluginCredential {
+        name: kind,
+        fields: FIELDS,
+    })
+    .unwrap();
+    let uses: &'static [baton_core::kind::CredUse] = Box::leak(
+        vec![baton_core::kind::CredUse {
+            kind,
+            env: &[
+                ("CLOUD_KEY", "{ACCESS_KEY_ID}"),
+                ("CLOUD_SECRET", "{SECRET_ACCESS_KEY}"),
+                ("CLOUD_REGION", "{REGION}"),
+                (
+                    "CLOUD_ENDPOINT",
+                    "https://{REGION}.nube.example/{ACCESS_KEY_ID}",
+                ),
+            ],
+        }]
+        .into_boxed_slice(),
+    );
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: step,
+        scanned: false,
+        has_services: false,
+        default_command: Some(command),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Command,
+        dry_run: Some(command),
+        detect: &[],
+        binaries: &[],
+        destructive: &[],
+        credentials: uses,
+    })
+    .unwrap();
+}
+
+fn save_cloud(fx: &Fx, prefix_file: &str, fields: &[(&str, &str)]) {
+    baton_store::credentials::save_fields(
+        &fx.project,
+        None,
+        &prefix_file.parse().unwrap(),
+        &fields
+            .iter()
+            .map(|(k, v)| (*k, v.to_string()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+}
+
+const DUMP: &str = "env | grep -E '^(CLOUD_|PROD_APP_)' | sort >> \"$BATON_TRACE\"";
+
+fn cloud_plan(kind: &str, step_type: &str, extra_steps: &str) -> Plan {
+    plan(&format!(
+        "[[credentials]]\nid = \"nube\"\nkind = \"{kind}\"\nref = \"servers.env#PROD_APP\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"{step_type}\"\n{extra_steps}"
+    ))
+}
+
+#[test]
+fn a_plugin_step_gets_the_credential_under_the_names_its_tool_expects_and_nothing_else() {
+    register_cloud("t-cr-step", "t-cr-nube", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+            ("region", "chile-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube", "t-cr-step", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // los cuatro nombres que espera la herramienta, con los valores de la credencial...
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_ENDPOINT=https://chile-1.nube.example/AKIA123\nCLOUD_KEY=AKIA123\nCLOUD_REGION=chile-1\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    // ...y no las variables con prefijo (PROD_APP_*), que el comando no menciona
+    assert!(!trace(&fx).contains("PROD_APP_"));
+}
+
+#[test]
+fn an_optional_field_left_empty_leaves_out_the_variables_that_use_it() {
+    register_cloud("t-cr-opt", "t-cr-nube-opt", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-opt", "t-cr-opt", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+}
+
+#[test]
+fn the_secret_never_shows_in_what_the_command_prints_or_in_the_log_file() {
+    register_cloud(
+        "t-cr-redact",
+        "t-cr-nube-redact",
+        "echo \"clave=$CLOUD_SECRET region=$CLOUD_REGION\"",
+    );
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+            ("region", "chile-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-redact", "t-cr-redact", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    let shown = all_logs(&events);
+    assert!(!shown.contains("s3cr3t-valor-1"), "{shown}");
+    assert!(
+        shown.contains("region=chile-1"),
+        "lo que no es secreto se ve: {shown}"
+    );
+    let log = fs::read_dir(fx.root().join(".baton/logs"))
+        .unwrap()
+        .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(!log.contains("s3cr3t-valor-1"), "{log}");
+}
+
+#[test]
+fn without_a_credential_in_the_plan_the_step_runs_and_receives_nothing() {
+    register_cloud("t-cr-none", "t-cr-nube-none", DUMP);
+    let fx = Fx::new(&[]);
+    let p = plan("[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-cr-none\"\n");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Completed,
+        "las credenciales son opcionales"
+    );
+    assert_eq!(trace(&fx), "");
+}
+
+#[test]
+fn other_steps_and_other_kinds_of_credential_do_not_get_the_plugin_variables() {
+    register_cloud("t-cr-other", "t-cr-nube-other", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(&format!(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\
+         [[credentials]]\nid = \"nube\"\nkind = \"t-cr-nube-other\"\nref = \"servers.env#PROD_APP\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-cr-other\"\n\n\
+         [[steps]]\nid = \"otro\"\nname = \"Otro\"\ntype = \"comando\"\ncommand = '''{DUMP}'''\n"
+    ));
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // el paso `comando` no recibe CLOUD_*; el de plugin no recibe nada de la credencial docker
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    assert!(!trace(&fx).contains("GHCR_"));
+}
+
+#[test]
+fn a_dry_run_that_executes_something_delivers_the_credential_too() {
+    register_cloud("t-cr-dry", "t-cr-nube-dry", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(
+        &fx,
+        "servers.env#PROD_APP",
+        &[
+            ("access_key_id", "AKIA123"),
+            ("secret_access_key", "s3cr3t-valor-1"),
+        ],
+    );
+    let p = cloud_plan("t-cr-nube-dry", "t-cr-dry", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "CLOUD_KEY=AKIA123\nCLOUD_SECRET=s3cr3t-valor-1\n"
+    );
+    assert!(
+        !fx.root().join(".baton/logs").exists(),
+        "un dry-run no deja log"
+    );
+}
+
+#[test]
+fn a_missing_required_field_stops_a_run_without_a_terminal_naming_the_credential() {
+    register_cloud("t-cr-ci", "t-cr-nube-ci", DUMP);
+    let fx = Fx::new(&[]);
+    save_cloud(&fx, "servers.env#PROD_APP", &[("access_key_id", "AKIA123")]);
+    let p = cloud_plan("t-cr-nube-ci", "t-cr-ci", "");
+    let err = match spawn(fx.input(&p, planner_options(&fx, &p, false))) {
+        Ok(_) => panic!("debía rechazarse"),
+        Err(e) => format!("{e:?}"),
+    };
+    assert!(err.contains("PROD_APP_SECRET_ACCESS_KEY"), "{err}");
+    assert_eq!(trace(&fx), "");
 }

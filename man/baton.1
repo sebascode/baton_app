@@ -471,6 +471,19 @@ detect = ["**/main.tf"]
 command = "terraform init \-input=false && terraform apply \-input=false \-auto\-approve"
 dry_run = "terraform init \-input=false && terraform plan \-input=false"
 destructive = ["will be destroyed", "must be replaced"]
+
+[[credentials]]
+kind = "aws"
+fields = [
+  { key = "ACCESS_KEY_ID" },
+  { key = "SECRET_ACCESS_KEY", secret = true },
+  { key = "REGION", optional = true },
+]
+
+[credentials.env]
+AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+AWS_DEFAULT_REGION = "{REGION}"
 .RE
 .fi
 .PP
@@ -479,6 +492,8 @@ destructive = ["will be destroyed", "must be replaced"]
 \fBdry_run\fR es el comando que se usa con \fB\-\-dry\-run\fR y \fBtiene que ser de solo lectura\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): se rechaza uno igual a \fBcommand\fR o que use palabras como \fBapply\fR, \fBdestroy\fR, \fBcreate\fR o \fBdeploy\fR. Es un chequeo de apariencia, no una garantía: un comando puede esconder lo que hace, así que lee los comandos con \fBbaton plugin validate\fR antes de instalar un plugin ajeno.
 .PP
 Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). \fBdestructive\fR son frases que se buscan en la salida del \fBdry_run\fR (texto literal, sin distinguir mayúsculas ni colores; hace falta un \fBdry_run\fR). Antes de ejecutar un paso de ese tipo, baton corre el \fBdry_run\fR de todas sus carpetas y, si alguna frase aparece (en Terraform, un recurso que \fBwill be destroyed\fR o \fBmust be replaced\fR; un resumen como \fB0 to destroy\fR no cuenta), deja en el log cada línea con \fBatención:\fR y pregunta una sola vez antes de respaldar o aplicar nada. Rechazar detiene el plan como abortado. \fBSin terminal el paso falla antes de aplicar\fR, salvo con \fB\-\-assume\-yes\fR. En un \fB\-\-dry\-run\fR solo se deja a la vista. La revisión se hace sobre un plan anterior al del comando: si algo cambia entre uno y otro, lo que se aplique podría diferir. Un paso de ese tipo que reescribe \fBcommand\fR debe declarar su propio \fBdry_run\fR (con el plan equivalente); si no, \fBbaton validate\fR lo rechaza, para que la revisión no se pierda sin que nadie lo note.
+.PP
+\fB[[credentials]]\fR declara qué credencial usa el plugin. \fBkind\fR es el nombre del tipo (\fBaws\fR); si no es uno de baton, \fBfields\fR lo define (cada campo con su \fBkey\fR en mayúsculas, \fBsecret\fR si debe enmascararse y tacharse de todo lo que se muestra o guarda, y \fBoptional\fR si puede quedar vacío); con un tipo de baton (\fBdocker\fR, \fBgit\fR...) se omite \fBfields\fR y solo se da \fBenv\fR. \fB[credentials.env]\fR dice con qué nombres recibe el comando cada valor, porque cada herramienta espera los suyos: \fBVARIABLE = "plantilla con {CAMPOS}"\fR. Una variable cuya plantilla usa un campo opcional vacío no se define. No se puede definir \fBPATH\fR, \fBHOME\fR, \fBSHELL\fR, \fBIFS\fR, \fBLD_*\fR, \fBDYLD_*\fR, \fBBASH_ENV\fR ni \fBBATON_*\fR. El plan usa el tipo con su \fB[[credentials]]\fR de siempre (\fBkind = "aws"\fR, \fBref = "servers.env#PROD"\fR); si no declara ninguna, el comando no recibe nada y la herramienta usa lo que ya haya en el entorno (\fBaws sso\fR, un perfil...). El comando recibe únicamente las variables de \fBenv\fR de la credencial que su tipo pide, no las demás del plan. Un plan solo puede declarar una credencial de cada tipo que use el plugin (para cuentas distintas están los ambientes). Un tipo de credencial es global y dos plugins pueden compartirlo si lo definen igual; con campos distintos, el segundo no se carga. \fBbaton plugin add\fR muestra qué credenciales pide el plugin y a qué variables las convierte.
 .PP
 \fBInstalar un plugin ajeno es darle a alguien órdenes que se ejecutan con tus permisos.\fR Por eso \fBbaton plugin add\fR muestra los comandos antes de instalar, exige una firma verificada en GitHub y fija lo instalado. Una firma verificada prueba que el commit es de quien dice ser, no que sus comandos sean inofensivos: lo que protege es leerlos. \fBplugins.lock\fR (en la carpeta de plugins) guarda de dónde vino cada plugin, el commit y el sha256 del manifiesto; en cada arranque, un plugin registrado cuyo manifiesto ya no coincide \fBno se carga\fR y se avisa, y si el propio \fIplugins.lock\fR no se puede leer no se carga ninguno. Un plugin copiado o enlazado a mano no tiene registro (\fBplugin list\fR lo marca) y se carga como antes.
 .PP

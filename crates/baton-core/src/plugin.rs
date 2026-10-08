@@ -16,7 +16,24 @@
 //! command = "terraform init -input=false && terraform apply -input=false -auto-approve"
 //! dry_run = "terraform init -input=false && terraform plan -input=false"
 //! destructive = ["will be destroyed", "must be replaced"]   # frases del plan que piden confirmar
+//!
+//! # Credenciales: un tipo nuevo (con sus campos) y cómo llegan a los comandos del plugin
+//! [[credentials]]
+//! kind = "aws"
+//! fields = [
+//!   { key = "ACCESS_KEY_ID" },
+//!   { key = "SECRET_ACCESS_KEY", secret = true },
+//!   { key = "REGION", optional = true },
+//! ]
+//! [credentials.env]
+//! AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+//! AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+//! AWS_DEFAULT_REGION = "{REGION}"
 //! ```
+//!
+//! Un tipo de credencial se define por sus campos y vale para cualquier plugin; las variables de
+//! entorno (`[credentials.env]`) son de cada plugin, porque cada herramienta espera las suyas. Un
+//! plugin también puede usar un tipo de baton (`docker`, `git`...) sin `fields`, solo con su `env`.
 //!
 //! Un plugin solo describe qué comando correr: la ejecución, las credenciales, los logs y los
 //! gates siguen siendo de baton. Por eso el manifiesto no puede pedir backup ni gate, ni redefinir
@@ -24,8 +41,10 @@
 
 use serde::Deserialize;
 
+use crate::credential::FieldSpec;
+use crate::credential_kind::{self, CredentialKind, PluginCredential};
 use crate::issue::Issue;
-use crate::kind::{self, KindSpec, Requires, StepKind};
+use crate::kind::{self, CredUse, KindSpec, Requires, StepKind};
 use crate::path;
 use crate::template::{STEP_VARS, unknown_placeholders};
 use crate::validate::unsafe_source;
@@ -56,6 +75,39 @@ pub struct Manifest {
     pub requires: Vec<String>,
     #[serde(rename = "type")]
     pub step_type: TypeSection,
+    /// Credenciales que usa el tipo y cómo las recibe su comando.
+    #[serde(default)]
+    pub credentials: Vec<CredentialDecl>,
+}
+
+/// Una credencial que usa el plugin.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialDecl {
+    /// El nombre del tipo (`aws`). Si no es de baton, `fields` lo define.
+    pub kind: String,
+    /// Los campos de un tipo nuevo. No vale con un tipo de baton: ya tiene los suyos.
+    #[serde(default)]
+    pub fields: Vec<FieldDecl>,
+    /// `VARIABLE = "plantilla con {CAMPOS}"`: lo que recibe el comando. Una variable cuya plantilla
+    /// usa un campo opcional que quedó vacío no se define.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldDecl {
+    /// `ACCESS_KEY_ID`: mayúsculas, números y guiones bajos.
+    pub key: String,
+    /// Etiqueta del formulario; por defecto, la clave en minúsculas.
+    pub label: Option<String>,
+    /// Se enmascara en pantalla y se tacha de todo lo que se muestra o guarda.
+    #[serde(default)]
+    pub secret: bool,
+    /// Puede quedar vacío.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -119,13 +171,54 @@ impl Manifest {
             detect: leak_all(&t.detect),
             binaries: leak_all(&self.requires),
             destructive: leak_all(&t.destructive),
+            credentials: Box::leak(
+                self.credentials
+                    .iter()
+                    .map(|c| CredUse {
+                        kind: leak(&c.kind),
+                        env: Box::leak(
+                            c.env
+                                .iter()
+                                .map(|(k, v)| (leak(k), leak(v)))
+                                .collect::<Vec<_>>()
+                                .into_boxed_slice(),
+                        ),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
         }
     }
 
-    /// Registra su tipo para que los planes puedan usarlo.
+    /// Registra sus tipos de credencial nuevos y su tipo de paso, para que los planes puedan
+    /// usarlos.
     pub fn register(&self) -> Result<StepKind, String> {
+        for c in self.credentials.iter().filter(|c| !c.fields.is_empty()) {
+            credential_kind::register(PluginCredential {
+                name: leak(&c.kind),
+                fields: leak_fields(&c.fields),
+            })?;
+        }
         kind::register(self.to_spec())
     }
+}
+
+fn leak_fields(fields: &[FieldDecl]) -> &'static [FieldSpec] {
+    let v: Vec<FieldSpec> = fields
+        .iter()
+        .map(|f| FieldSpec {
+            key: leak(&f.key),
+            label: leak(&f.label.clone().unwrap_or_else(|| default_label(&f.key))),
+            secret: f.secret,
+            optional: f.optional,
+        })
+        .collect();
+    Box::leak(v.into_boxed_slice())
+}
+
+/// `ACCESS_KEY_ID` -> `access key id`.
+fn default_label(key: &str) -> String {
+    key.to_lowercase().replace('_', " ")
 }
 
 fn leak(s: &str) -> &'static str {
@@ -349,6 +442,8 @@ pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
             ));
         }
     }
+    validate_credentials(m, &mut out);
+
     if !t.scanned && !t.detect.is_empty() {
         out.push(Issue::warning(
             path!["type", "detect"],
@@ -357,6 +452,248 @@ pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
     }
 
     out
+}
+
+/// La plantilla con cada `{CAMPO}` reemplazado por su valor, en una sola pasada (el valor de un
+/// campo nunca se interpreta como otro `{CAMPO}`). `None` si falta el valor de algún campo o está
+/// vacío: la variable entonces no se define.
+pub fn render_env(template: &str, lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after.find('}')?;
+        let value = lookup(&after[..close]).filter(|v| !v.is_empty())?;
+        out.push_str(&rest[..open]);
+        out.push_str(&value);
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+const MAX_CREDENTIALS: usize = 4;
+const MAX_FIELDS: usize = 16;
+const MAX_ENV: usize = 16;
+
+/// Variables que un plugin no puede definir con una credencial: cambiarlas altera cómo se lanza o
+/// se interpreta cualquier comando, y no hacen falta para entregar un secreto.
+const FORBIDDEN_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "SHELL",
+    "IFS",
+    "ENV",
+    "BASH_ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PS4",
+    "PROMPT_COMMAND",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+];
+
+fn forbidden_env(name: &str) -> bool {
+    FORBIDDEN_ENV.contains(&name) || name.starts_with("DYLD_") || name.starts_with("BATON_")
+}
+
+fn is_env_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    s.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Los `{CAMPO}` de una plantilla de variable. `Err` si hay una llave sin cerrar o un nombre que no
+/// es un campo.
+pub fn env_placeholders(template: &str) -> Result<Vec<&str>, String> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .ok_or_else(|| "hay una { sin cerrar".to_string())?;
+        let name = &after[..close];
+        if !credential_kind::is_valid_field_key(name) {
+            return Err(format!(
+                "{{{name}}} no es un campo (mayúsculas, números y _)"
+            ));
+        }
+        out.push(name);
+        rest = &after[close + 1..];
+    }
+    Ok(out)
+}
+
+fn validate_credentials(m: &Manifest, out: &mut Vec<Issue>) {
+    if m.credentials.len() > MAX_CREDENTIALS {
+        out.push(Issue::error(
+            path!["credentials"],
+            format!(
+                "demasiadas credenciales ({}, máximo {MAX_CREDENTIALS})",
+                m.credentials.len()
+            ),
+        ));
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for (i, c) in m.credentials.iter().enumerate() {
+        let at = |field: &str| path!["credentials", i, field];
+        if !kind::is_valid_name(&c.kind) {
+            out.push(Issue::error(
+                at("kind"),
+                format!(
+                    "nombre '{}' no válido: solo minúsculas, números y guiones",
+                    c.kind
+                ),
+            ));
+            continue;
+        }
+        if seen.contains(&c.kind.as_str()) {
+            out.push(Issue::error(
+                at("kind"),
+                format!("la credencial '{}' está declarada dos veces", c.kind),
+            ));
+        }
+        seen.push(&c.kind);
+
+        // los campos de los que puede hablar el env: los del tipo de baton o los que declara
+        let builtin = CredentialKind::from_name(&c.kind).filter(|k| k.is_builtin());
+        let keys: Vec<&str> = match builtin {
+            Some(k) => {
+                if !c.fields.is_empty() {
+                    out.push(Issue::error(
+                        at("fields"),
+                        format!(
+                            "'{}' es un tipo de baton y ya tiene sus campos: quita fields y deja solo env",
+                            c.kind
+                        ),
+                    ));
+                }
+                crate::credential::fields_for(k)
+                    .iter()
+                    .map(|f| f.key)
+                    .collect()
+            }
+            None => {
+                validate_fields(c, i, out);
+                c.fields.iter().map(|f| f.key.as_str()).collect()
+            }
+        };
+
+        if c.env.is_empty() {
+            out.push(Issue::error(
+                at("env"),
+                "sin env la credencial no llegaría a ningún comando: declara qué variables recibe",
+            ));
+        }
+        if c.env.len() > MAX_ENV {
+            out.push(Issue::error(
+                at("env"),
+                format!("demasiadas variables ({}, máximo {MAX_ENV})", c.env.len()),
+            ));
+        }
+        for (name, template) in &c.env {
+            let here = path!["credentials", i, "env", name.as_str()];
+            if !is_env_name(name) {
+                out.push(Issue::error(
+                    here,
+                    format!("'{name}' no es un nombre de variable (mayúsculas, números y _)"),
+                ));
+                continue;
+            }
+            if forbidden_env(name) {
+                out.push(Issue::error(
+                    here,
+                    format!(
+                        "una credencial no puede definir {name}: cambia cómo se lanzan los comandos"
+                    ),
+                ));
+                continue;
+            }
+            if template.trim().is_empty() || template.len() > 200 {
+                out.push(Issue::error(
+                    here,
+                    "la plantilla no puede estar vacía ni pasar de 200 caracteres",
+                ));
+                continue;
+            }
+            match env_placeholders(template) {
+                Err(e) => out.push(Issue::error(here, e)),
+                Ok(used) if used.is_empty() => out.push(Issue::error(
+                    here,
+                    "la plantilla no usa ningún {CAMPO}: una credencial entrega valores de la credencial",
+                )),
+                Ok(used) => {
+                    for field in used {
+                        if !keys.contains(&field) {
+                            out.push(Issue::error(
+                                path!["credentials", i, "env", name.as_str()],
+                                format!(
+                                    "{{{field}}} no es un campo de '{}' (los hay: {})",
+                                    c.kind,
+                                    keys.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_fields(c: &CredentialDecl, i: usize, out: &mut Vec<Issue>) {
+    if c.fields.is_empty() {
+        out.push(Issue::error(
+            path!["credentials", i, "fields"],
+            format!(
+                "'{}' no es un tipo de baton: declara sus campos con fields",
+                c.kind
+            ),
+        ));
+        return;
+    }
+    if c.fields.len() > MAX_FIELDS {
+        out.push(Issue::error(
+            path!["credentials", i, "fields"],
+            format!(
+                "demasiados campos ({}, máximo {MAX_FIELDS})",
+                c.fields.len()
+            ),
+        ));
+    }
+    let mut keys: Vec<&str> = Vec::new();
+    for (j, f) in c.fields.iter().enumerate() {
+        let at = path!["credentials", i, "fields", j];
+        if !credential_kind::is_valid_field_key(&f.key) {
+            out.push(Issue::error(
+                at,
+                format!(
+                    "clave '{}' no válida: mayúsculas, números y _, empezando por letra",
+                    f.key
+                ),
+            ));
+        } else if keys.contains(&f.key.as_str()) {
+            out.push(Issue::error(
+                at,
+                format!("el campo {} está repetido", f.key),
+            ));
+        }
+        keys.push(&f.key);
+        if f.label
+            .as_deref()
+            .is_some_and(|l| l.trim().is_empty() || l.len() > 40)
+        {
+            out.push(Issue::error(
+                path!["credentials", i, "fields", j, "label"],
+                "la etiqueta no puede estar vacía ni pasar de 40 caracteres",
+            ));
+        }
+    }
 }
 
 fn check_command(out: &mut Vec<Issue>, field: &str, command: &str) {
@@ -844,5 +1181,303 @@ command = "make deploy"
         assert_eq!(kind.destructive_patterns(), spec.destructive);
         // un tipo sin frases no pide revisar nada
         assert!(StepKind::Compose.destructive_patterns().is_empty());
+    }
+
+    // ------------------------------------------------ credenciales del plugin
+
+    const AWS: &str = r#"
+[[credentials]]
+kind = "t-pc-aws"
+fields = [
+  { key = "ACCESS_KEY_ID" },
+  { key = "SECRET_ACCESS_KEY", secret = true },
+  { key = "REGION", optional = true, label = "región" },
+]
+[credentials.env]
+AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+AWS_DEFAULT_REGION = "{REGION}"
+"#;
+
+    fn with_credentials(name: &str, creds: &str) -> Manifest {
+        manifest(&format!(
+            "{}\n{creds}",
+            TERRAFORM.replace("\"terraform\"\nversion", &format!("\"{name}\"\nversion"))
+        ))
+    }
+
+    fn cred_errors(creds: &str) -> Vec<String> {
+        errors(&with_credentials("t-pc-check", creds))
+    }
+
+    #[test]
+    fn a_manifest_can_define_a_new_credential_kind_and_map_it_to_the_tool_variables() {
+        let m = with_credentials("t-pc-ok", AWS);
+        assert!(errors(&m).is_empty(), "{:?}", errors(&m));
+        assert_eq!(m.credentials[0].kind, "t-pc-aws");
+        assert_eq!(m.credentials[0].fields.len(), 3);
+        assert_eq!(m.credentials[0].env["AWS_ACCESS_KEY_ID"], "{ACCESS_KEY_ID}");
+    }
+
+    #[test]
+    fn a_manifest_can_use_a_baton_credential_kind_with_only_the_env() {
+        let creds = r#"
+[[credentials]]
+kind = "docker"
+[credentials.env]
+REGISTRY_TOKEN = "{TOKEN}"
+REGISTRY_URL = "https://{REGISTRY}/v2"
+"#;
+        assert!(cred_errors(creds).is_empty(), "{:?}", cred_errors(creds));
+    }
+
+    #[test]
+    fn registering_defines_the_kind_with_its_fields_labels_and_secrecy() {
+        let m = with_credentials("t-pc-reg", &AWS.replace("t-pc-aws", "t-pc-reg-aws"));
+        let step = m.register().unwrap();
+        let kind = CredentialKind::from_name("t-pc-reg-aws").unwrap();
+        assert!(!kind.is_builtin());
+        let fields = crate::credential::fields_for(kind);
+        let keys: Vec<(&str, &str, bool, bool)> = fields
+            .iter()
+            .map(|f| (f.key, f.label, f.secret, f.optional))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("ACCESS_KEY_ID", "access key id", false, false),
+                ("SECRET_ACCESS_KEY", "secret access key", true, false),
+                ("REGION", "región", false, true),
+            ]
+        );
+        // y el tipo de paso sabe qué usa y con qué nombres
+        let uses = step.credential_uses();
+        assert_eq!(uses.len(), 1);
+        assert_eq!(uses[0].kind, "t-pc-reg-aws");
+        assert!(
+            uses[0]
+                .env
+                .contains(&("AWS_SECRET_ACCESS_KEY", "{SECRET_ACCESS_KEY}"))
+        );
+    }
+
+    #[test]
+    fn two_plugins_may_share_a_kind_if_they_define_it_the_same_but_not_differently() {
+        let creds = AWS.replace("t-pc-aws", "t-pc-shared");
+        with_credentials("t-pc-share-a", &creds).register().unwrap();
+        with_credentials("t-pc-share-b", &creds).register().unwrap();
+        // el mismo tipo con otros campos: el segundo no se carga
+        let different = creds.replace(
+            "  { key = \"REGION\", optional = true, label = \"región\" },\n",
+            "",
+        );
+        let different = different.replace("AWS_DEFAULT_REGION = \"{REGION}\"\n", "");
+        let e = with_credentials("t-pc-share-c", &different)
+            .register()
+            .unwrap_err();
+        assert!(e.contains("otro plugin con campos distintos"), "{e}");
+    }
+
+    #[test]
+    fn a_plugin_cannot_redefine_a_baton_credential_kind() {
+        let creds = r#"
+[[credentials]]
+kind = "docker"
+fields = [{ key = "TOKEN", secret = true }]
+[credentials.env]
+X = "{TOKEN}"
+"#;
+        let e = cred_errors(creds);
+        assert!(
+            e.iter()
+                .any(|m| m.contains("es un tipo de baton y ya tiene sus campos")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_kind_needs_its_fields_and_a_credential_needs_an_env() {
+        let no_fields = "[[credentials]]\nkind = \"t-pc-nf\"\n[credentials.env]\nX = \"{A}\"\n";
+        assert!(
+            cred_errors(no_fields)
+                .iter()
+                .any(|m| m.contains("declara sus campos")),
+            "{:?}",
+            cred_errors(no_fields)
+        );
+        let no_env = "[[credentials]]\nkind = \"t-pc-ne\"\nfields = [{ key = \"A\" }]\n";
+        assert!(
+            cred_errors(no_env).iter().any(|m| m.contains("sin env")),
+            "{:?}",
+            cred_errors(no_env)
+        );
+    }
+
+    #[test]
+    fn the_env_templates_are_checked_against_the_declared_fields() {
+        let mk = |tpl: &str| {
+            format!(
+                "[[credentials]]\nkind = \"t-pc-tpl\"\nfields = [{{ key = \"A\" }}]\n[credentials.env]\nX = \"{tpl}\"\n"
+            )
+        };
+        for ok in ["{A}", "id-{A}", "{A}:{A}", "https://{A}/x"] {
+            assert!(
+                cred_errors(&mk(ok)).is_empty(),
+                "{ok}: {:?}",
+                cred_errors(&mk(ok))
+            );
+        }
+        for (bad, why) in [
+            ("{B}", "no es un campo de 't-pc-tpl'"),
+            ("literal", "no usa ningún {CAMPO}"),
+            ("{A", "sin cerrar"),
+            ("{a}", "no es un campo"),
+            ("{}", "no es un campo"),
+            ("{A B}", "no es un campo"),
+            ("  ", "no puede estar vacía"),
+        ] {
+            let e = cred_errors(&mk(bad));
+            assert!(e.iter().any(|m| m.contains(why)), "'{bad}' ({why}): {e:?}");
+        }
+    }
+
+    #[test]
+    fn dangerous_variables_cannot_be_defined_by_a_credential() {
+        for name in [
+            "PATH",
+            "HOME",
+            "SHELL",
+            "IFS",
+            "BASH_ENV",
+            "ENV",
+            "PS4",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "BATON_ASKPASS_KEYS",
+            "BATON_X",
+        ] {
+            let creds = format!(
+                "[[credentials]]\nkind = \"t-pc-env\"\nfields = [{{ key = \"A\" }}]\n[credentials.env]\n{name} = \"{{A}}\"\n"
+            );
+            let e = cred_errors(&creds);
+            assert!(
+                e.iter()
+                    .any(|m| m.contains(&format!("no puede definir {name}"))),
+                "{name}: {e:?}"
+            );
+        }
+        for bad in ["lower", "A-B", "1A", "A B"] {
+            let creds = format!(
+                "[[credentials]]\nkind = \"t-pc-env2\"\nfields = [{{ key = \"A\" }}]\n[credentials.env]\n\"{bad}\" = \"{{A}}\"\n"
+            );
+            assert!(
+                cred_errors(&creds)
+                    .iter()
+                    .any(|m| m.contains("no es un nombre de variable")),
+                "{bad}: {:?}",
+                cred_errors(&creds)
+            );
+        }
+    }
+
+    #[test]
+    fn field_declarations_are_checked() {
+        let mk = |fields: &str| {
+            format!(
+                "[[credentials]]\nkind = \"t-pc-f\"\nfields = {fields}\n[credentials.env]\nX = \"{{A}}\"\n"
+            )
+        };
+        assert!(
+            cred_errors(&mk("[{ key = \"a\" }]"))
+                .iter()
+                .any(|m| m.contains("clave 'a' no válida"))
+        );
+        assert!(
+            cred_errors(&mk("[{ key = \"A\" }, { key = \"A\" }]"))
+                .iter()
+                .any(|m| m.contains("repetido"))
+        );
+        assert!(
+            cred_errors(&mk("[{ key = \"A\", label = \"  \" }]"))
+                .iter()
+                .any(|m| m.contains("etiqueta"))
+        );
+        assert!(
+            cred_errors(&mk("[]"))
+                .iter()
+                .any(|m| m.contains("declara sus campos"))
+        );
+        let many = (0..=MAX_FIELDS)
+            .map(|i| format!("{{ key = \"K{i}\" }}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            cred_errors(&mk(&format!("[{many}]")))
+                .iter()
+                .any(|m| m.contains("demasiados campos"))
+        );
+        // un campo desconocido en la declaración es un error de lectura (un typo no se ignora)
+        let typo = format!(
+            "{TERRAFORM}\n[[credentials]]\nkind = \"t-pc-typo\"\nfields = [{{ key = \"A\", secreto = true }}]\n"
+        );
+        assert!(Manifest::parse(&typo).is_err());
+    }
+
+    #[test]
+    fn a_kind_declared_twice_or_too_many_credentials_are_refused() {
+        let one = "[[credentials]]\nkind = \"t-pc-dup\"\nfields = [{ key = \"A\" }]\n[credentials.env]\nX = \"{A}\"\n";
+        let e = cred_errors(&format!("{one}\n{one}"));
+        assert!(e.iter().any(|m| m.contains("declarada dos veces")), "{e:?}");
+        let many: String = (0..=MAX_CREDENTIALS)
+            .map(|i| format!("[[credentials]]\nkind = \"t-pc-m{i}\"\nfields = [{{ key = \"A\" }}]\n[credentials.env]\nX = \"{{A}}\"\n"))
+            .collect();
+        assert!(
+            cred_errors(&many)
+                .iter()
+                .any(|m| m.contains("demasiadas credenciales"))
+        );
+    }
+
+    #[test]
+    fn rendering_replaces_fields_in_one_pass_and_drops_the_variable_when_a_field_is_missing() {
+        let lookup = |k: &str| match k {
+            "A" => Some("uno".to_string()),
+            "B" => Some("{A}".to_string()), // un valor que parece otro campo
+            "EMPTY" => Some(String::new()),
+            _ => None,
+        };
+        assert_eq!(render_env("{A}", lookup).as_deref(), Some("uno"));
+        assert_eq!(
+            render_env("x-{A}-{A}", lookup).as_deref(),
+            Some("x-uno-uno")
+        );
+        assert_eq!(
+            render_env("https://{A}/v2", lookup).as_deref(),
+            Some("https://uno/v2")
+        );
+        // el valor de B es el texto "{A}": no se vuelve a expandir
+        assert_eq!(render_env("{B}", lookup).as_deref(), Some("{A}"));
+        assert_eq!(render_env("{A}{B}", lookup).as_deref(), Some("uno{A}"));
+        // faltante o vacío: no se define
+        assert_eq!(render_env("{NADA}", lookup), None);
+        assert_eq!(render_env("{A}-{EMPTY}", lookup), None);
+        assert_eq!(render_env("{A", lookup), None);
+        assert_eq!(
+            render_env("sin campos", lookup).as_deref(),
+            Some("sin campos")
+        );
+    }
+
+    #[test]
+    fn placeholders_are_listed_and_odd_ones_explained() {
+        assert_eq!(env_placeholders("{A}-{B_2}").unwrap(), ["A", "B_2"]);
+        assert!(env_placeholders("sin").unwrap().is_empty());
+        assert!(
+            env_placeholders("{a}")
+                .unwrap_err()
+                .contains("no es un campo")
+        );
+        assert!(env_placeholders("{A").unwrap_err().contains("sin cerrar"));
     }
 }

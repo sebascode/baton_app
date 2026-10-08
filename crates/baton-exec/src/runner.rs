@@ -178,6 +178,37 @@ impl Ctx {
             .collect()
     }
 
+    /// Las credenciales que el tipo de plugin de este paso declara usar, con los nombres de variable
+    /// que su manifiesto les da. Solo las del plan que son del tipo que el plugin pide; si el plan
+    /// no declara ninguna, el paso no recibe nada (la herramienta usa lo que ya haya en el entorno).
+    /// Una variable cuyo campo falta o quedó vacío no se define.
+    fn plugin_credential_env(&self, ps: &PStep) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for used in ps.step.kind.credential_uses() {
+            let Some(req) = self
+                .plan
+                .credentials
+                .iter()
+                .find(|c| c.kind.name() == used.kind)
+            else {
+                continue;
+            };
+            for (name, template) in used.env {
+                let rendered = baton_core::plugin::render_env(template, |field| {
+                    let var = req.reference.variable(field);
+                    self.secrets
+                        .iter()
+                        .find(|(n, _)| *n == var)
+                        .map(|(_, v)| v.clone())
+                });
+                if let Some(value) = rendered {
+                    out.push(((*name).to_string(), value));
+                }
+            }
+        }
+        out
+    }
+
     /// La conexión de una credencial de base de datos (`db` o `sqlite`).
     fn conn_of(&self, cred: &baton_core::plan::CredentialReq) -> DbConn {
         match cred.kind {
@@ -327,6 +358,12 @@ impl Ctx {
             None => self.project.root.clone(),
         };
         let mut secrets = self.secrets_for(&line, ps.step.kind.receives_all_credentials());
+        // las variables con los nombres que espera la herramienta del plugin (AWS_ACCESS_KEY_ID...)
+        for (name, value) in self.plugin_credential_env(ps) {
+            if !secrets.iter().any(|(n, _)| *n == name) {
+                secrets.push((name, value));
+            }
+        }
         if ps.step.kind == StepKind::Sql {
             let own = self.plan.db_for_step(&ps.step).map(|c| c.id.as_str());
             let foreign = self.foreign_db_vars(own);

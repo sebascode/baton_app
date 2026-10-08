@@ -10,6 +10,10 @@
 # plan destruye o reemplaza algo, pide confirmar (sin terminal, falla salvo con --assume-yes).
 # Un paso que reescribe `command` (por ejemplo para agregar -var-file) tiene que declarar tambien
 # su propio `dry_run`, para que esa revision no se pierda.
+#
+# Credenciales: el tipo `aws` y las variables con las que terraform las espera. Si el plan declara
+# una (`[[credentials]]` con `kind = "aws"`), los comandos de este tipo la reciben con estos
+# nombres; si no, terraform usa lo que ya haya en el entorno (aws sso, un perfil, etc.).
 api = 1
 name = "terraform"
 version = "0.1.0"
@@ -22,3 +26,18 @@ detect = ["**/main.tf"]
 command = "terraform init -input=false -no-color && terraform plan -input=false -no-color -out=tfplan && terraform apply -input=false -no-color tfplan"
 dry_run = "terraform init -input=false -no-color && terraform plan -input=false -no-color"
 destructive = ["will be destroyed", "must be replaced"]
+
+[[credentials]]
+kind = "aws"
+fields = [
+  { key = "ACCESS_KEY_ID" },
+  { key = "SECRET_ACCESS_KEY", secret = true },
+  { key = "SESSION_TOKEN", secret = true, optional = true },
+  { key = "REGION", optional = true },
+]
+
+[credentials.env]
+AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+AWS_SESSION_TOKEN = "{SESSION_TOKEN}"
+AWS_DEFAULT_REGION = "{REGION}"
