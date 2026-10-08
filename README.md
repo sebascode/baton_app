@@ -143,6 +143,22 @@ Más detalle con `baton --help` y `man baton`.
 
 Si quieres que un asistente (Claude Code, Gemini, DeepSeek u otro) escriba el plan de tu proyecto, pásale [docs/ai-guide.md](docs/ai-guide.md). Explica el formato, las reglas y cómo comprobar el resultado con `baton validate` y `baton run --dry-run`.
 
+### Plugins
+
+Un plugin añade un tipo de paso nuevo (`terraform`, `make`, el que uses) con un archivo de texto que
+dice qué comando ejecutar. No tiene código, así que sirve para cualquier herramienta, en el lenguaje
+que esté escrita. baton conserva la ejecución, las credenciales, los logs y los gates.
+
+```sh
+baton plugin new mi-plugin        # crea un manifiesto para empezar
+baton plugin validate mi-plugin   # lo revisa y muestra lo que ejecutaría
+baton plugin add ./mi-plugin      # lo instala (o github:dueño/repo@v1.0.0, con commit firmado)
+baton plugin list                 # los instalados
+```
+
+Para escribir uno, con un tutorial de cinco minutos, la referencia completa y cómo publicarlo
+firmado en GitHub: [docs/plugins.md](docs/plugins.md).
+
 ## Línea de tiempo
 
 Qué se fue agregando y cuándo (las fechas son las de los commits del repositorio).

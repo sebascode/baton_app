@@ -56,6 +56,13 @@ Un PR no se acepta si hace alguna de estas cosas:
 Las rutas más delicadas están en `.github/CODEOWNERS`: ahí toda revisión es obligatoria. Lo que
 sale de la máquina está listado en [SECURITY.md](SECURITY.md).
 
+## Plugins
+
+Los plugins viven en su propio repositorio, no en este. Si quieres escribir uno (para Terraform,
+Bicep, Node o lo que uses), la guía está en [docs/plugins.md](docs/plugins.md). Cambios al
+**sistema** de plugins (el formato del manifiesto, la instalación, las credenciales) sí son para este
+repositorio y se revisan con el mismo rigor que el resto de las rutas sensibles.
+
 ## Estilo
 
 Textos de interfaz en español, en sentence case y sin signos de exclamación. En textos y

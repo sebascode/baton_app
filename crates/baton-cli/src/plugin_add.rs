@@ -190,9 +190,15 @@ pub fn fetch_with(http: &dyn Http, source: &Source) -> Result<Fetched, String> {
         ));
     }
     let manifest = checked.value.expect("revisado arriba");
+    // una carpeta local queda registrada con su ruta absoluta: una relativa no significaría nada
+    // al día siguiente, desde otra carpeta
+    let source = match source {
+        Source::Local(p) => Source::Local(std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())),
+        other => other.clone(),
+    };
     Ok(Fetched {
         sha256: sha256_hex(text.as_bytes()),
-        source: source.clone(),
+        source,
         commit,
         text,
         manifest,
@@ -604,6 +610,10 @@ pub fn new_in(base: &Path, name: &str, out: &mut dyn Write) -> u8 {
         out,
         "  3. pruébalo en tu máquina:  baton plugin add {}",
         folder.display()
+    );
+    let _ = writeln!(
+        out,
+        "guía para escribir un plugin: https://github.com/sebascode/baton_app/blob/HEAD/docs/plugins.md"
     );
     0
 }
@@ -1335,5 +1345,32 @@ mod tests {
             ),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn a_local_source_is_recorded_with_its_absolute_path_whatever_way_it_was_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("mi");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join(MANIFEST_FILE),
+            manifest_text("t-add-abs", "echo"),
+        )
+        .unwrap();
+        let real = fs::canonicalize(&folder).unwrap();
+        // con un `..` en el medio y apuntando al archivo o a la carpeta: la misma ruta
+        for written in [
+            folder.clone(),
+            folder.join(MANIFEST_FILE),
+            folder.join("..").join("mi"),
+        ] {
+            let f = fetch(&Source::Local(written.clone())).unwrap();
+            let Source::Local(got) = &f.source else {
+                panic!()
+            };
+            assert!(got.is_absolute(), "{written:?} -> {got:?}");
+            assert!(!got.to_string_lossy().contains(".."), "{got:?}");
+            assert!(got.starts_with(&real), "{got:?}");
+        }
     }
 }
