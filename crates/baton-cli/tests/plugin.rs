@@ -366,3 +366,55 @@ fn without_terraform_installed_the_run_stops_before_running_anything() {
     );
     assert!(calls(&fx).is_empty());
 }
+
+#[test]
+fn a_step_that_adds_variables_to_the_command_keeps_its_plan_with_its_own_dry_run() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let path = fx.root.join("baton/plans/infra.toml");
+    let plan = fs::read_to_string(&path).unwrap();
+    // el paso reescribe el comando para pasar un archivo de variables, y declara su plan
+    let plan = plan.replace(
+        "type = \"terraform\"",
+        "type = \"terraform\"\ncommand = \"terraform apply -var-file=prod.tfvars\"\ndry_run = \"terraform plan -var-file=prod.tfvars\"",
+    );
+    fs::write(&path, plan).unwrap();
+
+    let v = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&v), 0, "{}{}", out(&v), err(&v));
+
+    let o = fx.baton_path(&["run", "infra", "--no-tui", "--dry-run"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert_eq!(
+        calls(&fx),
+        [
+            "dev|plan -var-file=prod.tfvars",
+            "prod|plan -var-file=prod.tfvars"
+        ]
+    );
+    assert!(
+        !out(&o).contains("declara su propio command"),
+        "tiene su dry_run: no hay nada que avisar"
+    );
+}
+
+#[test]
+fn rewriting_the_command_without_a_dry_run_says_what_to_do() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let path = fx.root.join("baton/plans/infra.toml");
+    let plan = fs::read_to_string(&path).unwrap().replace(
+        "type = \"terraform\"",
+        "type = \"terraform\"\ncommand = \"terraform apply -var-file=prod.tfvars\"",
+    );
+    fs::write(&path, plan).unwrap();
+
+    let o = fx.baton_path(&["run", "infra", "--no-tui", "--dry-run"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(calls(&fx).is_empty(), "no se planifica con otro comando");
+    assert!(
+        out(&o).contains("declara dry_run en el paso para planificarlo"),
+        "{}",
+        out(&o)
+    );
+}

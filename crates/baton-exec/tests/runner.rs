@@ -3341,3 +3341,101 @@ fn a_dry_run_without_a_plugin_dry_run_still_resolves_nothing() {
     assert_eq!(outcome(&events), RunOutcome::Completed);
     assert!(all_logs(&events).contains("dry-run: no se ejecutó"));
 }
+
+// -------------------------------------------- dry_run declarado en el paso
+
+#[test]
+fn a_step_dry_run_replaces_the_one_of_the_type_and_lets_the_step_rewrite_its_command() {
+    register_planner("t-step-dry", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    // el caso de siempre: se agregan variables al comando y, con ellas, también al plan
+    let p = planner_plan(
+        "t-step-dry",
+        "command = \"echo \\\"aplicado-con-vars:{name}\\\" >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo \\\"planeado-con-vars:{name}\\\" >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let dry = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&dry), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado-con-vars:a\n");
+    assert!(
+        !all_logs(&dry).contains("declara su propio command"),
+        "{}",
+        all_logs(&dry)
+    );
+    assert!(
+        !fx.root().join(".baton").exists(),
+        "un dry-run no deja rastro"
+    );
+
+    fs::remove_file(fx.root().join("trace.txt")).unwrap();
+    let real = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&real), RunOutcome::Completed);
+    assert_eq!(
+        trace(&fx),
+        "aplicado-con-vars:a\n",
+        "el dry_run del paso no corre fuera de un dry-run"
+    );
+}
+
+#[test]
+fn a_step_dry_run_works_on_a_native_type_that_had_none() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo aplicado >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo planeado >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado\n");
+}
+
+#[test]
+fn a_native_step_without_a_dry_run_still_executes_nothing() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"echo aplicado >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "");
+    assert!(all_logs(&events).contains("dry-run: no se ejecutó"));
+}
+
+#[test]
+fn a_step_dry_run_gets_the_credentials_it_mentions_and_nothing_leaks_to_the_screen() {
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n\
+         dry_run = \"echo \\\"token=$GHCR_TOKEN\\\"; env | grep '^GHCR_' | cut -d= -f1 >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "GHCR_TOKEN\n");
+    assert!(
+        !all_logs(&events).contains("ghp_secreto_12345"),
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn a_failing_step_dry_run_fails_the_run_and_still_leaves_no_trace() {
+    let fx = Fx::new(&[]);
+    let p = plan(
+        "[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n\
+         dry_run = \"echo sin-permisos >&2; exit 4\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(
+        failure(&events)
+            .output_tail
+            .join("\n")
+            .contains("sin-permisos")
+    );
+    assert!(!fx.root().join(".baton").exists());
+}

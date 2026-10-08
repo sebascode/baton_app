@@ -89,7 +89,7 @@ Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la 
 Texto plano en vez de la pantalla.
 .TP
 .B \-\-dry\-run
-No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado). La única excepción son los pasos de un tipo de plugin que declara un \fBdry_run\fR (ver \fBPLUGINS\fR): su comando de solo lectura sí se ejecuta, con las credenciales que mencione, y lo que muestra no se guarda en ningún log.
+No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado). La única excepción son los pasos con un \fBdry_run\fR (el suyo o el de su tipo de plugin, ver \fBPLUGINS\fR): su comando de solo lectura sí se ejecuta, con las credenciales que mencione, y lo que muestra no se guarda en ningún log.
 .TP
 .B \-\-resume
 Salta los pasos que terminaron bien en la última ejecución (los muestra como omitidos).
@@ -379,7 +379,7 @@ url = "http://{destino}:8080/health"
 .RE
 .fi
 .PP
-Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR y \fBbackup_before\fR.
+Tipos de paso: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR, \fBcheck\fR, \fBbackup\fR y \fBgate\fR (un paso sin acción, solo con gate). Cada paso tiene \fBid\fR (estable), \fBname\fR, \fBenabled\fR, \fBsource\fR (ruta, glob o lista, relativa al proyecto: nunca absoluta, con \fB..\fR ni dentro de \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR, \fBdry_run\fR y \fBbackup_before\fR. \fBdry_run\fR es un comando de solo lectura que \fB\-\-dry\-run\fR ejecuta de verdad en lugar de listar el comando del paso (por ejemplo \fBterraform plan \-var\-file=prod.tfvars\fR); admite los mismos placeholders que \fBcommand\fR, solo vale en pasos que ejecutan un comando, y una palabra que suele modificar algo (\fBapply\fR, \fBdestroy\fR...) genera una advertencia.
 .PP
 En \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR y \fBsql\fR el comando corre una vez por archivo, dentro de la carpeta de ese archivo (por defecto \fBdocker compose up \-d\fR y \fBdocker build \-t {name}:latest .\fR). Los comandos aceptan los marcadores \fB{plan}\fR, \fB{fecha}\fR, \fB{destino}\fR, \fB{ambiente}\fR, \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (el nombre del archivo con su extensión) y \fB{stem}\fR (sin ella, por ejemplo \fBrollback = "sh {stem}.rollback.sh"\fR); un marcador desconocido se deja tal cual y solo da una advertencia.
 .PP
@@ -465,7 +465,7 @@ dry_run = "terraform init \-input=false && terraform plan \-input=false"
 .PP
 \fBdry_run\fR es el comando que se usa con \fB\-\-dry\-run\fR y \fBtiene que ser de solo lectura\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): se rechaza uno igual a \fBcommand\fR o que use palabras como \fBapply\fR, \fBdestroy\fR, \fBcreate\fR o \fBdeploy\fR. Es un chequeo de apariencia, no una garantía: un comando puede esconder lo que hace, así que lee los comandos con \fBbaton plugin validate\fR antes de instalar un plugin ajeno.
 .PP
-Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
+Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
 .PP
 \fBbaton init\fR propone un paso por cada tipo de plugin que reconoce algo en el proyecto (según \fBdetect\fR), siempre \fBdesactivado\fR: un paso de infraestructura modifica cosas fuera de esta máquina y activarlo es una decisión de quien conoce el entorno. No baja a carpetas ocultas ni a \fBnode_modules\fR, \fBvendor\fR o \fBtarget\fR.
 .SH CREDENCIALES

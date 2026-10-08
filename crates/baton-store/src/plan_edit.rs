@@ -315,6 +315,13 @@ fn update_step(t: &mut Table, old: Option<&Step>, s: &Step) {
         &s.database.as_deref().and_then(non_empty),
         string_value,
     );
+    put(
+        t,
+        "dry_run",
+        o.map(|o| o.dry_run.as_deref().and_then(non_empty)).as_ref(),
+        &s.dry_run.as_deref().and_then(non_empty),
+        string_value,
+    );
     update_gate(t, old.and_then(|o| o.gate.as_ref()), s.gate.as_ref());
 }
 
@@ -1045,5 +1052,44 @@ url = "http://{destino}:3000/health"
             "{text}"
         );
         assert_eq!(steps(&p), s);
+    }
+
+    #[test]
+    fn the_dry_run_of_a_step_survives_an_edit_and_can_be_changed_or_removed() {
+        let text = "name = \"instalar\"\n\
+            [[steps]]\nid = \"tf\"\nname = \"Infra\"\ntype = \"comando\"\ncommand = \"make\"\n\
+            dry_run = \"make -n\" # solo lectura\n";
+        let (_t, p) = project_with(text);
+        let same = steps(&p);
+        assert_eq!(same[0].dry_run.as_deref(), Some("make -n"));
+        // guardar lo mismo no cambia nada (ni el comentario)
+        save_plan_steps(&p, "instalar", &same, None).unwrap();
+        assert_eq!(read(&p), text);
+        // cambiar otro campo conserva el dry_run y su comentario
+        let mut edited = same.clone();
+        edited[0].name = "Infra prod".into();
+        save_plan_steps(&p, "instalar", &edited, None).unwrap();
+        assert!(
+            read(&p).contains("dry_run = \"make -n\" # solo lectura"),
+            "{}",
+            read(&p)
+        );
+        // cambiarlo se escribe; quitarlo borra la línea
+        let mut other = steps(&p);
+        other[0].dry_run = Some("make -n prod".into());
+        save_plan_steps(&p, "instalar", &other, None).unwrap();
+        assert_eq!(steps(&p)[0].dry_run.as_deref(), Some("make -n prod"));
+        let mut none = steps(&p);
+        none[0].dry_run = None;
+        save_plan_steps(&p, "instalar", &none, None).unwrap();
+        assert!(!read(&p).contains("dry_run"), "{}", read(&p));
+        // un paso nuevo con dry_run lo escribe
+        let mut added = steps(&p);
+        let mut new_step = added[0].clone();
+        new_step.id = "tf2".into();
+        new_step.dry_run = Some("make -n".into());
+        added.push(new_step);
+        save_plan_steps(&p, "instalar", &added, None).unwrap();
+        assert_eq!(steps(&p)[1].dry_run.as_deref(), Some("make -n"));
     }
 }

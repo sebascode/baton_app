@@ -1070,34 +1070,18 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
 }
 
 /// El comando de solo lectura que un `--dry-run` ejecuta de verdad para este paso, si lo tiene:
-/// el `dry_run` de su tipo (un plugin). Si el paso declara su propio `command` no se usa, porque
-/// el del tipo ya no describiría lo que el paso haría de verdad; se avisa en el log.
-fn dry_run_probe(ctx: &Ctx, ps: &PStep) -> Option<&'static str> {
+/// el suyo (`dry_run`) o el de su tipo (un plugin), salvo que el paso reescriba `command` (ver
+/// `Step::dry_run_command`).
+fn dry_run_probe(ctx: &Ctx, ps: &PStep) -> Option<String> {
     if !ctx.opts.dry_run {
         return None;
     }
-    let dry = ps.step.kind.dry_run_command()?;
-    if ps
-        .step
-        .command
-        .as_deref()
-        .is_some_and(|c| !c.trim().is_empty())
-    {
-        return None;
-    }
-    Some(dry)
+    ps.step.dry_run_command().map(str::to_string)
 }
 
 /// ¿Algún paso va a ejecutar un dry-run de verdad? Entonces hay que resolver las credenciales.
 fn has_dry_run_probe(steps: &[PStep]) -> bool {
-    steps.iter().any(|ps| {
-        ps.step.kind.dry_run_command().is_some()
-            && ps
-                .step
-                .command
-                .as_deref()
-                .is_none_or(|c| c.trim().is_empty())
-    })
+    steps.iter().any(|ps| ps.step.dry_run_command().is_some())
 }
 
 /// Ejecuta un paso completo: backup previo, comando por archivo y gate manual.
@@ -1125,7 +1109,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     let template = ps.step.command_template();
     let is_sql = ps.step.kind == StepKind::Sql;
     let probe = dry_run_probe(ctx, ps);
-    if let Some(dry) = probe {
+    if let Some(dry) = &probe {
         // `--dry-run` de un tipo de plugin: ejecuta de verdad su comando de solo lectura
         let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
             vec![None]
@@ -1139,11 +1123,11 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
                 return end;
             }
         }
-    } else if ctx.opts.dry_run && ps.step.kind.dry_run_command().is_some() {
+    } else if ctx.opts.dry_run && ps.step.dry_run_shadowed() {
         ctx.log(
             i,
             LogKind::Output,
-            "dry-run: el paso declara su propio command, no se ejecuta el dry_run de su tipo",
+            "dry-run: el paso declara su propio command, así que no se ejecuta el dry_run de su tipo (declara dry_run en el paso para planificarlo)",
         );
     }
     if !skip_action

@@ -147,6 +147,7 @@ mod tests {
                 rollback: None,
                 backup_before: false,
                 database: None,
+                dry_run: None,
             },
             target: target.into(),
             restore_db: false,

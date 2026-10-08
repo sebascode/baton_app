@@ -312,6 +312,7 @@ fn step(
         rollback: None,
         backup_before: false,
         database: None,
+        dry_run: None,
     }
 }
 
