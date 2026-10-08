@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Widget};
 
 use crate::run::{Phase, RunState, StepRow};
 use crate::theme;
-use crate::widgets::{self, fmt_clock, fmt_duration, frame, hsep, justify};
+use crate::widgets::{self, fmt_clock, fmt_duration, frame, hsep, truncate};
 
 const SHORTCUTS: [(&str, &str); 4] = [
     ("enter", "volver al plan"),
@@ -65,11 +65,27 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     let w = inner.width.saturating_sub(4);
     let mut y = inner.y + 1;
 
-    for row in &s.rows {
+    // Resumen en una línea y la tabla de pasos con su barra de tiempo.
+    if y < sep_low {
+        chips(s).render(Rect::new(x, y, w, 1), buf);
+        y += 2;
+    }
+    let layout = Table::new(w, s.rows.len());
+    if y < sep_low {
+        layout.header().render(Rect::new(x, y, w, 1), buf);
+        y += 1;
+    }
+    let longest = s
+        .rows
+        .iter()
+        .filter_map(|r| r.elapsed)
+        .max()
+        .unwrap_or_default();
+    for (i, row) in s.rows.iter().enumerate() {
         if y >= sep_low {
             break;
         }
-        step_line(row, w).render(Rect::new(x, y, w, 1), buf);
+        step_line(row, i, &layout, longest).render(Rect::new(x, y, w, 1), buf);
         y += 1;
     }
 
@@ -126,43 +142,148 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     );
 }
 
-fn step_line(row: &StepRow, width: u16) -> Line<'static> {
+/// Anchos de las columnas de la tabla: `# paso resultado duración barra`. La barra solo aparece
+/// si sobra espacio (desde ~100 columnas).
+struct Table {
+    num: usize,
+    name: usize,
+    result: usize,
+    time: usize,
+    bar: usize,
+}
+
+impl Table {
+    fn new(width: u16, rows: usize) -> Table {
+        let width = width as usize;
+        let num = rows.to_string().len().max(1) + 1;
+        let result = 20;
+        let time = 8;
+        let fixed = num + result + time + 3;
+        let bar = if width >= 90 {
+            24.min(width.saturating_sub(fixed + 24))
+        } else {
+            0
+        };
+        let name = width
+            .saturating_sub(fixed + if bar > 0 { bar + 1 } else { 0 })
+            .max(8);
+        Table {
+            num,
+            name,
+            result,
+            time,
+            bar,
+        }
+    }
+
+    fn header(&self) -> Line<'static> {
+        let mut text = format!(
+            "{:<n$} {:<p$} {:<r$} {:>t$}",
+            "#",
+            "paso",
+            "resultado",
+            "duración",
+            n = self.num,
+            p = self.name,
+            r = self.result,
+            t = self.time
+        );
+        if self.bar > 0 {
+            text.push_str(" dónde se fue el tiempo");
+        }
+        Line::from(Span::styled(text, theme::muted()))
+    }
+}
+
+fn step_line(
+    row: &StepRow,
+    index: usize,
+    t: &Table,
+    longest: std::time::Duration,
+) -> Line<'static> {
     let status = row.info.status;
+    let skipped = status == StepStatus::Skipped;
     let (symbol, color) = if status == StepStatus::Done && row.retries > 0 {
         ("↻", theme::WARN)
+    } else if skipped {
+        ("-", theme::MUTED)
     } else {
         (theme::status_symbol(status), theme::status_color(status))
     };
-    let skipped = status == StepStatus::Skipped;
-    let name_style = if skipped {
+    let dim = if skipped {
         theme::muted()
     } else {
         Style::new()
     };
-    let mut left = vec![
-        Span::styled(symbol, Style::new().fg(color)),
-        Span::raw(" "),
-        Span::styled(row.info.name.clone(), name_style),
-    ];
-    if row.retries > 0 {
-        let noun = if row.retries == 1 {
-            "reintento"
-        } else {
-            "reintentos"
-        };
-        left.push(Span::styled(
-            format!("  {} {noun}", row.retries),
-            theme::secondary(),
-        ));
-    }
-    if skipped {
-        left.push(Span::styled("  omitido", theme::muted()));
-    }
+    let result = match status {
+        StepStatus::Done if row.retries == 1 => "ok · 1 reintento".to_string(),
+        StepStatus::Done if row.retries > 1 => format!("ok · {} reintentos", row.retries),
+        StepStatus::Done => "ok".to_string(),
+        StepStatus::Failed => "falló".to_string(),
+        StepStatus::Skipped => "omitido".to_string(),
+        StepStatus::Gate => "gate".to_string(),
+        StepStatus::Running => "en curso".to_string(),
+        StepStatus::Pending => "sin ejecutar".to_string(),
+    };
     let time = match row.elapsed {
         Some(d) => fmt_duration(d),
         None => "-".to_string(),
     };
-    justify(left, vec![Span::styled(time, name_style)], width)
+    let mut spans = vec![
+        Span::styled(format!("{:<n$} ", index + 1, n = t.num), theme::muted()),
+        Span::styled(
+            format!("{:<p$} ", truncate(&row.info.name, t.name), p = t.name),
+            dim,
+        ),
+        Span::styled(format!("{symbol} "), Style::new().fg(color)),
+        Span::styled(
+            format!("{:<r$} ", truncate(&result, t.result - 2), r = t.result - 2),
+            dim,
+        ),
+        Span::styled(format!("{time:>w$}", w = t.time), dim),
+    ];
+    if t.bar > 0
+        && let Some(d) = row.elapsed.filter(|d| !d.is_zero())
+    {
+        let longest = longest.as_millis().max(1);
+        let cells = ((d.as_millis() * t.bar as u128).div_ceil(longest) as usize).clamp(1, t.bar);
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled("█".repeat(cells), Style::new().fg(color)));
+    }
+    Line::from(spans)
+}
+
+/// La línea de arriba: cuántos pasos se ejecutaron, con reintentos u omitidos.
+fn chips(s: &RunState) -> Line<'static> {
+    let ran = s
+        .rows
+        .iter()
+        .filter(|r| matches!(r.info.status, StepStatus::Done | StepStatus::Failed))
+        .count();
+    let skipped = s
+        .rows
+        .iter()
+        .filter(|r| r.info.status == StepStatus::Skipped)
+        .count();
+    let retries: u32 = s.rows.iter().map(|r| r.retries).sum();
+    let mut parts = vec![format!(
+        "{ran} {} ejecutado{}",
+        if ran == 1 { "paso" } else { "pasos" },
+        if ran == 1 { "" } else { "s" }
+    )];
+    if retries > 0 {
+        parts.push(format!(
+            "{retries} reintento{}",
+            if retries == 1 { "" } else { "s" }
+        ));
+    }
+    if skipped > 0 {
+        parts.push(format!(
+            "{skipped} omitido{}",
+            if skipped == 1 { "" } else { "s" }
+        ));
+    }
+    Line::from(Span::styled(parts.join(" · "), theme::secondary()))
 }
 
 fn cards(summary: &RunSummary) -> Vec<(&'static str, String)> {

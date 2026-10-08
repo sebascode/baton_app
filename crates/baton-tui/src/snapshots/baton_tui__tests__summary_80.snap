@@ -4,12 +4,15 @@ expression: text(&buf)
 ---
 ╭─ ✓ Plan instalar completado ────────────────────────── 6/6 pasos · 00:06:12 ─╮
 │                                                                              │
-│  ✓ Pre-checks                                                            4s  │
-│  ✓ Backup volúmenes                                                     38s  │
-│  ✓ Build imágenes                                                     1m52s  │
-│  ✓ Levantar DB + gate                                                   44s  │
-│  ↻ Levantar servicios  1 reintento                                    2m31s  │
-│  » Smoke tests  omitido                                                   -  │
+│  5 pasos ejecutados · 1 reintento · 1 omitido                                │
+│                                                                              │
+│  #  paso                                      resultado            duración  │
+│  1  Pre-checks                                ✓ ok                       4s  │
+│  2  Backup volúmenes                          ✓ ok                      38s  │
+│  3  Build imágenes                            ✓ ok                    1m52s  │
+│  4  Levantar DB + gate                        ✓ ok                      44s  │
+│  5  Levantar servicios                        ↻ ok · 1 reintento      2m31s  │
+│  6  Smoke tests                               - omitido                   -  │
 │                                                                              │
 │  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐                    │
 │  │ contenedores   │ │ imágenes       │ │ backup         │                    │
@@ -18,9 +21,6 @@ expression: text(&buf)
 │                                                                              │
 │  log · .baton/logs/instalar-2026-09-24-1402.log                              │
 │  deshacer · baton rollback instalar                                          │
-│                                                                              │
-│                                                                              │
-│                                                                              │
 │                                                                              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤

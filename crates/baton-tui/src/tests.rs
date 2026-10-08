@@ -339,7 +339,10 @@ fn summary_styles() {
         style_at(&buf, find(&buf, "1 reintento")).fg,
         Some(theme::SECONDARY)
     );
-    assert_eq!(style_at(&buf, find(&buf, "»")).fg, Some(theme::MUTED));
+    assert_eq!(
+        style_at(&buf, find(&buf, "- omitido")).fg,
+        Some(theme::MUTED)
+    );
     assert_eq!(
         style_at(&buf, find(&buf, "contenedores")).fg,
         Some(theme::SECONDARY)
@@ -655,9 +658,12 @@ fn full_flow_preview_run_failure_retry_summary() {
 
     let t = text(&render(100, 30, |b, a| app.render(b, a)));
     assert!(t.contains("✓ Plan instalar completado"), "{t}");
-    assert!(t.contains("↻ Levantar servicios  1 reintento"), "{t}");
-    assert!(t.contains("» Smoke tests"), "{t}");
-    assert!(t.contains("✓ Gate: confirmar despliegue"), "{t}");
+    assert!(
+        t.contains("Levantar servicios") && t.contains("↻ ok · 1 reintento"),
+        "{t}"
+    );
+    assert!(t.contains("Smoke tests") && t.contains("- omitido"), "{t}");
+    assert!(t.contains("Gate: confirmar despliegue"), "{t}");
     // enter vuelve a la vista del plan (no cierra la app) y deja la franja con cómo terminó
     assert_eq!(app.handle_key(key(KeyCode::Enter)), None);
     assert!(matches!(app.mode, Mode::Preview(_)), "{:?}", app.mode);
