@@ -270,6 +270,7 @@ mod plugin_tests {
             detect,
             binaries: &[],
             destructive: &[],
+            credentials: &[],
         })
         .unwrap()
     }

@@ -261,7 +261,7 @@ const TERRAFORM_EXAMPLE: &str =
     include_str!("../../../examples/plugins/terraform/baton-plugin.toml");
 
 // registra cada llamada y, si BATON_FAKE_DESTROY esta definida, su plan dice que destruye algo
-const FAKE_TERRAFORM: &str = "#!/bin/sh\necho \"$(basename \"$PWD\")|$*\" >> \"$BATON_CALLS\"\ncase \"$1\" in plan) [ -n \"$BATON_FAKE_DESTROY\" ] && echo '  # aws_instance.web will be destroyed'; echo 'Plan: 0 to add, 0 to change, 1 to destroy.';; esac\nexit 0\n";
+const FAKE_TERRAFORM: &str = "#!/bin/sh\necho \"$(basename \"$PWD\")|$*\" >> \"$BATON_CALLS\"\ncase \"$1\" in plan) [ -n \"$BATON_FAKE_DESTROY\" ] && echo '  # aws_instance.web will be destroyed'; echo 'Plan: 0 to add, 0 to change, 1 to destroy.';; esac\nif [ \"$1\" = apply ]; then env | grep '^AWS_' | sort >> \"$BATON_CALLS.env\"; fi\nexit 0\n";
 
 fn terraform_fx() -> Fx {
     use std::os::unix::fs::PermissionsExt;
@@ -305,6 +305,19 @@ fn init_proposes_the_terraform_step_disabled_and_says_why() {
     );
     assert!(
         out(&o).contains("los pasos de plugins (terraform) quedaron desactivados"),
+        "{}",
+        out(&o)
+    );
+    // y dice cómo declarar la credencial que acepta el plugin
+    assert!(
+        out(&o).contains("el tipo 'terraform' acepta la credencial 'aws'"),
+        "{}",
+        out(&o)
+    );
+    assert!(
+        out(&o).contains(
+            "[[credentials]]\n  id = \"aws\"\n  kind = \"aws\"\n  ref = \"servers.env#AWS\""
+        ),
         "{}",
         out(&o)
     );
@@ -722,5 +735,126 @@ fn a_corrupt_registry_stops_every_plugin_from_loading_and_says_why() {
         err(&o).contains("no se puede comprobar que el plugin sea el que se instaló"),
         "{}",
         err(&o)
+    );
+}
+
+// ------------------------------------------------------------ credenciales de un plugin
+
+fn env_dump(fx: &Fx) -> String {
+    fs::read_to_string(fx.root.join("_calls.env")).unwrap_or_default()
+}
+
+const AWS_PLAN: &str =
+    "[[credentials]]\nid = \"nube\"\nkind = \"aws\"\nref = \"servers.env#PROD\"\n\n";
+
+fn with_aws(fx: &Fx, creds_file: &str) {
+    enabled_plan(fx);
+    let path = fx.root.join("baton/plans/infra.toml");
+    let plan = fs::read_to_string(&path).unwrap();
+    // las credenciales van antes de los pasos, justo después del nombre del plan
+    let plan = plan.replacen("\n", &format!("\n{AWS_PLAN}"), 1);
+    fs::write(path, plan).unwrap();
+    fx.write(".baton/credentials/servers.env", creds_file);
+}
+
+#[test]
+fn terraform_receives_the_aws_credential_under_the_names_aws_expects() {
+    let fx = terraform_fx();
+    with_aws(
+        &fx,
+        "PROD_ACCESS_KEY_ID=AKIAEJEMPLO\nPROD_SECRET_ACCESS_KEY=clave-secreta-123\nPROD_REGION=us-east-1\n",
+    );
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert_eq!(
+        env_dump(&fx),
+        "AWS_ACCESS_KEY_ID=AKIAEJEMPLO\nAWS_DEFAULT_REGION=us-east-1\nAWS_SECRET_ACCESS_KEY=clave-secreta-123\n\
+         AWS_ACCESS_KEY_ID=AKIAEJEMPLO\nAWS_DEFAULT_REGION=us-east-1\nAWS_SECRET_ACCESS_KEY=clave-secreta-123\n",
+        "una vez por carpeta; el token de sesión, que quedó vacío, no se define"
+    );
+    assert!(!out(&o).contains("clave-secreta-123") && !err(&o).contains("clave-secreta-123"));
+}
+
+#[test]
+fn without_the_credential_in_the_plan_terraform_still_runs_and_gets_no_aws_variables() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert_eq!(env_dump(&fx), "");
+}
+
+#[test]
+fn a_missing_required_field_stops_a_ci_run_naming_the_variable_before_running_anything() {
+    let fx = terraform_fx();
+    with_aws(&fx, "PROD_ACCESS_KEY_ID=AKIAEJEMPLO\n");
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 1, "{}{}", out(&o), err(&o));
+    assert!(err(&o).contains("PROD_SECRET_ACCESS_KEY"), "{}", err(&o));
+    assert!(calls(&fx).is_empty(), "no se ejecutó nada");
+}
+
+#[test]
+fn a_dry_run_hands_terraform_the_credential_so_it_can_plan_against_the_cloud() {
+    let fx = terraform_fx();
+    with_aws(
+        &fx,
+        "PROD_ACCESS_KEY_ID=AKIAEJEMPLO\nPROD_SECRET_ACCESS_KEY=clave-secreta-123\n",
+    );
+    // el terraform de mentira solo vuelca su entorno al aplicar: en dry-run basta con que se ejecute
+    let o = fx.baton_path(&["run", "infra", "--no-tui", "--dry-run"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(
+        calls(&fx).iter().any(|c| c.contains("plan")),
+        "{:?}",
+        calls(&fx)
+    );
+    assert!(!out(&o).contains("clave-secreta-123"));
+}
+
+#[test]
+fn two_aws_credentials_in_one_plan_are_refused_with_a_hint_about_ambientes() {
+    let fx = terraform_fx();
+    with_aws(&fx, "PROD_ACCESS_KEY_ID=a\nPROD_SECRET_ACCESS_KEY=b\n");
+    let path = fx.root.join("baton/plans/infra.toml");
+    let plan = fs::read_to_string(&path).unwrap().replacen(
+        AWS_PLAN,
+        &format!("{AWS_PLAN}[[credentials]]\nid = \"otra\"\nkind = \"aws\"\nref = \"servers.env#DEV\"\n\n"),
+        1,
+    );
+    fs::write(&path, plan).unwrap();
+    let v = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&v), 1, "{}{}", out(&v), err(&v));
+    assert!(err(&v).contains("solo puede usar una"), "{}", err(&v));
+    assert!(err(&v).contains("ambientes"), "{}", err(&v));
+}
+
+#[test]
+fn an_unknown_credential_kind_says_a_plugin_may_be_missing() {
+    let fx = Fx::new();
+    fx.write(
+        "baton/plans/infra.toml",
+        "name = \"infra\"\n[[credentials]]\nid = \"n\"\nkind = \"aws\"\nref = \"servers.env#P\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+    );
+    let v = fx.baton(&["validate", "infra"]);
+    assert_eq!(code(&v), 1);
+    assert!(
+        err(&v).contains("tipo de credencial desconocido 'aws'"),
+        "{}",
+        err(&v)
+    );
+    assert!(err(&v).contains("baton plugin list"), "{}", err(&v));
+}
+
+#[test]
+fn the_review_of_a_plugin_tells_which_credentials_it_asks_for_and_where_they_go() {
+    let fx = Fx::new();
+    let f = fx.write("terraform/baton-plugin.toml", TERRAFORM_EXAMPLE);
+    let o = fx.baton(&["plugin", "validate", f.to_str().unwrap()]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    let shown = out(&o);
+    assert!(
+        shown.contains("credencial: aws (ACCESS_KEY_ID, SECRET_ACCESS_KEY (secreto), SESSION_TOKEN (secreto, opcional), REGION (opcional)) -> AWS_ACCESS_KEY_ID={ACCESS_KEY_ID}, AWS_DEFAULT_REGION={REGION}, AWS_SECRET_ACCESS_KEY={SECRET_ACCESS_KEY}, AWS_SESSION_TOKEN={SESSION_TOKEN}"),
+        "{shown}"
     );
 }

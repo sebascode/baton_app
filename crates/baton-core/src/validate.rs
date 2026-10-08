@@ -237,12 +237,40 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
 
     validate_backup(plan, &mut out);
     validate_credentials(plan, config, &mut out);
+    validate_plugin_credentials(plan, &mut out);
     validate_ids_and_dependencies(plan, &mut out);
 
     for (i, step) in plan.steps.iter().enumerate() {
         validate_step(plan, step, i, config, &mut out);
     }
     out
+}
+
+/// Un tipo de plugin recibe una credencial de cada tipo que usa. Con dos del mismo tipo en el plan
+/// no se sabría cuál darle (para cuentas distintas están los ambientes).
+fn validate_plugin_credentials(plan: &Plan, out: &mut Vec<Issue>) {
+    let mut reported: Vec<(&str, &str)> = Vec::new();
+    for step in plan.active_steps() {
+        for used in step.kind.credential_uses() {
+            let count = plan
+                .credentials
+                .iter()
+                .filter(|c| c.kind.name() == used.kind)
+                .count();
+            let key = (step.kind.label(), used.kind);
+            if count > 1 && !reported.contains(&key) {
+                reported.push(key);
+                out.push(Issue::error(
+                    path!["credentials"],
+                    format!(
+                        "el plan declara {count} credenciales '{}' y el tipo '{}' solo puede usar una: para cuentas distintas usa ambientes (--ambiente), no dos credenciales",
+                        used.kind,
+                        step.kind.label()
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
@@ -1730,6 +1758,7 @@ mod tests {
             detect: &[],
             binaries: &[],
             destructive: &["will be destroyed"],
+            credentials: &[],
         })
         .unwrap();
     }
@@ -1773,8 +1802,89 @@ mod tests {
             detect: &[],
             binaries: &[],
             destructive: &[],
+            credentials: &[],
         })
         .unwrap();
         assert!(errors(&step_of("t-val-free", "command = \"mi-aplicar\"\n")).is_empty());
+    }
+
+    // ------------------------------------------------ credenciales de un tipo de plugin
+
+    fn cred_user(name: &'static str) {
+        let uses: &'static [crate::kind::CredUse] = Box::leak(
+            vec![crate::kind::CredUse {
+                kind: "docker",
+                env: &[("REGISTRY_TOKEN", "{TOKEN}")],
+            }]
+            .into_boxed_slice(),
+        );
+        crate::kind::register(crate::kind::KindSpec {
+            name,
+            scanned: false,
+            has_services: false,
+            default_command: Some("true"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Command,
+            dry_run: None,
+            detect: &[],
+            binaries: &[],
+            destructive: &[],
+            credentials: uses,
+        })
+        .unwrap();
+    }
+
+    fn docker_cred(id: &str, prefix: &str) -> String {
+        format!(
+            "[[credentials]]\nid = \"{id}\"\nkind = \"docker\"\nref = \"docker.env#{prefix}\"\n"
+        )
+    }
+
+    fn plan_with(kind: &str, enabled: bool, creds: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n{creds}[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"{kind}\"\nenabled = {enabled}\n"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_plugin_type_accepts_one_credential_of_the_kind_it_uses_or_none() {
+        cred_user("t-vp-one");
+        assert!(errors(&plan_with("t-vp-one", true, &docker_cred("d", "A"))).is_empty());
+        assert!(
+            errors(&plan_with("t-vp-one", true, "")).is_empty(),
+            "ninguna: usa el entorno"
+        );
+    }
+
+    #[test]
+    fn two_credentials_of_the_same_kind_are_ambiguous_for_a_plugin_type() {
+        cred_user("t-vp-two");
+        let creds = format!("{}{}", docker_cred("d1", "A"), docker_cred("d2", "B"));
+        let issues = plan_with("t-vp-two", true, &creds);
+        assert_error(&issues, "credentials", "declara 2 credenciales 'docker'");
+        let msg = errors(&issues).join(" ");
+        assert!(
+            msg.contains("el tipo 't-vp-two' solo puede usar una") && msg.contains("ambientes"),
+            "{msg}"
+        );
+        // un paso desactivado no cuenta
+        assert!(errors(&plan_with("t-vp-two", false, &creds)).is_empty());
+        // y un tipo que no usa credenciales de plugin no se ve afectado
+        assert!(errors(&plan_with("comando\"\ncommand = \"true", true, &creds)).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_credential_kind_in_a_plan_points_to_the_plugins() {
+        let e = Plan::parse(
+            "name = \"x\"\n[[credentials]]\nid = \"a\"\nkind = \"nube\"\nref = \"x.env#A\"\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("tipo de credencial desconocido 'nube'"), "{e}");
+        assert!(e.contains("baton plugin list"), "{e}");
     }
 }

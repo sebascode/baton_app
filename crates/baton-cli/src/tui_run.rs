@@ -619,9 +619,8 @@ fn test_connection(
             mysql_ping(reference, &resolved, None, DB_PING_TIMEOUT)
         }
         CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
-        CredentialKind::Git | CredentialKind::Otro => {
-            (false, "sin prueba automática todavía".to_string())
-        }
+        // `git`, `otro` y los que añade un plugin (no hay forma genérica de probarlos)
+        _ => (false, "sin prueba automática todavía".to_string()),
     }
 }
 

@@ -64,6 +64,45 @@ pub fn list() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Qué credencial pide un plugin y a qué variables de los comandos la convierte. Es lo que hay que
+/// leer antes de instalarlo: un plugin que pide `aws` recibe esas llaves en su entorno.
+fn describe_credential(c: &baton_core::plugin::CredentialDecl) -> String {
+    let fields = if c.fields.is_empty() {
+        let builtin = baton_core::plan::CredentialKind::from_name(&c.kind);
+        builtin
+            .map(|k| {
+                baton_core::fields_for(k)
+                    .iter()
+                    .map(|f| field_note(f.key, f.secret, f.optional))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    } else {
+        c.fields
+            .iter()
+            .map(|f| field_note(&f.key, f.secret, f.optional))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let env: Vec<String> = c.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    format!("{} ({fields}) -> {}", c.kind, env.join(", "))
+}
+
+fn field_note(key: &str, secret: bool, optional: bool) -> String {
+    let mut note = key.to_string();
+    if secret {
+        note.push_str(" secreto");
+    }
+    if optional {
+        note.push_str(" opcional");
+    }
+    if secret || optional {
+        note = format!("{key} ({})", note[key.len() + 1..].replace(' ', ", "));
+    }
+    note
+}
+
 /// De dónde vino un plugin instalado, según su registro.
 fn origin_line(plugin: &baton_store::plugins::Installed) -> String {
     match &plugin.entry {
@@ -153,6 +192,9 @@ pub fn describe(m: &Manifest) -> Vec<(&'static str, String)> {
                     .join(", ")
             ),
         ));
+    }
+    for c in &m.credentials {
+        out.push(("credencial", describe_credential(c)));
     }
     if !m.requires.is_empty() {
         out.push(("requiere", m.requires.join(", ")));

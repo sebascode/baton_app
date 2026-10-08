@@ -545,6 +545,20 @@ command = "echo ejecutando {{name}}"
 dry_run = "echo planificando {{name}}"
 # Frases que, si aparecen en la salida del dry_run, piden confirmar antes de ejecutar.
 # destructive = ["will be destroyed"]
+
+# Credenciales: un tipo nuevo (sus campos) y las variables con las que tu herramienta las espera.
+# El plan la declara con [[credentials]] (kind = "mi-nube", ref = "servers.env#PREFIJO"); si no la
+# declara, el comando usa lo que ya haya en el entorno. Un tipo de baton (docker, git...) se usa
+# sin `fields`, solo con `env`.
+# [[credentials]]
+# kind = "mi-nube"
+# fields = [
+#   {{ key = "TOKEN", secret = true }},
+#   {{ key = "REGION", optional = true }},
+# ]
+# [credentials.env]
+# MI_NUBE_TOKEN = "{{TOKEN}}"
+# MI_NUBE_REGION = "{{REGION}}"
 "#
     )
 }
@@ -1257,5 +1271,69 @@ mod tests {
         for bad in ["Mayus", "a b", "../x", "", "compose", "script"] {
             assert_eq!(new_in(tmp.path(), bad, &mut out), EXIT_USAGE, "'{bad}'");
         }
+    }
+
+    #[test]
+    fn the_templates_credentials_example_is_valid_once_uncommented() {
+        let text = template("mi-tipo");
+        let uncommented: String = text
+            .lines()
+            .map(|l| {
+                let body = l.strip_prefix("# ").unwrap_or(l);
+                if body.starts_with("[[credentials]]")
+                    || body.starts_with("[credentials.env]")
+                    || body.starts_with("kind = \"mi-nube\"")
+                    || body.starts_with("fields = [")
+                    || body.starts_with("MI_NUBE_")
+                    || (body.starts_with("  {") && l.starts_with("#"))
+                    || (body.trim() == "]" && l.starts_with("#"))
+                {
+                    format!("{body}\n")
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
+        let checked = check_manifest_text(Path::new("t"), &uncommented);
+        assert!(
+            checked.value.is_some(),
+            "{:?}\n{uncommented}",
+            checked.diagnostics
+        );
+        assert!(
+            checked.diagnostics.iter().all(|d| !d.is_error()),
+            "{:?}\n{uncommented}",
+            checked.diagnostics
+        );
+        assert_eq!(checked.value.unwrap().credentials.len(), 1);
+    }
+
+    #[test]
+    fn the_review_before_installing_lists_the_credentials_the_plugin_asks_for() {
+        let text = format!(
+            "{}\n[[credentials]]\nkind = \"docker\"\n[credentials.env]\nREGISTRY_TOKEN = \"{{TOKEN}}\"\n",
+            manifest_text("t-add-cred", "echo")
+        );
+        let manifest = Manifest::parse(&text).unwrap();
+        let f = Fetched {
+            source: Source::parse("github:o/r@v1").unwrap(),
+            commit: Some(CommitInfo {
+                sha: SHA.into(),
+                verified: true,
+                reason: "valid".into(),
+            }),
+            sha256: sha256_hex(text.as_bytes()),
+            text,
+            manifest,
+        };
+        let mut out = Vec::new();
+        show_review(&f, &Change::New, &mut out);
+        let shown = String::from_utf8(out).unwrap();
+        assert!(
+            shown.contains(
+                "credencial: docker (REGISTRY, USER, TOKEN (secreto)) -> REGISTRY_TOKEN={TOKEN}"
+            ),
+            "{shown}"
+        );
     }
 }

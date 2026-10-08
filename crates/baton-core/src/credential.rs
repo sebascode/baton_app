@@ -230,6 +230,8 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
         CredentialKind::Sqlite => &SQLITE,
         CredentialKind::Mysql => &MYSQL,
         CredentialKind::Otro => &OTRO,
+        // un tipo que añadió un plugin trae sus propios campos
+        other => other.plugin_fields().unwrap_or(&[]),
     }
 }
 

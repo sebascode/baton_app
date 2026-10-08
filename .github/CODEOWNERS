@@ -42,3 +42,4 @@ build.rs                            @sebascode
 /crates/baton-cli/src/plugin_add.rs      @sebascode
 /crates/baton-core/src/plugin_source.rs  @sebascode
 /crates/baton-core/src/hash.rs           @sebascode
+/crates/baton-core/src/credential_kind.rs  @sebascode

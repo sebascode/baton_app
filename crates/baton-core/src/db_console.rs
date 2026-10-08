@@ -612,23 +612,24 @@ mod tests {
 
     #[test]
     fn the_catalog_queries_are_safe_against_odd_table_names() {
-        use crate::plan::CredentialKind::{Db, Sqlite};
-        assert!(tables_query(Sqlite).contains("sqlite_master"));
-        assert!(tables_query(Db).contains("information_schema.tables"));
-        let pg = columns_query(Db, "public.clientes").unwrap();
+        use crate::plan::CredentialKind;
+        let (db, sqlite) = (CredentialKind::Db, CredentialKind::Sqlite);
+        assert!(tables_query(sqlite).contains("sqlite_master"));
+        assert!(tables_query(db).contains("information_schema.tables"));
+        let pg = columns_query(db, "public.clientes").unwrap();
         assert!(
             pg.contains("table_name = 'clientes' and table_schema = 'public'"),
             "{pg}"
         );
         assert!(
-            columns_query(Sqlite, "clientes")
+            columns_query(sqlite, "clientes")
                 .unwrap()
                 .contains("pragma_table_info('clientes')")
         );
         for bad in ["", "a'b", "a;drop", "a b", "a.b.c", "a\"b", "x--"] {
-            assert!(columns_query(Db, bad).is_err(), "{bad:?}");
+            assert!(columns_query(db, bad).is_err(), "{bad:?}");
         }
-        assert!(columns_query(Sqlite, "main.clientes").is_err());
+        assert!(columns_query(sqlite, "main.clientes").is_err());
     }
 
     #[test]
@@ -693,15 +694,15 @@ mod tests {
 
     #[test]
     fn the_mysql_catalog_queries_use_the_current_database() {
-        use crate::plan::CredentialKind::Mysql;
-        assert!(tables_query(Mysql).contains("table_schema = database()"));
-        let q = columns_query(Mysql, "clientes").unwrap();
+        let mysql = crate::plan::CredentialKind::Mysql;
+        assert!(tables_query(mysql).contains("table_schema = database()"));
+        let q = columns_query(mysql, "clientes").unwrap();
         assert!(
             q.contains("table_name = 'clientes' and table_schema = database()"),
             "{q}"
         );
-        let q = columns_query(Mysql, "otra.clientes").unwrap();
+        let q = columns_query(mysql, "otra.clientes").unwrap();
         assert!(q.contains("table_schema = 'otra'"), "{q}");
-        assert!(columns_query(Mysql, "a'b").is_err());
+        assert!(columns_query(mysql, "a'b").is_err());
     }
 }

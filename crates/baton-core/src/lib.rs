@@ -7,6 +7,7 @@ pub mod auth_failure;
 pub mod compose;
 pub mod config;
 pub mod credential;
+pub mod credential_kind;
 pub mod db_console;
 pub mod events;
 pub mod export;
