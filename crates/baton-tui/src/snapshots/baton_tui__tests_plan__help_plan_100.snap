@@ -6,18 +6,18 @@ expression: "screen(&app, 100, 30)"
 │                                                                                                  │
 │ › ⋮⋮ [x] 1  Pre-checks                                                                   [check] │
 │             scripts/prechecks.sh                                                                 │
-│   ⋮⋮ [x] 2  Build imágenes                                                          [dockerfile] │
-│             api┌ Atajos · vista del plan ─────────────────────────── esc cierra ┐                │
-│   ⋮⋮ [x] 3  Lev│ en todas las pantallas                                         │      [compose] │
-│             db/│ ?         esta ayuda                                           │                │
-│   ⋮⋮ [x] 4  Con│ esc       volver o cancelar                                    │  [gate manual] │
-│             man│ ↑↓ j k    moverse                                              │                │
-│   ⋮⋮ [ ] 5  Smo│ ctrl+c    interrumpir (pregunta antes)                         │        [check] │
-│             scr│                                                                │                │
-│                │ en esta pantalla                                               │                │
+│   ⋮⋮ [x] 2  Bui┌ Atajos · vista del plan ─────────────────────────── esc cierra ┐   [dockerfile] │
+│             api│ en todas las pantallas                                         │                │
+│   ⋮⋮ [x] 3  Lev│ ?         esta ayuda                                           │      [compose] │
+│             db/│ esc       volver o cancelar                                    │                │
+│   ⋮⋮ [x] 4  Con│ ↑↓ j k    moverse                                              │  [gate manual] │
+│             man│ ctrl+c    interrumpir (pregunta antes)                         │                │
+│   ⋮⋮ [ ] 5  Smo│                                                                │        [check] │
+│             scr│ en esta pantalla                                               │                │
 │                │ enter     ejecutar los pasos activos                           │                │
 │                │ espacio   activar o desactivar el paso                         │                │
 │                │ shift+↑↓  mover el paso                                        │                │
+│                │ /         filtrar los pasos (esc lo quita)                     │                │
 │                │ e         editar pasos                                         │                │
 │                │ g         añadir un gate al paso                               │                │
 │                │ b r d     backup, rollback, dry-run                            │                │

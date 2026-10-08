@@ -493,3 +493,104 @@ fn snapshot_help_on_the_plan_view() {
     insta::assert_snapshot!("help_plan_100", screen(&app, 100, 30));
     insta::assert_snapshot!("help_plan_80x16", screen(&app, 80, 16));
 }
+
+fn long_app(n: usize) -> App {
+    let mut toml = String::from("name = \"largo\"\n");
+    for i in 1..=n {
+        let kind = if i % 3 == 0 { "build" } else { "paso" };
+        toml.push_str(&format!(
+            "\n[[steps]]\nid = \"s{i}\"\nname = \"{kind} {i}\"\ntype = \"check\"\ncommand = \"true\"\n"
+        ));
+    }
+    let p = Plan::parse(&toml).unwrap();
+    App::new(PreviewState::from_plan(&p))
+}
+
+fn preview_of_app(app: &mut App) -> &mut PreviewState {
+    match &mut app.mode {
+        Mode::Preview(p) => p,
+        other => panic!("se esperaba la vista del plan, hay {other:?}"),
+    }
+}
+
+#[test]
+fn a_long_list_says_how_many_steps_are_out_of_view() {
+    let mut app = long_app(40);
+    let t = screen(&app, 100, 24);
+    assert!(
+        t.contains("↓ ") && t.contains("pasos más abajo") && !t.contains("más arriba"),
+        "{t}"
+    );
+    preview_of_app(&mut app).cursor = 20;
+    let t = screen(&app, 100, 24);
+    assert!(
+        t.contains("pasos más arriba") && t.contains("pasos más abajo"),
+        "{t}"
+    );
+    assert!(
+        t.contains("build 21"),
+        "el paso elegido tiene que verse\n{t}"
+    );
+    app.handle_key(key(KeyCode::End));
+    let t = screen(&app, 100, 24);
+    assert!(t.contains("paso 40") && !t.contains("más abajo"), "{t}");
+}
+
+#[test]
+fn the_filter_narrows_the_list_and_keeps_real_positions() {
+    let mut app = long_app(40);
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "build".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let t = screen(&app, 100, 24);
+    assert!(t.contains("/ build▌ · 13 de 40"), "{t}");
+    assert!(t.contains("build 3") && !t.contains("paso 1"), "{t}");
+    // enter deja el filtro puesto y las letras vuelven a ser atajos
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(
+        preview_of_app(&mut app).cursor,
+        5,
+        "salta al siguiente visible (build 6)"
+    );
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert!(!preview_of_app(&mut app).steps[5].enabled);
+    // esc quita el filtro sin salir
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 24).contains("13 de 40"));
+}
+
+#[test]
+fn letters_are_text_while_typing_the_filter() {
+    let mut app = long_app(10);
+    app.handle_key(key(KeyCode::Char('/')));
+    // `e` escribiría el filtro, no abriría el editor
+    assert!(app.handle_key(key(KeyCode::Char('e'))).is_none());
+    assert_eq!(preview_of_app(&mut app).filter, "e");
+    // y `?` tampoco abre la ayuda mientras se escribe
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(!screen(&app, 100, 24).contains("Atajos"));
+}
+
+#[test]
+fn steps_cannot_be_moved_while_filtered_and_no_match_is_said() {
+    let mut app = long_app(10);
+    app.handle_key(key(KeyCode::Char('/')));
+    app.handle_key(key(KeyCode::Char('1')));
+    app.handle_key(key(KeyCode::Enter));
+    let before = preview_of_app(&mut app).steps.clone();
+    let shift_down = KeyEvent {
+        modifiers: KeyModifiers::SHIFT,
+        ..key(KeyCode::Down)
+    };
+    app.handle_key(shift_down);
+    assert_eq!(preview_of_app(&mut app).steps, before);
+    assert!(screen(&app, 100, 24).contains("no se mueven pasos"));
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "zzz".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert!(screen(&app, 100, 24).contains("Ningún paso coincide con «zzz»"));
+}

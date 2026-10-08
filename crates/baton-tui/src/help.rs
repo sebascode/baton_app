@@ -37,6 +37,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
                 ("enter", "ejecutar los pasos activos"),
                 ("espacio", "activar o desactivar el paso"),
                 ("shift+↑↓", "mover el paso"),
+                ("/", "filtrar los pasos (esc lo quita)"),
                 ("e", "editar pasos"),
                 ("g", "añadir un gate al paso"),
                 ("b r d", "backup, rollback, dry-run"),

@@ -180,6 +180,8 @@ pub fn preview() -> PreviewState {
         switcher: None,
         prompt: None,
         last_run: None,
+        filter: String::new(),
+        filtering: false,
     }
 }
 
