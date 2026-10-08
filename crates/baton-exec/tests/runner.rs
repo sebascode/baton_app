@@ -3185,3 +3185,159 @@ fn a_plugin_kind_with_a_source_requirement_is_rejected_without_one() {
     // y el runner no lo deja arrancar
     assert!(spawn(fx.input(&p, fx.options(&p))).is_err());
 }
+
+// ------------------------------------------ dry-run de un tipo de plugin
+
+/// Un tipo con comando de aplicar y comando de solo lectura para el dry-run; los dos anotan en
+/// `$BATON_TRACE` lo que corrieron.
+fn register_planner(name: &'static str, command: &'static str, dry_run: &'static str) {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name,
+        scanned: true,
+        has_services: false,
+        default_command: Some(command),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some(dry_run),
+        detect: &[],
+        binaries: &[],
+    })
+    .unwrap();
+}
+
+fn planner_options(fx: &Fx, p: &Plan, dry_run: bool) -> RunOptions {
+    let mut o = fx.options(p);
+    o.dry_run = dry_run;
+    o.env.push((
+        "BATON_TRACE".into(),
+        fx.root().join("trace.txt").display().to_string(),
+    ));
+    o
+}
+
+fn trace(fx: &Fx) -> String {
+    fs::read_to_string(fx.root().join("trace.txt")).unwrap_or_default()
+}
+
+const APPLY: &str = "echo \"aplicado:{name}\" >> \"$BATON_TRACE\"";
+const PLAN: &str = "echo \"planeado:{name}\" >> \"$BATON_TRACE\"";
+
+fn planner_plan(kind: &str, extra: &str) -> Plan {
+    plan(&format!(
+        "[[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"{kind}\"\nsource = \"infra/*/main.tf\"\n{extra}"
+    ))
+}
+
+#[test]
+fn a_dry_run_executes_the_read_only_command_of_the_type_and_leaves_no_trace() {
+    register_planner("t-dry-basic", APPLY, PLAN);
+    let fx = Fx::new(&["infra/b/main.tf", "infra/a/main.tf"]);
+    let p = planner_plan("t-dry-basic", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // corrió el comando de solo lectura, una vez por archivo, y nunca el de aplicar
+    assert_eq!(trace(&fx), "planeado:a\nplaneado:b\n");
+    // y un dry-run no deja nada en el proyecto
+    assert!(!fx.root().join(".baton").exists());
+    assert!(!fx.root().join(".gitignore").exists());
+}
+
+#[test]
+fn a_real_run_executes_the_apply_command_not_the_dry_run() {
+    register_planner("t-dry-real", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-real", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "aplicado:a\n");
+}
+
+#[test]
+fn a_step_with_its_own_command_does_not_run_the_dry_run_of_its_type_and_says_so() {
+    register_planner("t-dry-override", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-override", "command = \"echo propio\"\n");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "", "no debe ejecutar nada");
+    let shown = all_logs(&events);
+    assert!(shown.contains("declara su propio command"), "{shown}");
+    assert!(shown.contains("dry-run: no se ejecutó"), "{shown}");
+}
+
+#[test]
+fn a_failing_dry_run_command_fails_the_run_like_any_command() {
+    register_planner("t-dry-fails", APPLY, "echo no-hay-credenciales >&2; exit 3");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-dry-fails", "");
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(
+        f.output_tail.join("\n").contains("no-hay-credenciales"),
+        "{f:?}"
+    );
+    assert!(!fx.root().join(".baton").exists());
+}
+
+#[test]
+fn a_dry_run_still_goes_through_the_gate_of_the_step() {
+    register_planner("t-dry-gate", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan(
+        "t-dry-gate",
+        "[steps.gate]\nmode = \"manual\"\nmessage = \"¿Seguir?\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado:a\n");
+    assert!(
+        all_logs(&events).contains("gate manual confirmado sin preguntar"),
+        "{}",
+        all_logs(&events)
+    );
+}
+
+#[test]
+fn a_plugin_command_gets_only_the_credentials_it_mentions_even_in_a_dry_run() {
+    // el dry_run menciona GHCR_TOKEN y lista qué variables GHCR_* recibió
+    register_planner(
+        "t-dry-creds",
+        APPLY,
+        "echo \"token=$GHCR_TOKEN\"; env | grep '^GHCR_' | cut -d= -f1 >> \"$BATON_TRACE\"",
+    );
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"infra\"\nname = \"Infra\"\ntype = \"t-dry-creds\"\nsource = \"infra/*/main.tf\"\n",
+    );
+    let events = run(&fx, &p, planner_options(&fx, &p, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    // recibió la que menciona y no las demás de la credencial (registro, usuario)
+    assert_eq!(trace(&fx), "GHCR_TOKEN\n");
+    // y el valor no aparece en nada de lo que se muestra
+    assert!(
+        !all_logs(&events).contains("ghp_secreto_12345"),
+        "{}",
+        all_logs(&events)
+    );
+    assert!(!fx.root().join(".baton/logs").exists());
+}
+
+#[test]
+fn a_dry_run_without_a_plugin_dry_run_still_resolves_nothing() {
+    // un paso nativo: ni se ejecuta ni se tocan las credenciales
+    let fx = Fx::new(&[]);
+    save_ghcr(&fx, "ghp_secreto_12345");
+    let p = plan(
+        "[[credentials]]\nid = \"ghcr\"\nkind = \"docker\"\nref = \"docker.env#GHCR\"\n\n\
+         [[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"echo $GHCR_TOKEN\"\n",
+    );
+    let mut o = fx.options(&p);
+    o.dry_run = true;
+    let events = run(&fx, &p, o);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert!(all_logs(&events).contains("dry-run: no se ejecutó"));
+}

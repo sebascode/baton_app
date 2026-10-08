@@ -51,7 +51,24 @@ impl Fx {
     }
 
     fn baton(&self, args: &[&str]) -> Output {
+        self.baton_path(args, false)
+    }
+
+    /// Con la carpeta `_bin` (un `terraform` de mentira) delante en el `PATH`, o sin ella.
+    fn baton_path(&self, args: &[&str], with_bin: bool) -> Output {
+        let path = if with_bin {
+            format!(
+                "{}:{}",
+                self.root.join("_bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            )
+        } else {
+            // sin `_bin` y sin ningún terraform real que se cuele
+            "/usr/bin:/bin".to_string()
+        };
         Command::new(env!("CARGO_BIN_EXE_baton"))
+            .env("PATH", path)
+            .env("BATON_CALLS", self.root.join("_calls"))
             .arg("-C")
             .arg(&self.root)
             .args(args)
@@ -178,11 +195,14 @@ fn an_installed_plugin_type_runs_once_per_folder_through_baton_run() {
     fx.write("infra/b/main.tf", "");
     fx.write("infra/a/main.tf", "");
     fx.write("baton/plans/infra.toml", &plan_with("terraform"));
+    // el manifiesto pide el programa `terraform`: con uno de mentira en el PATH
+    let bin = fx.write("_bin/terraform", "#!/bin/sh\n");
+    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
-    let v = fx.baton(&["validate", "infra"]);
+    let v = fx.baton_path(&["validate", "infra"], true);
     assert_eq!(code(&v), 0, "{}{}", out(&v), err(&v));
 
-    let o = fx.baton(&["run", "infra", "--no-tui"]);
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
     assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
     assert_eq!(
         fs::read_to_string(fx.root.join("trace.txt")).unwrap(),
@@ -228,4 +248,121 @@ fn plugin_commands_need_no_project() {
         .output()
         .unwrap();
     assert_eq!(code(&o), 0);
+}
+
+// ------------------------------------------------- el plugin de Terraform de los ejemplos
+
+const TERRAFORM_EXAMPLE: &str =
+    include_str!("../../../examples/plugins/terraform/baton-plugin.toml");
+
+const FAKE_TERRAFORM: &str = "#!/bin/sh\necho \"$(basename \"$PWD\")|$*\" >> \"$BATON_CALLS\"\n";
+
+fn terraform_fx() -> Fx {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    fx.install("terraform", TERRAFORM_EXAMPLE);
+    fx.write("infra/prod/main.tf", "");
+    fx.write("infra/dev/main.tf", "");
+    let bin = fx.write("_bin/terraform", FAKE_TERRAFORM);
+    fs::set_permissions(bin, fs::Permissions::from_mode(0o755)).unwrap();
+    fx
+}
+
+fn calls(fx: &Fx) -> Vec<String> {
+    fs::read_to_string(fx.root.join("_calls"))
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn the_example_manifests_are_valid() {
+    let fx = Fx::new();
+    let f = fx.write("terraform/baton-plugin.toml", TERRAFORM_EXAMPLE);
+    let o = fx.baton(&["plugin", "validate", f.to_str().unwrap()]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert!(err(&o).is_empty(), "sin avisos: {}", err(&o));
+}
+
+#[test]
+fn init_proposes_the_terraform_step_disabled_and_says_why() {
+    let fx = terraform_fx();
+    let o = fx.baton_path(&["init", "infra"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    let plan = fs::read_to_string(fx.root.join("baton/plans/infra.toml")).unwrap();
+    assert!(plan.contains("type = \"terraform\""), "{plan}");
+    assert!(plan.contains("enabled = false"), "{plan}");
+    assert!(
+        plan.contains("infra/dev/main.tf") && plan.contains("infra/prod/main.tf"),
+        "{plan}"
+    );
+    assert!(
+        out(&o).contains("los pasos de plugins (terraform) quedaron desactivados"),
+        "{}",
+        out(&o)
+    );
+    let v = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&v), 0, "{}{}", out(&v), err(&v));
+}
+
+fn enabled_plan(fx: &Fx) {
+    let o = fx.baton_path(&["init", "infra"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    let path = fx.root.join("baton/plans/infra.toml");
+    let plan = fs::read_to_string(&path)
+        .unwrap()
+        .replace("enabled = false", "enabled = true");
+    fs::write(path, plan).unwrap();
+}
+
+#[test]
+fn a_dry_run_only_plans_and_a_real_run_applies_the_saved_plan() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+
+    let o = fx.baton_path(&["run", "infra", "--no-tui", "--dry-run"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert_eq!(
+        calls(&fx),
+        [
+            "dev|init -input=false",
+            "dev|plan -input=false",
+            "prod|init -input=false",
+            "prod|plan -input=false",
+        ]
+    );
+    assert!(
+        !fx.root.join(".baton").exists(),
+        "un dry-run no deja rastro"
+    );
+
+    fs::remove_file(fx.root.join("_calls")).unwrap();
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert_eq!(
+        calls(&fx),
+        [
+            "dev|init -input=false",
+            "dev|plan -input=false -out=tfplan",
+            "dev|apply -input=false tfplan",
+            "prod|init -input=false",
+            "prod|plan -input=false -out=tfplan",
+            "prod|apply -input=false tfplan",
+        ]
+    );
+}
+
+#[test]
+fn without_terraform_installed_the_run_stops_before_running_anything() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], false);
+    assert_eq!(code(&o), 1, "{}{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("falta el programa 'terraform'"),
+        "{}",
+        err(&o)
+    );
+    assert!(calls(&fx).is_empty());
 }

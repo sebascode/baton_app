@@ -238,6 +238,29 @@ impl StepKind {
     pub fn requires(self) -> Requires {
         self.spec().requires
     }
+
+    /// Comando de solo lectura que `--dry-run` ejecuta de verdad para este tipo (los nativos no
+    /// tienen: con ellos un dry-run no ejecuta nada).
+    pub fn dry_run_command(self) -> Option<&'static str> {
+        self.spec().dry_run
+    }
+
+    /// Globs con los que `baton init` propone pasos de este tipo.
+    pub fn detect(self) -> &'static [&'static str] {
+        self.spec().detect
+    }
+
+    /// Programas que tienen que existir donde corre el paso.
+    pub fn binaries(self) -> &'static [&'static str] {
+        self.spec().binaries
+    }
+
+    /// Recibe todas las credenciales declaradas del plan, mencionadas o no: solo los tipos nativos
+    /// escaneados, porque sus archivos interpolan `${VAR}` sin que el comando lo diga. Un tipo de
+    /// plugin recibe únicamente las que su comando menciona: es un comando de terceros.
+    pub fn receives_all_credentials(self) -> bool {
+        self.is_builtin() && self.is_scanned()
+    }
 }
 
 fn plugins() -> Vec<&'static KindSpec> {
