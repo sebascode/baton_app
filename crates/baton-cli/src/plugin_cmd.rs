@@ -106,6 +106,16 @@ fn summary(m: &Manifest) {
             println!("  dry-run: no define uno (con --dry-run no se ejecuta nada de este tipo)")
         }
     }
+    if !t.destructive.is_empty() {
+        println!(
+            "  destructivo: antes de ejecutar corre el dry-run y pide confirmar si dice: {}",
+            t.destructive
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     if !m.requires.is_empty() {
         println!("  requiere: {}", m.requires.join(", "));
     }

@@ -492,6 +492,7 @@ mod tests {
             dry_run: Some("planificar"),
             detect: &[],
             binaries: &[],
+            destructive: &[],
         })
         .unwrap()
     }

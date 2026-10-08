@@ -3144,6 +3144,7 @@ fn register_iac() -> baton_core::kind::StepKind {
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     })
     .unwrap()
 }
@@ -3202,6 +3203,7 @@ fn register_planner(name: &'static str, command: &'static str, dry_run: &'static
         dry_run: Some(dry_run),
         detect: &[],
         binaries: &[],
+        destructive: &[],
     })
     .unwrap();
 }
@@ -3438,4 +3440,281 @@ fn a_failing_step_dry_run_fails_the_run_and_still_leaves_no_trace() {
             .contains("sin-permisos")
     );
     assert!(!fx.root().join(".baton").exists());
+}
+
+// ------------------------------- lo destructivo en el plan de un tipo de plugin
+
+/// Un tipo que revisa su plan: el dry_run anota `planeado` y muestra el archivo `plan.txt` de la
+/// carpeta (lo que escribe cada prueba); el comando anota `aplicado`.
+fn register_reviewer(name: &'static str) {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name,
+        scanned: true,
+        has_services: false,
+        default_command: Some(APPLY),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some(
+            "echo \"planeado:{name}\" >> \"$BATON_TRACE\"; cat plan.txt 2>/dev/null; true",
+        ),
+        detect: &[],
+        binaries: &[],
+        destructive: &["will be destroyed", "must be replaced"],
+    })
+    .unwrap();
+}
+
+const DESTROYS: &str =
+    "Plan: 0 to add, 0 to change, 1 to destroy.\n  # aws_instance.web will be destroyed\n";
+const CALM: &str =
+    "Plan: 1 to add, 0 to change, 0 to destroy.\n  # aws_instance.web will be created\n";
+
+fn write_plan(fx: &Fx, folder: &str, text: &str) {
+    fs::write(fx.root().join(format!("infra/{folder}/plan.txt")), text).unwrap();
+}
+
+fn reviewing_options(fx: &Fx, p: &Plan, interactive: bool, assume_yes: bool) -> RunOptions {
+    let mut o = planner_options(fx, p, false);
+    o.interactive = interactive;
+    o.assume_yes = assume_yes;
+    o.backup = false;
+    o
+}
+
+fn answering(handle: RunHandle, yes: bool) -> (Vec<RunEvent>, usize) {
+    let mut asked = 0;
+    let events = drive(handle, |ev, tx| {
+        if let RunEvent::GateAsk { .. } = ev {
+            asked += 1;
+            tx.send(RunCommand::ConfirmGate(yes)).unwrap();
+        }
+    });
+    (events, asked)
+}
+
+#[test]
+fn a_plan_that_destroys_nothing_runs_without_asking() {
+    register_reviewer("t-rev-calm");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", CALM);
+    let p = planner_plan("t-rev-calm", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 0, "\"0 to destroy\" no es una coincidencia");
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\naplicado:a\n",
+        "planifica y luego aplica"
+    );
+    assert!(all_logs(&events).contains("plan revisado: no destruye ni reemplaza nada"));
+}
+
+#[test]
+fn a_plan_that_destroys_asks_and_applies_only_after_a_yes() {
+    register_reviewer("t-rev-yes");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-yes", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 1);
+    assert_eq!(trace(&fx), "planeado:a\naplicado:a\n");
+    let shown = all_logs(&events);
+    assert!(
+        shown.contains("atención: infra/a/main.tf: # aws_instance.web will be destroyed"),
+        "{shown}"
+    );
+    let ask = events
+        .iter()
+        .find_map(|e| match e {
+            RunEvent::GateAsk { message, .. } => Some(message.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(ask.contains("destruye o reemplaza 1 recurso(s)"), "{ask}");
+}
+
+#[test]
+fn declining_the_destruction_applies_nothing_and_is_an_abort_not_a_failure() {
+    register_reviewer("t-rev-no");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-no", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        false,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Aborted);
+    assert_eq!(asked, 1);
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\n",
+        "solo se planificó: no se aplicó nada"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, RunEvent::StepFailed { .. }))
+    );
+}
+
+#[test]
+fn without_a_terminal_a_destroying_plan_fails_before_applying_unless_assume_yes() {
+    register_reviewer("t-rev-ci");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-ci", "");
+
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    let f = failure(&events);
+    assert!(
+        f.message.contains("no hay terminal para confirmar"),
+        "{}",
+        f.message
+    );
+    assert!(f.message.contains("--assume-yes"), "{}", f.message);
+    assert!(
+        f.output_tail.join("\n").contains("will be destroyed"),
+        "{f:?}"
+    );
+    assert_eq!(trace(&fx), "planeado:a\n", "falla antes de aplicar");
+
+    fs::remove_file(fx.root().join("trace.txt")).unwrap();
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, true));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "planeado:a\naplicado:a\n");
+    assert!(
+        all_logs(&events).contains("atención: infra/a/main.tf"),
+        "queda escrito qué había"
+    );
+}
+
+#[test]
+fn a_coloured_plan_is_still_recognised() {
+    register_reviewer("t-rev-colour");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    fs::write(
+        fx.root().join("infra/a/plan.txt"),
+        "  # aws_instance.web will be \u{1b}[1m\u{1b}[31mdestroyed\u{1b}[0m\n",
+    )
+    .unwrap();
+    let p = planner_plan("t-rev-colour", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert_eq!(trace(&fx), "planeado:a\n");
+}
+
+#[test]
+fn only_the_folders_that_destroy_are_reported_and_all_are_planned_before_applying() {
+    register_reviewer("t-rev-many");
+    let fx = Fx::new(&["infra/a/main.tf", "infra/b/main.tf", "infra/c/main.tf"]);
+    write_plan(&fx, "a", CALM);
+    write_plan(&fx, "b", DESTROYS);
+    write_plan(&fx, "c", "  # x must be replaced\n");
+    let p = planner_plan("t-rev-many", "");
+    let (events, asked) = answering(
+        spawn(fx.input(&p, reviewing_options(&fx, &p, true, false))).unwrap(),
+        true,
+    );
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 1, "una sola pregunta para todo el paso");
+    // primero se planifican todas, después se aplican todas
+    assert_eq!(
+        trace(&fx),
+        "planeado:a\nplaneado:b\nplaneado:c\naplicado:a\naplicado:b\naplicado:c\n"
+    );
+    let shown = all_logs(&events);
+    assert!(
+        shown.contains("infra/b/main.tf: # aws_instance.web will be destroyed"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("infra/c/main.tf: # x must be replaced"),
+        "{shown}"
+    );
+    assert!(!shown.contains("atención: infra/a/main.tf"), "{shown}");
+}
+
+#[test]
+fn a_dry_run_shows_what_would_be_destroyed_without_asking_or_applying() {
+    register_reviewer("t-rev-dry");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    write_plan(&fx, "a", DESTROYS);
+    let p = planner_plan("t-rev-dry", "");
+    let mut o = planner_options(&fx, &p, true);
+    o.interactive = true;
+    let (events, asked) = answering(spawn(fx.input(&p, o)).unwrap(), false);
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(asked, 0);
+    assert_eq!(trace(&fx), "planeado:a\n");
+    assert!(
+        all_logs(&events)
+            .contains("atención: infra/a/main.tf: # aws_instance.web will be destroyed")
+    );
+    assert!(!fx.root().join(".baton").exists());
+}
+
+#[test]
+fn a_failing_plan_stops_the_step_before_applying() {
+    baton_core::kind::register(baton_core::kind::KindSpec {
+        name: "t-rev-broken",
+        scanned: true,
+        has_services: false,
+        default_command: Some(APPLY),
+        runs_command: true,
+        own_interpreter: false,
+        requires: baton_core::kind::Requires::Source,
+        dry_run: Some("echo sin-credenciales >&2; exit 2"),
+        detect: &[],
+        binaries: &[],
+        destructive: &["will be destroyed"],
+    })
+    .unwrap();
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-rev-broken", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, true));
+    assert_eq!(outcome(&events), RunOutcome::Failed);
+    assert!(
+        failure(&events)
+            .output_tail
+            .join("\n")
+            .contains("sin-credenciales")
+    );
+    assert_eq!(trace(&fx), "", "no se aplicó nada");
+}
+
+#[test]
+fn the_step_own_dry_run_is_what_gets_reviewed_when_it_rewrites_the_command() {
+    register_reviewer("t-rev-own");
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan(
+        "t-rev-own",
+        "command = \"echo propio >> \\\"$BATON_TRACE\\\"\"\n\
+         dry_run = \"echo \\\"  # x will be destroyed\\\"; echo plan-propio >> \\\"$BATON_TRACE\\\"\"\n",
+    );
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(
+        outcome(&events),
+        RunOutcome::Failed,
+        "su plan propio también se revisa"
+    );
+    assert_eq!(trace(&fx), "plan-propio\n");
+}
+
+#[test]
+fn a_type_without_destructive_phrases_is_not_planned_before_running() {
+    register_planner("t-rev-none", APPLY, PLAN);
+    let fx = Fx::new(&["infra/a/main.tf"]);
+    let p = planner_plan("t-rev-none", "");
+    let events = run(&fx, &p, reviewing_options(&fx, &p, false, false));
+    assert_eq!(outcome(&events), RunOutcome::Completed);
+    assert_eq!(trace(&fx), "aplicado:a\n", "ni siquiera corre su dry_run");
 }

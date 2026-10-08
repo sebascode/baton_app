@@ -116,6 +116,9 @@ pub(crate) struct Ctx {
     sink: Mutex<Option<LogSink>>,
     /// Últimas líneas de salida del comando en curso, para el mensaje de fallo.
     tail: Mutex<Vec<String>>,
+    /// La salida completa del comando en curso, mientras se necesita revisar entera (el plan de un
+    /// tipo con frases destructivas); `None` el resto del tiempo.
+    capture: Mutex<Option<Vec<String>>>,
     paused: AtomicBool,
     /// Un transporte por destino usado (`"local"` incluido); se arma una vez, antes de correr.
     transports: HashMap<String, Box<dyn Transport>>,
@@ -276,6 +279,11 @@ impl Ctx {
             t.push(text.clone());
             let extra = t.len().saturating_sub(200);
             t.drain(..extra);
+        }
+        if let Ok(mut c) = self.capture.lock()
+            && let Some(lines) = c.as_mut()
+        {
+            lines.push(text.clone());
         }
         self.log(step, LogKind::Output, text);
     }
@@ -850,6 +858,11 @@ async fn execute_command(
         if let Ok(mut t) = ctx.tail.lock() {
             t.clear();
         }
+        if let Ok(mut c) = ctx.capture.lock()
+            && let Some(lines) = c.as_mut()
+        {
+            lines.clear();
+        }
         match exec(ctx, cmds, step, &cmd).await {
             Err(int) => return Err(StepEnd::Interrupted(int)),
             Ok(Ok(exit)) if exit.success() => {
@@ -1069,6 +1082,150 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
     }
 }
 
+/// Corre un comando y devuelve su salida completa (ya redactada), sin el tope de líneas del `tail`.
+async fn run_capturing(
+    ctx: &Ctx,
+    cmds: &mut Rx<RunCommand>,
+    step: usize,
+    cmd: Command,
+    retries: u32,
+) -> Result<Vec<String>, StepEnd> {
+    if let Ok(mut c) = ctx.capture.lock() {
+        *c = Some(Vec::new());
+    }
+    let result = execute_command(ctx, cmds, step, cmd, retries).await;
+    let lines = ctx
+        .capture
+        .lock()
+        .ok()
+        .and_then(|mut c| c.take())
+        .unwrap_or_default();
+    result.map(|_| lines)
+}
+
+/// Cuántas líneas destructivas se escriben en el log antes de resumir el resto.
+const MAX_HITS_SHOWN: usize = 20;
+
+/// Deja en el log lo que el plan destruye o reemplaza: `(archivo, línea)`.
+fn log_destructive(ctx: &Ctx, step: usize, hits: &[(String, String)]) {
+    for (file, line) in hits.iter().take(MAX_HITS_SHOWN) {
+        let at = if file.is_empty() {
+            String::new()
+        } else {
+            format!("{file}: ")
+        };
+        ctx.log(step, LogKind::Output, format!("atención: {at}{line}"));
+    }
+    if hits.len() > MAX_HITS_SHOWN {
+        ctx.log(
+            step,
+            LogKind::Output,
+            format!("atención: y {} más", hits.len() - MAX_HITS_SHOWN),
+        );
+    }
+}
+
+/// Las líneas destructivas de la salida de un plan, con el archivo donde aparecieron.
+fn destructive_in(ps: &PStep, file: Option<&PathBuf>, output: &[String]) -> Vec<(String, String)> {
+    let shown = file.map(|f| f.display().to_string()).unwrap_or_default();
+    baton_core::plugin::destructive_hits(output, ps.step.kind.destructive_patterns())
+        .into_iter()
+        .map(|line| (shown.clone(), line))
+        .collect()
+}
+
+/// Antes de ejecutar un paso de un tipo con frases destructivas: corre su `dry_run` (de solo
+/// lectura), busca esas frases en el plan y, si hay alguna, pide confirmación. Sin nadie que
+/// pueda responder, el paso falla antes de aplicar nada, salvo con `--assume-yes`.
+///
+/// Es una revisión sobre el plan de un momento: el comando del paso vuelve a planificar, y lo que
+/// aplique podría diferir si algo cambió entre uno y otro.
+async fn confirm_plan(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Result<(), StepEnd> {
+    let ps = &ctx.steps[i];
+    let Some(dry) = ps.step.dry_run_command() else {
+        // la validación lo impide; si llegara aquí, aplicar sin revisar no es una opción
+        return Err(destructive_failure(
+            ctx,
+            ps,
+            format!(
+                "«{}» no tiene un dry_run con el que revisar lo destructivo",
+                ps.step.name
+            ),
+            String::new(),
+            Vec::new(),
+        ));
+    };
+    let files: Vec<Option<&PathBuf>> = if ps.files.is_empty() {
+        vec![None]
+    } else {
+        ps.files.iter().map(Some).collect()
+    };
+    let mut hits: Vec<(String, String)> = Vec::new();
+    let mut last_command = String::new();
+    for file in files {
+        let vars = ctx.vars(ps, file.map(PathBuf::as_path));
+        let cmd = ctx.command(ps, vars.render(dry), file.map(PathBuf::as_path));
+        last_command.clone_from(&cmd.line);
+        let lines = run_capturing(ctx, cmds, i, cmd, ps.step.retries).await?;
+        hits.extend(destructive_in(ps, file, &lines));
+    }
+    if hits.is_empty() {
+        ctx.log(
+            i,
+            LogKind::Success,
+            "plan revisado: no destruye ni reemplaza nada",
+        );
+        return Ok(());
+    }
+    log_destructive(ctx, i, &hits);
+    let total = hits.len();
+    if !ctx.opts.interactive && !ctx.opts.assume_yes {
+        let tail = hits.iter().take(8).map(|(_, l)| l.clone()).collect();
+        return Err(destructive_failure(
+            ctx,
+            ps,
+            format!(
+                "«{}» destruye o reemplaza {total} recurso(s) según su plan y no hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
+                ps.step.name
+            ),
+            last_command,
+            tail,
+        ));
+    }
+    let message = format!(
+        "«{}» destruye o reemplaza {total} recurso(s) según su plan. ¿Continuar?",
+        ps.step.name
+    );
+    match ask_gate(ctx, cmds, i, &message).await {
+        Answer::Yes => Ok(()),
+        Answer::No => Err(StepEnd::Declined),
+        Answer::Interrupted(int) => Err(StepEnd::Interrupted(int)),
+    }
+}
+
+fn destructive_failure(
+    ctx: &Ctx,
+    ps: &PStep,
+    message: String,
+    command: String,
+    output_tail: Vec<String>,
+) -> StepEnd {
+    let step = ctx
+        .steps
+        .iter()
+        .position(|s| s.step.id == ps.step.id)
+        .unwrap_or(0);
+    ctx.log(step, LogKind::Error, message.clone());
+    let kind = ctx.classify_failure(&message, None);
+    StepEnd::Failed(Failure {
+        message,
+        command,
+        output_tail,
+        kind,
+        rollback_to: None,
+    })
+}
+
 /// El comando de solo lectura que un `--dry-run` ejecuta de verdad para este paso, si lo tiene:
 /// el suyo (`dry_run`) o el de su tipo (un plugin), salvo que el paso reescriba `command` (ver
 /// `Step::dry_run_command`).
@@ -1093,6 +1250,16 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     let ps = &ctx.steps[i];
     let mut retries_total = 0;
 
+    // Lo destructivo se pregunta antes de todo lo demás: si se rechaza, no queda ni un respaldo hecho.
+    if !skip_action
+        && !ctx.opts.dry_run
+        && ps.step.kind.runs_command()
+        && !ps.step.kind.destructive_patterns().is_empty()
+        && let Err(end) = confirm_plan(ctx, cmds, i).await
+    {
+        return end;
+    }
+
     if !skip_action && (ps.step.kind == StepKind::Backup || ps.step.backup_before) {
         if !ctx.opts.backup {
             ctx.log(i, LogKind::Output, "backup desactivado");
@@ -1116,13 +1283,23 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         } else {
             ps.files.iter().map(Some).collect()
         };
+        let mut hits: Vec<(String, String)> = Vec::new();
         for file in files {
             let vars = ctx.vars(ps, file.map(PathBuf::as_path));
             let cmd = ctx.command(ps, vars.render(dry), file.map(PathBuf::as_path));
-            if let Err(end) = execute_command(ctx, cmds, i, cmd, ps.step.retries).await {
-                return end;
+            if ps.step.kind.destructive_patterns().is_empty() {
+                if let Err(end) = execute_command(ctx, cmds, i, cmd, ps.step.retries).await {
+                    return end;
+                }
+            } else {
+                match run_capturing(ctx, cmds, i, cmd, ps.step.retries).await {
+                    Ok(lines) => hits.extend(destructive_in(ps, file, &lines)),
+                    Err(end) => return end,
+                }
             }
         }
+        // en un dry-run solo se deja a la vista: no hay nada que confirmar
+        log_destructive(ctx, i, &hits);
     } else if ctx.opts.dry_run && ps.step.dry_run_shadowed() {
         ctx.log(
             i,
@@ -1566,6 +1743,7 @@ async fn run(
         tx,
         sink: Mutex::new(sink),
         tail: Mutex::new(Vec::new()),
+        capture: Mutex::new(None),
         paused: AtomicBool::new(false),
         transports,
         ssh_conns,

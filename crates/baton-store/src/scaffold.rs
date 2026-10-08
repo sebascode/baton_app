@@ -638,6 +638,7 @@ mod plugin_tests {
             dry_run: None,
             detect,
             binaries: &[],
+            destructive: &[],
         })
         .unwrap()
     }

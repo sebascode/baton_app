@@ -458,6 +458,7 @@ scanned = true
 detect = ["**/main.tf"]
 command = "terraform init \-input=false && terraform apply \-input=false \-auto\-approve"
 dry_run = "terraform init \-input=false && terraform plan \-input=false"
+destructive = ["will be destroyed", "must be replaced"]
 .RE
 .fi
 .PP
@@ -465,7 +466,9 @@ dry_run = "terraform init \-input=false && terraform plan \-input=false"
 .PP
 \fBdry_run\fR es el comando que se usa con \fB\-\-dry\-run\fR y \fBtiene que ser de solo lectura\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): se rechaza uno igual a \fBcommand\fR o que use palabras como \fBapply\fR, \fBdestroy\fR, \fBcreate\fR o \fBdeploy\fR. Es un chequeo de apariencia, no una garantía: un comando puede esconder lo que hace, así que lee los comandos con \fBbaton plugin validate\fR antes de instalar un plugin ajeno.
 .PP
-Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
+Con \fB\-\-dry\-run\fR, un paso de ese tipo ejecuta su \fBdry_run\fR una vez por archivo (por ejemplo \fBterraform plan\fR) y muestra el resultado; no sincroniza el destino remoto, así que allí se usan los archivos que ya hay. Si el paso declara su propio \fBcommand\fR, el \fBdry_run\fR del tipo no se usa (ya no describiría lo que el paso haría) y el log lo avisa: para planificarlo, el paso declara su propio \fBdry_run\fR, que manda sobre el del tipo. Antes de ejecutar, baton comprueba que existan los programas de \fBrequires\fR (en un destino ssh no se comprueba). \fBdestructive\fR son frases que se buscan en la salida del \fBdry_run\fR (texto literal, sin distinguir mayúsculas ni colores; hace falta un \fBdry_run\fR). Antes de ejecutar un paso de ese tipo, baton corre el \fBdry_run\fR de todas sus carpetas y, si alguna frase aparece (en Terraform, un recurso que \fBwill be destroyed\fR o \fBmust be replaced\fR; un resumen como \fB0 to destroy\fR no cuenta), deja en el log cada línea con \fBatención:\fR y pregunta una sola vez antes de respaldar o aplicar nada. Rechazar detiene el plan como abortado. \fBSin terminal el paso falla antes de aplicar\fR, salvo con \fB\-\-assume\-yes\fR. En un \fB\-\-dry\-run\fR solo se deja a la vista. La revisión se hace sobre un plan anterior al del comando: si algo cambia entre uno y otro, lo que se aplique podría diferir. Un paso de ese tipo que reescribe \fBcommand\fR debe declarar su propio \fBdry_run\fR (con el plan equivalente); si no, \fBbaton validate\fR lo rechaza, para que la revisión no se pierda sin que nadie lo note.
+.PP
+Un comando de plugin recibe solo las credenciales que menciona (\fB$NOMBRE\fR), a diferencia de \fBcompose\fR o \fBscript\fR, que reciben todas las declaradas.
 .PP
 \fBbaton init\fR propone un paso por cada tipo de plugin que reconoce algo en el proyecto (según \fBdetect\fR), siempre \fBdesactivado\fR: un paso de infraestructura modifica cosas fuera de esta máquina y activarlo es una decisión de quien conoce el entorno. No baja a carpetas ocultas ni a \fBnode_modules\fR, \fBvendor\fR o \fBtarget\fR.
 .SH CREDENCIALES
