@@ -15,6 +15,7 @@
 //! detect = ["**/main.tf"]             # lo que `baton init` propone
 //! command = "terraform init -input=false && terraform apply -input=false -auto-approve"
 //! dry_run = "terraform init -input=false && terraform plan -input=false"
+//! destructive = ["will be destroyed", "must be replaced"]   # frases del plan que piden confirmar
 //! ```
 //!
 //! Un plugin solo describe qué comando correr: la ejecución, las credenciales, los logs y los
@@ -38,6 +39,9 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 const MAX_COMMAND: usize = 4096;
 const MAX_DETECT: usize = 20;
+const MAX_DESTRUCTIVE: usize = 20;
+const MIN_PHRASE: usize = 4;
+const MAX_PHRASE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +71,11 @@ pub struct TypeSection {
     pub command: String,
     /// Comando de solo lectura para `--dry-run`.
     pub dry_run: Option<String>,
+    /// Frases que, si aparecen en la salida del `dry_run`, indican que el paso destruye o reemplaza
+    /// algo. Antes de ejecutar el paso, baton corre el `dry_run`, las busca (sin distinguir
+    /// mayúsculas ni colores) y pide confirmación. Texto literal, no expresiones regulares.
+    #[serde(default)]
+    pub destructive: Vec<String>,
 }
 
 impl Manifest {
@@ -109,6 +118,7 @@ impl Manifest {
             dry_run: t.dry_run.as_deref().map(|c| leak(c.trim())),
             detect: leak_all(&t.detect),
             binaries: leak_all(&self.requires),
+            destructive: leak_all(&t.destructive),
         }
     }
 
@@ -153,6 +163,46 @@ pub fn mutating_word(command: &str) -> Option<&'static str> {
         .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
         .map(|w| w.trim_matches(['"', '\'']).to_ascii_lowercase())
         .find_map(|w| MUTATING.iter().copied().find(|m| *m == w))
+}
+
+/// El texto sin las secuencias de escape ANSI (`ESC [ ... letra`): una herramienta puede pintar
+/// de rojo solo una palabra de la frase y partirla.
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            // parámetros hasta la letra final (0x40..=0x7e)
+            for n in chars.by_ref() {
+                if ('@'..='~').contains(&n) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Las líneas de `output` que contienen alguna de las frases `patterns`, sin colores ANSI y sin
+/// distinguir mayúsculas. Devuelve cada línea limpia y recortada.
+pub fn destructive_hits(output: &[String], patterns: &[&str]) -> Vec<String> {
+    let patterns: Vec<String> = patterns
+        .iter()
+        .map(|p| p.trim().to_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+    output
+        .iter()
+        .map(|l| strip_ansi(l))
+        .filter(|l| {
+            let lower = l.to_lowercase();
+            patterns.iter().any(|p| lower.contains(p.as_str()))
+        })
+        .map(|l| l.trim().to_string())
+        .collect()
 }
 
 fn is_binary_name(s: &str) -> bool {
@@ -269,6 +319,33 @@ pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
             out.push(Issue::error(
                 at,
                 format!("patrón '{pattern}' no válido: {e}"),
+            ));
+        }
+    }
+    if !t.destructive.is_empty() && t.dry_run.is_none() {
+        out.push(Issue::error(
+            path!["type", "destructive"],
+            "destructive se busca en la salida del dry_run: declara un dry_run",
+        ));
+    }
+    if t.destructive.len() > MAX_DESTRUCTIVE {
+        out.push(Issue::error(
+            path!["type", "destructive"],
+            format!(
+                "demasiadas frases ({}, máximo {MAX_DESTRUCTIVE})",
+                t.destructive.len()
+            ),
+        ));
+    }
+    for (i, phrase) in t.destructive.iter().enumerate() {
+        let len = phrase.trim().chars().count();
+        if len < MIN_PHRASE || phrase.chars().count() > MAX_PHRASE {
+            out.push(Issue::error(
+                path!["type", "destructive", i],
+                format!(
+                    "la frase debe tener entre {MIN_PHRASE} y {MAX_PHRASE} caracteres: una muy corta \
+                     coincidiría con casi cualquier línea"
+                ),
             ));
         }
     }
@@ -652,5 +729,120 @@ command = "make deploy"
             Plan::parse("name = \"p\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"t-nocmd\"\n")
                 .unwrap();
         assert!(!has_errors(&crate::validate_plan(&p, None)));
+    }
+
+    // ------------------------------------------------ lo destructivo
+
+    fn lines(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn ansi_colours_are_removed_even_in_the_middle_of_a_phrase() {
+        assert_eq!(
+            strip_ansi("\u{1b}[1m# a.b\u{1b}[0m will be \u{1b}[31mdestroyed\u{1b}[0m"),
+            "# a.b will be destroyed"
+        );
+        assert_eq!(strip_ansi("sin colores"), "sin colores");
+        assert_eq!(strip_ansi("\u{1b}[38;5;196mrojo\u{1b}[0m"), "rojo");
+        // una secuencia cortada al final no se traga el resto ni rompe
+        assert_eq!(strip_ansi("texto\u{1b}["), "texto");
+        assert_eq!(strip_ansi("ñandú\u{1b}[0m ✓"), "ñandú ✓");
+    }
+
+    #[test]
+    fn a_coloured_phrase_split_by_escape_codes_is_still_found() {
+        let out = lines(&[
+            "Terraform will perform the following actions:",
+            "\u{1b}[1m  # aws_instance.web\u{1b}[0m will be \u{1b}[1m\u{1b}[31mdestroyed\u{1b}[0m",
+            "Plan: 0 to add, 0 to change, 1 to destroy.",
+        ]);
+        let hits = destructive_hits(&out, &["will be destroyed", "must be replaced"]);
+        assert_eq!(hits, ["# aws_instance.web will be destroyed"]);
+    }
+
+    #[test]
+    fn matching_ignores_case_and_surrounding_spaces() {
+        let out = lines(&["   # x MUST BE REPLACED   "]);
+        assert_eq!(
+            destructive_hits(&out, &["  Must Be Replaced "]),
+            ["# x MUST BE REPLACED"]
+        );
+    }
+
+    #[test]
+    fn a_plan_that_destroys_nothing_has_no_hits_even_if_it_says_to_destroy() {
+        // la frase de resumen de terraform dice "0 to destroy": no es una coincidencia
+        let out = lines(&[
+            "Plan: 2 to add, 1 to change, 0 to destroy.",
+            "# x will be created",
+        ]);
+        assert!(destructive_hits(&out, &["will be destroyed", "must be replaced"]).is_empty());
+    }
+
+    #[test]
+    fn empty_patterns_and_empty_output_match_nothing() {
+        assert!(destructive_hits(&lines(&["algo"]), &[]).is_empty());
+        assert!(destructive_hits(&lines(&["algo"]), &["  ", ""]).is_empty());
+        assert!(destructive_hits(&[], &["destroyed"]).is_empty());
+    }
+
+    #[test]
+    fn destructive_phrases_need_a_dry_run_to_look_at() {
+        let m = with(
+            "dry_run = \"terraform init -input=false && terraform plan -input=false\"",
+            "destructive = [\"will be destroyed\"]",
+        );
+        assert!(
+            errors(&m).iter().any(|e| e.contains("declara un dry_run")),
+            "{:?}",
+            errors(&m)
+        );
+    }
+
+    #[test]
+    fn destructive_phrases_are_checked() {
+        let base = "dry_run = \"terraform init -input=false && terraform plan -input=false\"";
+        for ok in [
+            "[\"will be destroyed\"]",
+            "[\"will be destroyed\", \"must be replaced\"]",
+            "[]",
+        ] {
+            let m = with(base, &format!("{base}\ndestructive = {ok}"));
+            assert!(errors(&m).is_empty(), "{ok}: {:?}", errors(&m));
+        }
+        for bad in ["[\"x\"]", "[\"abc\"]", "[\"   \"]", "[\"\"]"] {
+            let m = with(base, &format!("{base}\ndestructive = {bad}"));
+            assert!(
+                errors(&m)
+                    .iter()
+                    .any(|e| e.starts_with("type.destructive[0]:")),
+                "{bad}: {:?}",
+                errors(&m)
+            );
+        }
+        let many = (0..=MAX_DESTRUCTIVE)
+            .map(|i| format!("\"frase numero {i}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let m = with(base, &format!("{base}\ndestructive = [{many}]"));
+        assert!(errors(&m).iter().any(|e| e.contains("demasiadas frases")));
+    }
+
+    #[test]
+    fn the_spec_carries_the_destructive_phrases() {
+        let base = "dry_run = \"terraform init -input=false && terraform plan -input=false\"";
+        let text = TERRAFORM
+            .replace("\"terraform\"\nversion", "\"t-destr-spec\"\nversion")
+            .replace(
+                base,
+                &format!("{base}\ndestructive = [\"will be destroyed\", \"must be replaced\"]"),
+            );
+        let spec = manifest(&text).to_spec();
+        assert_eq!(spec.destructive, ["will be destroyed", "must be replaced"]);
+        let kind = manifest(&text).register().unwrap();
+        assert_eq!(kind.destructive_patterns(), spec.destructive);
+        // un tipo sin frases no pide revisar nada
+        assert!(StepKind::Compose.destructive_patterns().is_empty());
     }
 }

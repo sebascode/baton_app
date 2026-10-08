@@ -1120,6 +1120,7 @@ mod tests {
             dry_run: dry,
             detect: &[],
             binaries,
+            destructive: &[],
         })
         .unwrap();
     }

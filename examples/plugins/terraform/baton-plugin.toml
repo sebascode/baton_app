@@ -5,6 +5,11 @@
 #
 # Usa el flujo que recomienda Terraform: guarda el plan (-out) y aplica exactamente ese plan, no
 # uno nuevo. El dry-run de baton solo planifica: no guarda ni aplica nada.
+#
+# Antes de aplicar, baton corre el dry_run y busca en su salida las frases de `destructive`: si el
+# plan destruye o reemplaza algo, pide confirmar (sin terminal, falla salvo con --assume-yes).
+# Un paso que reescribe `command` (por ejemplo para agregar -var-file) tiene que declarar tambien
+# su propio `dry_run`, para que esa revision no se pierda.
 api = 1
 name = "terraform"
 version = "0.1.0"
@@ -14,5 +19,6 @@ requires = ["terraform"]
 [type]
 scanned = true
 detect = ["**/main.tf"]
-command = "terraform init -input=false && terraform plan -input=false -out=tfplan && terraform apply -input=false tfplan"
-dry_run = "terraform init -input=false && terraform plan -input=false"
+command = "terraform init -input=false -no-color && terraform plan -input=false -no-color -out=tfplan && terraform apply -input=false -no-color tfplan"
+dry_run = "terraform init -input=false -no-color && terraform plan -input=false -no-color"
+destructive = ["will be destroyed", "must be replaced"]

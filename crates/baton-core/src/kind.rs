@@ -52,6 +52,9 @@ pub struct KindSpec {
     pub detect: &'static [&'static str],
     /// Programas que tienen que existir donde corre el paso.
     pub binaries: &'static [&'static str],
+    /// Frases que, si aparecen en la salida del `dry_run`, indican que el paso destruye o reemplaza
+    /// algo (`will be destroyed`): antes de ejecutarlo se pide confirmación.
+    pub destructive: &'static [&'static str],
 }
 
 /// Tipos nativos, en el orden en que los ofrece el editor. El índice es el identificador del
@@ -68,6 +71,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "dockerfile",
@@ -80,6 +84,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "script",
@@ -92,6 +97,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "sql",
@@ -104,6 +110,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "comando",
@@ -116,6 +123,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "check",
@@ -128,6 +136,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "backup",
@@ -140,6 +149,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
     KindSpec {
         name: "gate",
@@ -152,6 +162,7 @@ static BUILTIN: [KindSpec; 8] = [
         dry_run: None,
         detect: &[],
         binaries: &[],
+        destructive: &[],
     },
 ];
 
@@ -255,6 +266,11 @@ impl StepKind {
         self.spec().binaries
     }
 
+    /// Frases que marcan como destructivo lo que dice el `dry_run` de este tipo.
+    pub fn destructive_patterns(self) -> &'static [&'static str] {
+        self.spec().destructive
+    }
+
     /// Recibe todas las credenciales declaradas del plan, mencionadas o no: solo los tipos nativos
     /// escaneados, porque sus archivos interpolan `${VAR}` sin que el comando lo diga. Un tipo de
     /// plugin recibe únicamente las que su comando menciona: es un comando de terceros.
@@ -352,6 +368,7 @@ mod tests {
             dry_run: None,
             detect: &[],
             binaries: &[],
+            destructive: &[],
         }
     }
 

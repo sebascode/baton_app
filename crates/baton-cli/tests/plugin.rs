@@ -56,6 +56,10 @@ impl Fx {
 
     /// Con la carpeta `_bin` (un `terraform` de mentira) delante en el `PATH`, o sin ella.
     fn baton_path(&self, args: &[&str], with_bin: bool) -> Output {
+        self.baton_full(args, with_bin, &[])
+    }
+
+    fn baton_full(&self, args: &[&str], with_bin: bool, extra_env: &[(&str, &str)]) -> Output {
         let path = if with_bin {
             format!(
                 "{}:{}",
@@ -74,6 +78,7 @@ impl Fx {
             .args(args)
             .env("BATON_PLUGINS_DIR", &self.plugins)
             .env("BATON_TRACE", self.root.join("trace.txt"))
+            .envs(extra_env.iter().copied())
             .env_remove("CI")
             .env_remove("BATON_AMBIENTE")
             .stdin(std::process::Stdio::null())
@@ -255,7 +260,8 @@ fn plugin_commands_need_no_project() {
 const TERRAFORM_EXAMPLE: &str =
     include_str!("../../../examples/plugins/terraform/baton-plugin.toml");
 
-const FAKE_TERRAFORM: &str = "#!/bin/sh\necho \"$(basename \"$PWD\")|$*\" >> \"$BATON_CALLS\"\n";
+// registra cada llamada y, si BATON_FAKE_DESTROY esta definida, su plan dice que destruye algo
+const FAKE_TERRAFORM: &str = "#!/bin/sh\necho \"$(basename \"$PWD\")|$*\" >> \"$BATON_CALLS\"\ncase \"$1\" in plan) [ -n \"$BATON_FAKE_DESTROY\" ] && echo '  # aws_instance.web will be destroyed'; echo 'Plan: 0 to add, 0 to change, 1 to destroy.';; esac\nexit 0\n";
 
 fn terraform_fx() -> Fx {
     use std::os::unix::fs::PermissionsExt;
@@ -326,10 +332,10 @@ fn a_dry_run_only_plans_and_a_real_run_applies_the_saved_plan() {
     assert_eq!(
         calls(&fx),
         [
-            "dev|init -input=false",
-            "dev|plan -input=false",
-            "prod|init -input=false",
-            "prod|plan -input=false",
+            "dev|init -input=false -no-color",
+            "dev|plan -input=false -no-color",
+            "prod|init -input=false -no-color",
+            "prod|plan -input=false -no-color",
         ]
     );
     assert!(
@@ -343,12 +349,18 @@ fn a_dry_run_only_plans_and_a_real_run_applies_the_saved_plan() {
     assert_eq!(
         calls(&fx),
         [
-            "dev|init -input=false",
-            "dev|plan -input=false -out=tfplan",
-            "dev|apply -input=false tfplan",
-            "prod|init -input=false",
-            "prod|plan -input=false -out=tfplan",
-            "prod|apply -input=false tfplan",
+            // primero se planifica cada carpeta para revisar si algo se destruye...
+            "dev|init -input=false -no-color",
+            "dev|plan -input=false -no-color",
+            "prod|init -input=false -no-color",
+            "prod|plan -input=false -no-color",
+            // ...y después se aplica, carpeta por carpeta, el plan guardado
+            "dev|init -input=false -no-color",
+            "dev|plan -input=false -no-color -out=tfplan",
+            "dev|apply -input=false -no-color tfplan",
+            "prod|init -input=false -no-color",
+            "prod|plan -input=false -no-color -out=tfplan",
+            "prod|apply -input=false -no-color tfplan",
         ]
     );
 }
@@ -399,7 +411,7 @@ fn a_step_that_adds_variables_to_the_command_keeps_its_plan_with_its_own_dry_run
 }
 
 #[test]
-fn rewriting_the_command_without_a_dry_run_says_what_to_do() {
+fn rewriting_the_command_without_a_dry_run_is_refused_because_the_review_would_be_lost() {
     let fx = terraform_fx();
     enabled_plan(&fx);
     let path = fx.root.join("baton/plans/infra.toml");
@@ -409,11 +421,127 @@ fn rewriting_the_command_without_a_dry_run_says_what_to_do() {
     );
     fs::write(&path, plan).unwrap();
 
-    let o = fx.baton_path(&["run", "infra", "--no-tui", "--dry-run"], true);
-    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
-    assert!(calls(&fx).is_empty(), "no se planifica con otro comando");
+    let v = fx.baton_path(&["validate", "infra"], true);
+    assert_eq!(code(&v), 1, "{}{}", out(&v), err(&v));
     assert!(
-        out(&o).contains("declara dry_run en el paso para planificarlo"),
+        err(&v).contains("revisa lo destructivo con su dry_run"),
+        "{}",
+        err(&v)
+    );
+    assert!(
+        err(&v).contains("infra.toml:"),
+        "con su posición: {}",
+        err(&v)
+    );
+
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 1, "{}{}", out(&o), err(&o));
+    assert!(calls(&fx).is_empty(), "no se ejecutó nada");
+}
+
+// ------------------------------------------------- terraform que destruye algo
+
+#[test]
+fn a_plan_that_destroys_stops_a_run_without_a_terminal_and_nothing_is_applied() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_full(
+        &["run", "infra", "--no-tui"],
+        true,
+        &[("BATON_FAKE_DESTROY", "1")],
+    );
+    assert_eq!(code(&o), 3, "{}{}", out(&o), err(&o));
+    let shown = format!("{}{}", out(&o), err(&o));
+    assert!(shown.contains("destruye o reemplaza"), "{shown}");
+    assert!(shown.contains("--assume-yes"), "{shown}");
+    assert!(
+        shown.contains("aws_instance.web will be destroyed"),
+        "{shown}"
+    );
+    // se planificó (init y plan de la primera carpeta) y no se aplicó nada
+    let all = calls(&fx);
+    assert!(
+        all.iter()
+            .any(|c| c.contains("plan -input=false -no-color")),
+        "{all:?}"
+    );
+    assert!(all.iter().all(|c| !c.contains("apply")), "{all:?}");
+    assert!(all.iter().all(|c| !c.contains("-out=tfplan")), "{all:?}");
+}
+
+#[test]
+fn with_assume_yes_a_destroying_plan_is_applied_and_leaves_a_record_of_what_it_destroyed() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_full(
+        &["run", "infra", "--no-tui", "--assume-yes"],
+        true,
+        &[("BATON_FAKE_DESTROY", "1")],
+    );
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("atención: infra/dev/main.tf: # aws_instance.web will be destroyed"),
+        "{}",
+        out(&o)
+    );
+    assert!(
+        calls(&fx)
+            .iter()
+            .any(|c| c == "prod|apply -input=false -no-color tfplan")
+    );
+    // y queda escrito en el log de la ejecución
+    let logs: Vec<_> = fs::read_dir(fx.root.join(".baton/logs")).unwrap().collect();
+    let log = fs::read_to_string(logs[0].as_ref().unwrap().path()).unwrap();
+    assert!(log.contains("will be destroyed"), "{log}");
+}
+
+#[test]
+fn a_dry_run_reports_what_would_be_destroyed_and_changes_nothing() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_full(
+        &["run", "infra", "--no-tui", "--dry-run"],
+        true,
+        &[("BATON_FAKE_DESTROY", "1")],
+    );
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("atención: infra/dev/main.tf"),
+        "{}",
+        out(&o)
+    );
+    assert!(
+        out(&o).contains("atención: infra/prod/main.tf"),
+        "{}",
+        out(&o)
+    );
+    assert!(calls(&fx).iter().all(|c| !c.contains("apply")));
+    assert!(!fx.root.join(".baton").exists());
+}
+
+#[test]
+fn a_calm_plan_is_reviewed_and_applied_without_any_question() {
+    let fx = terraform_fx();
+    enabled_plan(&fx);
+    let o = fx.baton_path(&["run", "infra", "--no-tui"], true);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("plan revisado: no destruye ni reemplaza nada"),
+        "{}",
+        out(&o)
+    );
+    // por cada carpeta: init + plan (la revisión), y luego init + plan -out + apply
+    assert_eq!(calls(&fx).iter().filter(|c| c.contains("apply")).count(), 2);
+}
+
+#[test]
+fn validate_of_the_manifest_tells_what_triggers_the_confirmation() {
+    let fx = Fx::new();
+    let f = fx.write("terraform/baton-plugin.toml", TERRAFORM_EXAMPLE);
+    let o = fx.baton(&["plugin", "validate", f.to_str().unwrap()]);
+    assert_eq!(code(&o), 0, "{}", err(&o));
+    assert!(
+        out(&o).contains("destructivo: antes de ejecutar corre el dry-run y pide confirmar si dice: \"will be destroyed\", \"must be replaced\""),
         "{}",
         out(&o)
     );

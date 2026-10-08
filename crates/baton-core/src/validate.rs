@@ -629,6 +629,17 @@ fn validate_step(
             template_warnings(t, vars, path!["steps", i, field], out);
         }
     }
+    // El tipo revisa lo destructivo con su dry_run: si el paso reescribe `command` y no declara el
+    // suyo, esa revisión se perdería sin que nadie lo notara.
+    if !step.kind.destructive_patterns().is_empty() && step.dry_run_shadowed() {
+        out.push(Issue::error(
+            p("command"),
+            format!(
+                "el tipo '{}' revisa lo destructivo con su dry_run, que este paso pierde al reescribir command: declara dry_run en el paso con el plan equivalente",
+                step.kind.label()
+            ),
+        ));
+    }
     if let Some(dry) = &step.dry_run {
         if dry.trim().is_empty() {
             out.push(Issue::error(p("dry_run"), "dry_run no puede estar vacío"));
@@ -1702,5 +1713,68 @@ mod tests {
             "{:?}",
             warnings(&issues)
         );
+    }
+
+    // ------------------------------------------------ tipo que revisa lo destructivo
+
+    fn reviewing_kind(name: &'static str) {
+        crate::kind::register(crate::kind::KindSpec {
+            name,
+            scanned: true,
+            has_services: false,
+            default_command: Some("aplicar"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Source,
+            dry_run: Some("planificar"),
+            detect: &[],
+            binaries: &[],
+            destructive: &["will be destroyed"],
+        })
+        .unwrap();
+    }
+
+    fn step_of(kind: &str, extra: &str) -> Vec<Issue> {
+        validate_plan(
+            &plan(&format!(
+                "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"{kind}\"\nsource = \"a\"\n{extra}"
+            )),
+            None,
+        )
+    }
+
+    #[test]
+    fn rewriting_command_in_a_type_that_reviews_destruction_needs_its_own_dry_run() {
+        reviewing_kind("t-val-review");
+        // sin tocar el command: usa el del tipo, que revisa
+        assert!(errors(&step_of("t-val-review", "")).is_empty());
+        // reescribirlo sin dry_run perdería la revisión en silencio
+        let issues = step_of("t-val-review", "command = \"mi-aplicar\"\n");
+        assert_error(&issues, "steps[0].command", "revisa lo destructivo");
+        // con su propio dry_run (el plan equivalente) vuelve a estar cubierto
+        let issues = step_of(
+            "t-val-review",
+            "command = \"mi-aplicar\"\ndry_run = \"mi-plan\"\n",
+        );
+        assert!(errors(&issues).is_empty(), "{:?}", errors(&issues));
+    }
+
+    #[test]
+    fn a_type_without_destructive_phrases_can_rewrite_command_freely() {
+        crate::kind::register(crate::kind::KindSpec {
+            name: "t-val-free",
+            scanned: true,
+            has_services: false,
+            default_command: Some("aplicar"),
+            runs_command: true,
+            own_interpreter: false,
+            requires: crate::kind::Requires::Source,
+            dry_run: Some("planificar"),
+            detect: &[],
+            binaries: &[],
+            destructive: &[],
+        })
+        .unwrap();
+        assert!(errors(&step_of("t-val-free", "command = \"mi-aplicar\"\n")).is_empty());
     }
 }
