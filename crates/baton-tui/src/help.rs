@@ -21,11 +21,12 @@ pub struct Help {
     pub here: Items,
 }
 
-const EVERYWHERE: [(&str, &str); 4] = [
+const EVERYWHERE: [(&str, &str); 5] = [
     ("?", "esta ayuda"),
     ("esc", "volver o cancelar"),
     ("↑↓ j k", "moverse"),
     ("ctrl+c", "interrumpir (pregunta antes)"),
+    ("ctrl+z", "suspender (fg para volver)"),
 ];
 
 /// La ayuda de la pantalla abierta, o `None` si ahí `?` no es un atajo (formularios, preguntas).

@@ -12,8 +12,9 @@ expression: "screen(&app, 100, 30)"
 │             db/│ esc       volver o cancelar                                    │/prechecks.sh   │
 │   ⋮⋮ [x] 4  Con│ ↑↓ j k    moverse                                              │                │
 │             man│ ctrl+c    interrumpir (pregunta antes)                         │                │
-│   ⋮⋮ [ ] 5  Smo│                                                                │                │
-│             scr│ en esta pantalla                                               │                │
+│   ⋮⋮ [ ] 5  Smo│ ctrl+z    suspender (fg para volver)                           │                │
+│             scr│                                                                │                │
+│                │ en esta pantalla                                               │                │
 │                │ enter     ejecutar los pasos activos                           │                │
 │                │ espacio   activar o desactivar el paso                         │                │
 │                │ shift+↑↓  mover el paso                                        │                │
