@@ -21,11 +21,12 @@ pub struct Help {
     pub here: Items,
 }
 
-const EVERYWHERE: [(&str, &str); 4] = [
+const EVERYWHERE: [(&str, &str); 5] = [
     ("?", "esta ayuda"),
     ("esc", "volver o cancelar"),
     ("↑↓ j k", "moverse"),
     ("ctrl+c", "interrumpir (pregunta antes)"),
+    ("ctrl+z", "suspender (fg para volver)"),
 ];
 
 /// La ayuda de la pantalla abierta, o `None` si ahí `?` no es un atajo (formularios, preguntas).
@@ -43,6 +44,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
                 ("b r d", "backup, rollback, dry-run"),
                 ("u", "reanudar la última ejecución"),
                 ("h l", "historial, último log"),
+                ("m", "mantención (logs, reinicios, imágenes)"),
                 ("v", "pipeline"),
                 ("p", "cambiar de plan"),
                 ("q", "salir de baton"),

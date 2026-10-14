@@ -25,6 +25,29 @@ pub struct Plan {
     pub credentials: Vec<CredentialReq>,
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// Tareas de mantención sueltas (`baton ops`): no forman parte de la ejecución del plan.
+    #[serde(default)]
+    pub tasks: Vec<Task>,
+}
+
+/// Una tarea de mantención: un comando que se corre cuando alguien lo pide, en un destino, con las
+/// credenciales del plan (por ejemplo, un script de limpieza o de rotación de logs).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Task {
+    /// Identificador estable (slug), el que se da a `baton ops --tarea`.
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub command: String,
+    /// Nombre de un destino; si falta se usa `[defaults].target`.
+    pub target: Option<String>,
+    /// Carpeta donde corre, relativa a la raíz del proyecto (sin `..`). Por defecto, la raíz.
+    pub dir: Option<String>,
+    pub timeout: Option<Dur>,
+    /// Pide confirmar antes de ejecutarla (sin terminal exige `--assume-yes`).
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 fn one() -> u32 {
@@ -34,6 +57,10 @@ fn one() -> u32 {
 impl Plan {
     pub fn parse(text: &str) -> Result<Plan, toml::de::Error> {
         toml::from_str(text)
+    }
+
+    pub fn task(&self, id: &str) -> Option<&Task> {
+        self.tasks.iter().find(|t| t.id == id)
     }
 
     pub fn step(&self, id: &str) -> Option<&Step> {

@@ -8,6 +8,7 @@ mod db_session;
 mod history_cmd;
 mod import;
 mod last;
+mod ops;
 mod overview;
 mod pick;
 mod plans_cmd;
@@ -278,6 +279,32 @@ enum Command {
         /// Abre una sesión interactiva (se abre sola con una base, sin consulta y en una terminal)
         #[arg(short = 'i', long = "interactivo")]
         interactivo: bool,
+    },
+    /// Mantención: logs, reinicios, imágenes de los servicios y tareas sueltas del plan
+    Ops {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+        /// Qué hacer: logs, estado, reiniciar, actualizar o reimagen (sin ella, un menú)
+        #[arg(short = 'a', long = "accion")]
+        accion: Option<String>,
+        /// Servicio sobre el que actuar; sin él, todos los de cada compose
+        #[arg(short = 's', long = "servicio")]
+        servicio: Option<String>,
+        /// Ejecuta una tarea del plan (`[[tasks]]`) en lugar de una acción
+        #[arg(short = 't', long = "tarea")]
+        tarea: Option<String>,
+        /// Con la acción logs, sigue mostrándolos en vivo (ctrl+c para cortar)
+        #[arg(long)]
+        seguir: bool,
+        /// Cuántas líneas de logs se muestran al empezar
+        #[arg(long, default_value_t = 100, value_name = "N")]
+        lineas: u32,
+        /// Ejecuta sin pedir confirmación
+        #[arg(long)]
+        assume_yes: bool,
+        /// Ambiente del que se resuelven las credenciales
+        #[arg(long)]
+        ambiente: Option<String>,
     },
     /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
     History {
@@ -693,6 +720,31 @@ fn main() -> ExitCode {
                 },
             )
         }
+        Command::Ops {
+            plan,
+            accion,
+            servicio,
+            tarea,
+            seguir,
+            lineas,
+            assume_yes,
+            ambiente,
+        } => match pick::resolve(&project, plan, "ops", "mantener") {
+            Ok(plan) => ops::run(
+                &project,
+                &plan,
+                ops::Args {
+                    action: accion,
+                    service: servicio,
+                    task: tarea,
+                    follow: seguir,
+                    lines: lineas,
+                    assume_yes,
+                    ambiente,
+                },
+            ),
+            Err(code) => code,
+        },
         Command::History { plan, limit } => {
             match pick::resolve(&project, plan, "history", "consultar") {
                 Ok(plan) => history_cmd::run(&project, &plan, limit),

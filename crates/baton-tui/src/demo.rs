@@ -5,7 +5,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::{App, Effect, Screen};
 use crate::config_view::TargetStatus;
@@ -87,12 +87,20 @@ fn event_loop(
         if event::poll(FRAME)?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
-            && let Some(effect) = app.handle_key(key)
         {
-            match driver.on_effect(app, effect) {
-                Flow::Quit => break,
-                Flow::Shell(session) => open_shell(terminal, &session)?,
-                Flow::Continue => {}
+            if is_suspend(&key) {
+                suspend(terminal)?;
+                // El tiempo que estuvo detenido no cuenta para los parpadeos ni el tick.
+                last_tick = Instant::now();
+                last_blink = last_tick;
+                continue;
+            }
+            if let Some(effect) = app.handle_key(key) {
+                match driver.on_effect(app, effect) {
+                    Flow::Quit => break,
+                    Flow::Shell(session) => open_shell(terminal, &session)?,
+                    Flow::Continue => {}
+                }
             }
         }
 
@@ -107,6 +115,22 @@ fn event_loop(
         }
     }
     Ok(())
+}
+
+/// `ctrl+z`: en modo raw llega como tecla (no como SIGTSTP), así que baton lo atiende.
+fn is_suspend(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Char('z') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Deja la terminal como estaba y se detiene como cualquier programa al que se le hace `ctrl+z`;
+/// el shell lo recupera con `fg`. Al volver (SIGCONT) se redibuja todo.
+fn suspend(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+    ratatui::restore();
+    eprintln!("\nbaton: suspendido (escribe fg para volver)");
+    // Con la disposición por defecto, SIGTSTP detiene el proceso aquí hasta que llegue SIGCONT.
+    signal_hook::low_level::raise(signal_hook::consts::SIGTSTP)?;
+    *terminal = ratatui::init();
+    terminal.clear()
 }
 
 /// Deja la pantalla, abre la sesión pedida y, al salir de ella, la recupera.
@@ -169,6 +193,7 @@ impl Driver for DemoDriver {
             }
             Effect::TestStep(_) => app.step_test_result(true, "dry-run ok · 1.4s (demo)"),
             Effect::Rescan => app.gate_scan_result(&fake::scan(), "ahora"),
+            Effect::Maintenance => app.notify("demo: la mantención necesita un proyecto real"),
             Effect::SavePlan(_) | Effect::SaveConfig(_) => {
                 app.notify("demo: los datos son de mentira, no se guarda nada");
             }

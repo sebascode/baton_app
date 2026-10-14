@@ -758,7 +758,7 @@ fn script_line(root: &Path, file: &Path) -> String {
 /// `.env` o variable de entorno, con el ambiente elegido. Devuelve las variables con su valor y,
 /// aparte, los valores que son secretos (para redactarlos de la salida). Un campo que no se
 /// pueda leer se omite: `prepare_run` ya avisó de lo que falta.
-fn resolve_credentials(
+pub(crate) fn resolve_credentials(
     project: &Project,
     config: &Config,
     plan: &Plan,
@@ -788,7 +788,7 @@ fn resolve_credentials(
 
 /// `name` aparece en `line` como variable completa (`$NAME`, `${NAME}`, `NAME=`...), no como parte
 /// de un nombre más largo (`NAME_OTRO`).
-fn mentions_variable(line: &str, name: &str) -> bool {
+pub(crate) fn mentions_variable(line: &str, name: &str) -> bool {
     let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     line.match_indices(name).any(|(i, _)| {
         let before = line[..i].chars().next_back();

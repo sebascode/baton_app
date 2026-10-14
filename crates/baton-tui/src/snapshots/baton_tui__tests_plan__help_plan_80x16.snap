@@ -9,12 +9,12 @@ expression: "screen(&app, 80, 16)"
 │   ⋮⋮ │ esc       volver o cancelar                                    │file] │
 │      │ ↑↓ j k    moverse                                              │      │
 │   ⋮⋮ │ ctrl+c    interrumpir (pregunta antes)                         │pose] │
-│      │                                                                │      │
-│  ↓ 2 │ en esta pantalla                                               │      │
-│      │ enter     ejecutar los pasos activos                           │      │
-├──────│ espacio   activar o desactivar el paso                         │──────┤
-│ (●) B│ shift+↑↓  mover el paso                                        │      │
-├──────│ /         filtrar los pasos (esc lo quita)                     │──────┤
+│      │ ctrl+z    suspender (fg para volver)                           │      │
+│  ↓ 2 │                                                                │      │
+│      │ en esta pantalla                                               │      │
+├──────│ enter     ejecutar los pasos activos                           │──────┤
+│ (●) B│ espacio   activar o desactivar el paso                         │      │
+├──────│ shift+↑↓  mover el paso                                        │──────┤
 │ [espa│ …                                                              │      │
 │ [v] p└────────────────────────────────────────────────────────────────┘      │
 ╰──────────────────────────────────────────────────────────────────────────────╯

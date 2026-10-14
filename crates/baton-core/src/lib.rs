@@ -16,6 +16,7 @@ pub mod import;
 pub mod issue;
 pub mod kind;
 pub mod locate;
+pub mod maintenance;
 pub mod mask;
 pub mod plan;
 pub mod plugin;

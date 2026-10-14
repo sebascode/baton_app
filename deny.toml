@@ -12,7 +12,11 @@ targets = [
 ]
 
 [advisories]
-ignore = []
+ignore = [
+    # unsafe-libyaml (via serde_yaml_ng, solo en baton import): sin mantenimiento, no una
+    # vulnerabilidad. Se lee solo YAML de pipelines que la persona misma entrega.
+    "RUSTSEC-2024-0449",
+]
 
 [licenses]
 allow = [
