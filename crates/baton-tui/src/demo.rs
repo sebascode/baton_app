@@ -169,6 +169,7 @@ impl Driver for DemoDriver {
             }
             Effect::TestStep(_) => app.step_test_result(true, "dry-run ok · 1.4s (demo)"),
             Effect::Rescan => app.gate_scan_result(&fake::scan(), "ahora"),
+            Effect::Maintenance => app.notify("demo: la mantención necesita un proyecto real"),
             Effect::SavePlan(_) | Effect::SaveConfig(_) => {
                 app.notify("demo: los datos son de mentira, no se guarda nada");
             }

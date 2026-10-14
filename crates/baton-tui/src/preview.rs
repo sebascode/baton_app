@@ -64,6 +64,8 @@ pub enum PreviewAction {
     History,
     /// Ver el log de la última ejecución.
     LastLog,
+    /// Abrir la mantención del plan (logs, reinicios, imágenes, tareas).
+    Maintenance,
     Edit(usize),
     AddGate(usize),
     /// Ver el pipeline del plan (pantalla 9).
@@ -331,6 +333,7 @@ impl PreviewState {
         if self.steps.len() > 8 || !self.filter.is_empty() {
             items.insert(items.len() - 1, ("/", "filtrar"));
         }
+        items.insert(items.len() - 1, ("m", "mantención"));
         items.insert(items.len() - 1, ("?", "ayuda"));
         items
     }
@@ -503,6 +506,7 @@ impl PreviewState {
             }
             KeyCode::Char('v') => return Some(PreviewAction::Pipeline),
             KeyCode::Char('h') => return Some(PreviewAction::History),
+            KeyCode::Char('m') => return Some(PreviewAction::Maintenance),
             KeyCode::Char('l') if self.last_run.is_some() => {
                 return Some(PreviewAction::LastLog);
             }

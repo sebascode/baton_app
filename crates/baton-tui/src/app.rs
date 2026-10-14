@@ -90,6 +90,9 @@ pub enum Effect {
     OpenPlan(String),
     /// Mostrar el historial de ejecuciones del plan. Quien atiende responde con `show_history`.
     OpenHistory,
+    /// Abrir la mantención del plan (`baton ops`): quien atiende deja la pantalla, la corre y
+    /// vuelve (como "abrir shell"), o avisa con `notify` si no puede.
+    Maintenance,
     /// Mostrar el log de la ejecución en esa posición del historial (0 es la última). Quien
     /// atiende responde con `show_log_file` o `notify`.
     OpenLog(usize),
@@ -553,6 +556,7 @@ impl App {
                     None
                 }
                 PreviewAction::History => Some(Effect::OpenHistory),
+                PreviewAction::Maintenance => Some(Effect::Maintenance),
                 PreviewAction::LastLog => Some(Effect::OpenLog(0)),
                 PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
                 PreviewAction::PlanOp(req) => Some(Effect::PlanOp(req)),

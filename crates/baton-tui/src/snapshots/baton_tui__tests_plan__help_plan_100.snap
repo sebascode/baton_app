@@ -23,12 +23,12 @@ expression: "screen(&app, 100, 30)"
 │                │ b r d     backup, rollback, dry-run                            │                │
 │                │ u         reanudar la última ejecución                         │                │
 │                │ h l       historial, último log                                │                │
+│                │ m         mantención (logs, reinicios, imágenes)               │                │
 │                │ v         pipeline                                             │                │
 │                │ p         cambiar de plan                                      │                │
-│                │ q         salir de baton                                       │                │
-├────────────────└────────────────────────────────────────────────────────────────┘────────────────┤
-│ (●) Backup antes de ejecutar   (●) Rollback automático   ( ) Dry-run                             │
+├────────────────│ q         salir de baton                                       │────────────────┤
+│ (●) Backup ante└────────────────────────────────────────────────────────────────┘                │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline  [?] ayuda   │
-│ [enter] ejecutar                                                                                 │
+│ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline              │
+│ [m] mantención  [?] ayuda  [enter] ejecutar                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

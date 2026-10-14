@@ -239,11 +239,61 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
     validate_credentials(plan, config, &mut out);
     validate_plugin_credentials(plan, &mut out);
     validate_ids_and_dependencies(plan, &mut out);
+    validate_tasks(plan, config, &mut out);
 
     for (i, step) in plan.steps.iter().enumerate() {
         validate_step(plan, step, i, config, &mut out);
     }
     out
+}
+
+fn validate_tasks(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issue>) {
+    for (i, t) in plan.tasks.iter().enumerate() {
+        let p = |f: &str| path!["tasks", i, f];
+        if !is_slug(&t.id) {
+            out.push(Issue::error(
+                p("id"),
+                format!(
+                    "id de tarea inválido '{}' (usa minúsculas, números, - y _)",
+                    t.id
+                ),
+            ));
+        }
+        if plan.tasks[..i].iter().any(|o| o.id == t.id) {
+            out.push(Issue::error(
+                p("id"),
+                format!("id de tarea duplicado '{}'", t.id),
+            ));
+        }
+        if t.name.trim().is_empty() {
+            out.push(Issue::error(p("name"), "el nombre no puede estar vacío"));
+        }
+        if t.command.trim().is_empty() {
+            out.push(Issue::error(
+                p("command"),
+                "el comando no puede estar vacío",
+            ));
+        }
+        if let Some(dir) = &t.dir
+            && (dir.starts_with('/')
+                || dir.split('/').any(|c| c == "..")
+                || dir.split('/').next() == Some(".baton"))
+        {
+            out.push(Issue::error(
+                p("dir"),
+                "la carpeta debe ser relativa a la raíz, sin '..' ni apuntar a .baton/",
+            ));
+        }
+        if let (Some(target), Some(config)) = (&t.target, config)
+            && target != "local"
+            && !config.targets.contains_key(target)
+        {
+            out.push(Issue::error(
+                p("target"),
+                format!("el destino '{target}' no existe en config.toml"),
+            ));
+        }
+    }
 }
 
 /// Un tipo de plugin recibe una credencial de cada tipo que usa. Con dos del mismo tipo en el plan

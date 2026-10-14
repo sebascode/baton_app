@@ -84,6 +84,35 @@ fn ssh_conn(project: &Project, config: &Config, ambiente: Option<&str>, s: &SshT
     }
 }
 
+/// El transporte de un destino (y, si es ssh, sus datos de conexión). Un nombre que no existe
+/// (o `local`) corre en esta máquina.
+pub(crate) fn make_transport(
+    project: &Project,
+    config: &Config,
+    ambiente: Option<&str>,
+    target: &str,
+) -> (Box<dyn Transport>, Option<SshConn>) {
+    match config.targets.get(target) {
+        Some(Target::Context(c)) => (
+            Box::new(ContextTransport {
+                context: c.context.clone(),
+            }),
+            None,
+        ),
+        Some(Target::Ssh(s)) => {
+            let conn = ssh_conn(project, config, ambiente, s);
+            let t = SshTransport {
+                access: conn.access.clone(),
+                remote_dir: conn.remote_dir.clone(),
+                project_root: project.root.clone(),
+                ssh_bin: "ssh".to_string(),
+            };
+            (Box::new(t), Some(conn))
+        }
+        _ => (Box::new(LocalTransport), None),
+    }
+}
+
 /// Un transporte por cada destino distinto que usan `steps` (`prepare_run` ya validó que existan
 /// y, si son ssh, que tengan `remote_dir` cuando sincronizan). `"local"` implícito incluido.
 pub(crate) fn build_transports(
@@ -101,23 +130,10 @@ pub(crate) fn build_transports(
         if transports.contains_key(&ps.target) {
             continue;
         }
-        let transport: Box<dyn Transport> = match config.targets.get(&ps.target) {
-            Some(Target::Context(c)) => Box::new(ContextTransport {
-                context: c.context.clone(),
-            }),
-            Some(Target::Ssh(s)) => {
-                let conn = ssh_conn(project, config, ambiente, s);
-                let t = SshTransport {
-                    access: conn.access.clone(),
-                    remote_dir: conn.remote_dir.clone(),
-                    project_root: project.root.clone(),
-                    ssh_bin: "ssh".to_string(),
-                };
-                conns.insert(ps.target.clone(), conn);
-                Box::new(t)
-            }
-            _ => Box::new(LocalTransport),
-        };
+        let (transport, conn) = make_transport(project, config, ambiente, &ps.target);
+        if let Some(conn) = conn {
+            conns.insert(ps.target.clone(), conn);
+        }
         transports.insert(ps.target.clone(), transport);
     }
     (transports, conns)
