@@ -792,6 +792,8 @@ fn main() -> ExitCode {
 /// dentro de una subcarpeta), lo dice en stderr: así no queda duda de qué proyecto se usa.
 fn open_project(start: &Path) -> Option<Project> {
     let project = Project::discover(start)?;
+    let configured = baton_store::check_config(&project).value;
+    proc::set_engine(baton_exec::local_engine(&configured.unwrap_or_default()));
     if let Some(rel) = project.subfolder_of(start) {
         eprintln!(
             "proyecto: {} (una carpeta superior; estás en {}/)",

@@ -544,7 +544,13 @@ fn the_pipeline_is_available_in_the_summary_and_shows_warnings() {
     // v vuelve al resumen, donde enter sale
     press(&mut app, KeyCode::Char('v'));
     assert!(screen(&app, 100, 30).contains("Plan instalar completado"));
-    assert_eq!(press(&mut app, KeyCode::Enter), Some(Effect::Quit));
+    // enter no cierra solo: pregunta, y solo `s` sale
+    assert_eq!(press(&mut app, KeyCode::Enter), None);
+    assert!(screen(&app, 100, 30).contains("¿Salir de baton?"));
+    assert_eq!(press(&mut app, KeyCode::Char('n')), None);
+    assert!(!screen(&app, 100, 30).contains("¿Salir de baton?"));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(press(&mut app, KeyCode::Char('s')), Some(Effect::Quit));
 }
 
 #[test]

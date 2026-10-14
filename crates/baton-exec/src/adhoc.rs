@@ -53,7 +53,7 @@ pub fn run(
     if !job.all_credentials {
         secrets.retain(|(name, _)| mentions_variable(&job.line, name));
     }
-    let (transport, _) = make_transport(project, config, ambiente, &job.target);
+    let (transport, _) = make_transport(project, config, ambiente, &job.target, &[]);
     let cmd = Command {
         line: job.line,
         cwd: job.cwd,

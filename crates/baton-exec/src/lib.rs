@@ -6,7 +6,7 @@ mod export;
 mod gate;
 pub mod prepare;
 mod remote;
-pub use remote::ssh_access;
+pub use remote::{local_engine, ssh_access, target_engine};
 pub mod runner;
 pub mod transport;
 

@@ -299,3 +299,60 @@ fn ctrl_c_ends_a_log_follow_cleanly_and_kills_the_process() {
         .success();
     assert!(!alive, "el proceso de logs sigue vivo");
 }
+
+/// Un `podman` de mentira igual al `docker` de mentira, y `docker` ausente de la carpeta.
+fn use_podman(fx: &Fx) {
+    let bin = fx.root.join("_bin");
+    fs::rename(bin.join("docker"), bin.join("podman")).unwrap();
+}
+
+#[test]
+fn with_podman_the_same_commands_run_through_podman() {
+    let fx = Fx::new();
+    use_podman(&fx);
+    let o = fx.ops_env(&["-a", "logs", "-s", "web"], &[("BATON_ENGINE", "podman")]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        fx.calls()
+            .contains("stack|compose -f docker-compose.yml logs")
+    );
+}
+
+#[test]
+fn auto_picks_podman_when_there_is_no_docker() {
+    let fx = Fx::new();
+    use_podman(&fx);
+    // PATH solo con la carpeta de mentira y lo mínimo del sistema: sin docker real.
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&fx.root)
+        .args(["ops", "-a", "estado"])
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", fx.root.join("_bin").display()),
+        )
+        .env_remove("BATON_ENGINE")
+        .env("CI", "1")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(fx.calls().contains("ps -a"), "{}", fx.calls());
+}
+
+#[test]
+fn podman_reimage_without_a_service_goes_through_down() {
+    let fx = Fx::new();
+    use_podman(&fx);
+    let o = fx.ops_env(
+        &["-a", "reimagen", "--assume-yes"],
+        &[("BATON_ENGINE", "podman")],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let c = fx.calls();
+    assert!(c.contains("down --rmi all") && !c.contains(" rm "), "{c}");
+    let o = fx.ops_env(
+        &["-a", "reimagen", "-s", "web", "--assume-yes"],
+        &[("BATON_ENGINE", "podman")],
+    );
+    assert_eq!(o.status.code(), Some(3));
+}

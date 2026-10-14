@@ -47,7 +47,7 @@ impl ConfigDriver {
             Err(_) => TargetStatus::Error, // datos incompletos: no hay ni con qué intentar
             Ok(Target::Local(_)) => TargetStatus::Ok,
             Ok(Target::Context(ctx)) => {
-                if Command::new("docker")
+                if Command::new(crate::proc::container_program())
                     .args(["context", "inspect", &ctx.context])
                     .output()
                     .is_ok_and(|o| o.status.success())

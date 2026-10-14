@@ -18,7 +18,7 @@ use baton_core::events::{RunCommand, RunEvent};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
@@ -30,6 +30,7 @@ use baton_core::plan::{Plan, Step};
 
 use crate::gate_view::ScannedService;
 use crate::history_view::{HistoryAction, HistoryState, LogFileAction, LogFileState};
+use crate::maint_view::{MaintAction, MaintRequest, MaintResult, MaintState};
 use crate::preview::{PreviewAction, PreviewState, RunRequest};
 use crate::protect::{Guarded, ProtectOutcome};
 use crate::run::{Phase, RunAction, RunState};
@@ -67,6 +68,8 @@ pub enum Mode {
     History(Box<HistoryState>),
     /// El log de una ejecución pasada.
     LogFile(Box<LogFileState>),
+    /// Mantención del plan (servicios, acciones y la salida en vivo).
+    Maintenance(Box<MaintState>),
 }
 
 /// Lo que la pantalla le pide a quien la maneja (runner real o de demostración).
@@ -93,6 +96,11 @@ pub enum Effect {
     /// Abrir la mantención del plan (`baton ops`): quien atiende deja la pantalla, la corre y
     /// vuelve (como "abrir shell"), o avisa con `notify` si no puede.
     Maintenance,
+    /// Ejecutar una acción o tarea de la mantención. Quien atiende devuelve la salida con
+    /// `maint_note`, `maint_line` y `maint_finished`.
+    MaintRun(MaintRequest),
+    /// Cortar lo que corre en la mantención (también se envía al volver al plan).
+    MaintCancel,
     /// Mostrar el log de la ejecución en esa posición del historial (0 es la última). Quien
     /// atiende responde con `show_log_file` o `notify`.
     OpenLog(usize),
@@ -135,6 +143,8 @@ pub struct App {
     /// Ambiente protegido de esta ejecución: antes de ejecutar o hacer rollback se pide su nombre.
     protected: Option<String>,
     protect: Option<crate::protect::ProtectPrompt>,
+    /// Se preguntó "¿salir de baton?" y se espera la respuesta (nada cierra baton por sí solo).
+    quit_ask: bool,
 }
 
 /// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
@@ -178,6 +188,7 @@ impl App {
             help: None,
             protected: None,
             protect: None,
+            quit_ask: false,
         }
     }
 
@@ -189,6 +200,7 @@ impl App {
             help: None,
             protected: None,
             protect: None,
+            quit_ask: false,
         }
     }
 
@@ -200,6 +212,7 @@ impl App {
             help: None,
             protected: None,
             protect: None,
+            quit_ask: false,
         }
     }
 
@@ -247,7 +260,33 @@ impl App {
             Mode::Editor(e) => self.stash.editor = Some(e),
             Mode::Pipeline(p) => self.stash.pipeline = Some(p),
             Mode::History(h) => self.stash.history = Some(h),
-            Mode::Run(_) | Mode::LogFile(_) => {}
+            Mode::Run(_) | Mode::LogFile(_) | Mode::Maintenance(_) => {}
+        }
+    }
+
+    /// Abre la mantención (la arma quien atiende `Effect::Maintenance`).
+    pub fn show_maintenance(&mut self, state: MaintState) {
+        self.switch(Mode::Maintenance(Box::new(state)));
+    }
+
+    /// Un título de lo que empieza a correr en la mantención.
+    pub fn maint_note(&mut self, text: &str) {
+        if let Mode::Maintenance(m) = &mut self.mode {
+            m.note(text);
+        }
+    }
+
+    /// Una línea de salida de la mantención.
+    pub fn maint_line(&mut self, text: &str, error: bool) {
+        if let Mode::Maintenance(m) = &mut self.mode {
+            m.line(text, error);
+        }
+    }
+
+    /// Terminó lo que corría en la mantención.
+    pub fn maint_finished(&mut self, result: MaintResult) {
+        if let Mode::Maintenance(m) = &mut self.mode {
+            m.finish(result);
         }
     }
 
@@ -261,6 +300,12 @@ impl App {
     /// vista del plan).
     pub fn show_log_file(&mut self, log: LogFileState) {
         self.switch(Mode::LogFile(Box::new(log)));
+    }
+
+    /// Pregunta si salir (la respuesta es la próxima tecla: `s` sale, otra sigue).
+    fn ask_quit(&mut self) -> Option<Effect> {
+        self.quit_ask = true;
+        None
     }
 
     /// Vuelve a la vista previa; si no hay una guardada (arranque directo), pide salir.
@@ -477,6 +522,7 @@ impl App {
             }
             Mode::Preview(p) => p.notice = message.lines().map(String::from).collect(),
             Mode::History(h) => h.notice = Some(message.into()),
+            Mode::Maintenance(m) => m.notice = Some(message.into()),
             Mode::LogFile(_) | Mode::Pipeline(_) | Mode::Run(_) => {}
         }
     }
@@ -492,6 +538,12 @@ impl App {
         } else {
             key
         };
+
+        if self.quit_ask {
+            self.quit_ask = false;
+            return matches!(key.code, KeyCode::Char('s' | 'S' | 'y' | 'Y'))
+                .then_some(Effect::Quit);
+        }
 
         if let Some(prompt) = &mut self.protect {
             return match prompt.handle_key(key) {
@@ -561,6 +613,7 @@ impl App {
                 PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
                 PreviewAction::PlanOp(req) => Some(Effect::PlanOp(req)),
                 PreviewAction::Quit => Some(Effect::Quit),
+                PreviewAction::AskQuit => self.ask_quit(),
             },
             Mode::Pipeline(r) => match r.handle_key(key)? {
                 // en la vista previa, "salir" solo cierra el pipeline
@@ -574,6 +627,14 @@ impl App {
                     // el historial que quedó guardado ya no sirve
                     self.stash.history = None;
                     out
+                }
+            },
+            Mode::Maintenance(m) => match m.handle_key(key)? {
+                MaintAction::Run(req) => Some(Effect::MaintRun(req)),
+                MaintAction::Cancel => Some(Effect::MaintCancel),
+                MaintAction::Back => {
+                    self.back_to_preview();
+                    Some(Effect::MaintCancel)
                 }
             },
             Mode::LogFile(l) => match l.handle_key(key)? {
@@ -659,8 +720,9 @@ impl App {
                             self.switch(Mode::Preview(p));
                             None
                         }
-                        // arranque directo sin vista del plan: no hay a dónde volver
-                        None => Some(Effect::Quit),
+                        // arranque directo sin vista del plan: no hay a dónde volver, pero
+                        // tampoco se cierra solo
+                        None => self.ask_quit(),
                     }
                 }
             },
@@ -753,6 +815,7 @@ impl App {
             Mode::Pipeline(r) => pipeline_view::render(r, buf, area),
             Mode::History(h) => h.render(buf, area),
             Mode::LogFile(l) => l.render(buf, area),
+            Mode::Maintenance(m) => m.render(buf, area),
             Mode::Run(r) if r.view_pipeline => pipeline_view::render(r, buf, area),
             // el visor de log (con sus pasos) también sirve tras un fallo o al terminar
             Mode::Run(r) if r.log_view => run_view::render(r, buf, area),
@@ -767,6 +830,16 @@ impl App {
         }
         if let Some(prompt) = &self.protect {
             prompt.render(buf, area);
+        }
+        if self.quit_ask && area.height > 3 {
+            let text = "¿Salir de baton? [s] sí  [n] seguir aquí";
+            let y = area.bottom() - 2;
+            let w = area.width.saturating_sub(2);
+            Line::styled(
+                format!("{:<width$}", text, width = w as usize),
+                Style::new().fg(theme::WARN).add_modifier(Modifier::BOLD),
+            )
+            .render(Rect::new(area.x + 1, y, w, 1), buf);
         }
     }
 }

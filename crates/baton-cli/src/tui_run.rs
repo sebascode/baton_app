@@ -49,6 +49,20 @@ pub struct RunDriver {
     run_steps: Vec<String>,
     /// Posición del paso que está fallado ahora, para abrir el shell en su destino.
     failed_step: Option<usize>,
+    /// Lo que corre en la pantalla de mantención.
+    maint: Option<MaintJob>,
+}
+
+/// Una acción de mantención en su propio hilo; la pantalla recibe lo que va diciendo.
+struct MaintJob {
+    rx: std::sync::mpsc::Receiver<MaintMsg>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+enum MaintMsg {
+    Note(String),
+    Line(String, bool),
+    Done(baton_tui::maint_view::MaintResult),
 }
 
 impl RunDriver {
@@ -64,6 +78,7 @@ impl RunDriver {
             outcome: None,
             run_steps: Vec::new(),
             failed_step: None,
+            maint: None,
         }
     }
 
@@ -326,29 +341,111 @@ impl RunDriver {
         }
     }
 
-    /// La mantención del plan: deja la pantalla y corre `baton ops` en la terminal (su menú dibuja
-    /// ahí), como "abrir shell"; al salir se vuelve a la vista del plan.
-    fn maintenance(&self, app: &mut App) -> Flow {
-        let Ok(exe) = std::env::current_exe() else {
-            app.notify("no se pudo abrir la mantención: no encuentro el ejecutable de baton");
-            return Flow::Continue;
-        };
-        let mut args = vec![
-            "-C".to_string(),
-            self.project.root.display().to_string(),
-            "ops".to_string(),
-            self.plan.name.clone(),
-        ];
-        if let Some(a) = &self.flags.ambiente {
-            args.extend(["--ambiente".to_string(), a.clone()]);
+    /// Abre la pantalla de mantención del plan (servicios, acciones y la salida en vivo).
+    fn maintenance(&self, app: &mut App) {
+        app.show_maintenance(crate::ops::maintenance_state(
+            &self.project,
+            &self.config,
+            &self.plan,
+        ));
+    }
+
+    /// Corre lo pedido en la mantención en un hilo; la salida llega por `poll`.
+    fn maint_run(&mut self, app: &mut App, req: &baton_tui::maint_view::MaintRequest) {
+        use baton_tui::maint_view::MaintResult;
+        if self.maint.is_some() {
+            return app.notify("ya hay algo en curso");
         }
-        Flow::Shell(ShellSession {
-            program: Some(exe.display().to_string()),
-            args,
-            env: Vec::new(),
-            dir: None,
-            banner: "mantención (esc para volver a baton)".to_string(),
-        })
+        let ambiente = self.flags.ambiente.clone();
+        let orders = match crate::ops::build_orders(
+            &self.project,
+            &self.config,
+            &self.plan,
+            ambiente.as_deref(),
+            req,
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                app.maint_note("no se pudo preparar");
+                app.maint_line(&e, true);
+                return app.maint_finished(MaintResult::Failed("no se ejecutó".into()));
+            }
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (project, config, plan) =
+            (self.project.clone(), self.config.clone(), self.plan.clone());
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            for o in orders {
+                let _ = tx.send(MaintMsg::Note(o.label.clone()));
+                let job = baton_exec::adhoc::Job {
+                    target: o.target,
+                    cwd: o.cwd,
+                    line: o.line,
+                    timeout: o.timeout,
+                    all_credentials: o.all_credentials,
+                };
+                let lines = tx.clone();
+                let result = baton_exec::adhoc::run(
+                    &project,
+                    &config,
+                    &plan,
+                    ambiente.as_deref(),
+                    job,
+                    &flag,
+                    move |stream, line| {
+                        // compose escribe su progreso por stderr: no es un error por eso, y los
+                        // colores de la terminal no se dibujan aquí
+                        let _ = stream;
+                        let clean = baton_core::plugin::strip_ansi(&line);
+                        if !clean.trim().is_empty() {
+                            let _ = lines.send(MaintMsg::Line(clean, false));
+                        }
+                    },
+                );
+                let done = match result {
+                    Ok(baton_exec::adhoc::Outcome::Cancelled) => Some(MaintResult::Cancelled),
+                    Ok(baton_exec::adhoc::Outcome::Exit(e)) if e.success() => None,
+                    Ok(baton_exec::adhoc::Outcome::Exit(_))
+                        if flag.load(std::sync::atomic::Ordering::Relaxed) =>
+                    {
+                        Some(MaintResult::Cancelled)
+                    }
+                    Ok(baton_exec::adhoc::Outcome::Exit(e)) => {
+                        Some(MaintResult::Failed(format!("falló ({e:?})")))
+                    }
+                    Err(e) => Some(MaintResult::Failed(format!("no se pudo ejecutar: {e}"))),
+                };
+                if let Some(done) = done {
+                    let _ = tx.send(MaintMsg::Done(done));
+                    return;
+                }
+            }
+            let _ = tx.send(MaintMsg::Done(MaintResult::Ok));
+        });
+        self.maint = Some(MaintJob { rx, cancel });
+    }
+
+    /// Pasa a la pantalla lo que dijo el hilo de la mantención.
+    fn poll_maint(&mut self, app: &mut App) {
+        let Some(job) = &self.maint else {
+            return;
+        };
+        let mut finished = false;
+        while let Ok(msg) = job.rx.try_recv() {
+            match msg {
+                MaintMsg::Note(t) => app.maint_note(&t),
+                MaintMsg::Line(t, err) => app.maint_line(&t, err),
+                MaintMsg::Done(r) => {
+                    app.maint_finished(r);
+                    finished = true;
+                }
+            }
+        }
+        if finished {
+            self.maint = None;
+        }
     }
 
     /// Muestra el historial de ejecuciones del plan (lo guardado en `state.json`).
@@ -842,7 +939,7 @@ fn sqlite_ping(
 fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let mut child = Command::new("docker")
+    let mut child = Command::new(crate::proc::container_program())
         .args(["login", registry, "-u", user, "--password-stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -972,7 +1069,13 @@ impl Driver for RunDriver {
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::OpenHistory => self.open_history(app),
-            Effect::Maintenance => return self.maintenance(app),
+            Effect::Maintenance => self.maintenance(app),
+            Effect::MaintRun(req) => self.maint_run(app, &req),
+            Effect::MaintCancel => {
+                if let Some(j) = &self.maint {
+                    j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             Effect::OpenLog(i) => self.open_log(app, i),
             Effect::PlanOp(req) => self.plan_op(app, &req),
             Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}
@@ -981,6 +1084,7 @@ impl Driver for RunDriver {
     }
 
     fn poll(&mut self, app: &mut App) {
+        self.poll_maint(app);
         let Some(h) = self.handle.as_mut() else {
             return;
         };

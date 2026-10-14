@@ -324,7 +324,7 @@ fn shortcut_items(s: &RunState) -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn log_glyph(kind: LogKind) -> &'static str {
+pub(crate) fn log_glyph(kind: LogKind) -> &'static str {
     match kind {
         LogKind::Command => "▸",
         LogKind::Success => "✓",
@@ -333,7 +333,7 @@ fn log_glyph(kind: LogKind) -> &'static str {
     }
 }
 
-fn log_style(kind: LogKind) -> Style {
+pub(crate) fn log_style(kind: LogKind) -> Style {
     match kind {
         LogKind::Command => theme::secondary(),
         LogKind::Output => Style::new(),
