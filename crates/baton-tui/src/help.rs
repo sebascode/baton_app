@@ -43,6 +43,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
                 ("b r d", "backup, rollback, dry-run"),
                 ("u", "reanudar la última ejecución"),
                 ("h l", "historial, último log"),
+                ("m", "mantención (logs, reinicios, imágenes)"),
                 ("v", "pipeline"),
                 ("p", "cambiar de plan"),
                 ("q", "salir de baton"),

@@ -101,6 +101,8 @@ baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
+baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (también con `m` en la vista del plan)
+baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
 baton db -c "select * from clientes"   # consulta una base del plan (PostgreSQL, MySQL o SQLite), solo lectura
 baton db local                # o abre una sesión interactiva con historial (\? ayuda)
 baton rollback                # deshace la última ejecución

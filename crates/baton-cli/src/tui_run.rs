@@ -326,6 +326,31 @@ impl RunDriver {
         }
     }
 
+    /// La mantención del plan: deja la pantalla y corre `baton ops` en la terminal (su menú dibuja
+    /// ahí), como "abrir shell"; al salir se vuelve a la vista del plan.
+    fn maintenance(&self, app: &mut App) -> Flow {
+        let Ok(exe) = std::env::current_exe() else {
+            app.notify("no se pudo abrir la mantención: no encuentro el ejecutable de baton");
+            return Flow::Continue;
+        };
+        let mut args = vec![
+            "-C".to_string(),
+            self.project.root.display().to_string(),
+            "ops".to_string(),
+            self.plan.name.clone(),
+        ];
+        if let Some(a) = &self.flags.ambiente {
+            args.extend(["--ambiente".to_string(), a.clone()]);
+        }
+        Flow::Shell(ShellSession {
+            program: Some(exe.display().to_string()),
+            args,
+            env: Vec::new(),
+            dir: None,
+            banner: "mantención (esc para volver a baton)".to_string(),
+        })
+    }
+
     /// Muestra el historial de ejecuciones del plan (lo guardado en `state.json`).
     fn open_history(&self, app: &mut App) {
         let state = State::load(&self.project).unwrap_or_default();
@@ -947,6 +972,7 @@ impl Driver for RunDriver {
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::OpenHistory => self.open_history(app),
+            Effect::Maintenance => return self.maintenance(app),
             Effect::OpenLog(i) => self.open_log(app, i),
             Effect::PlanOp(req) => self.plan_op(app, &req),
             Effect::TestTarget(_) | Effect::OpenPlan(_) | Effect::SaveConfig(_) => {}

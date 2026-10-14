@@ -26,9 +26,9 @@ expression: text(&buf)
 │                                                                                 │                                    │
 │                                                                                 │                                    │
 │                                                                                 │                                    │
-│                                                                                 │                                    │
 ├─────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────┤
 │ (●) Backup antes de ejecutar   (●) Rollback automático   ( ) Dry-run                                                 │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline  [?] ayuda  [enter] ejecutar     │
+│ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline  [m] mantención  [?] ayuda       │
+│ [enter] ejecutar                                                                                                     │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

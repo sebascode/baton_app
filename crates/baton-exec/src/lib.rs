@@ -1,6 +1,7 @@
 //! Ejecución de planes: preparación y validación previa, transportes y el runner, que emite
 //! `baton_core::events::RunEvent` y responde a `RunCommand`.
 
+pub mod adhoc;
 mod export;
 mod gate;
 pub mod prepare;
