@@ -185,6 +185,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-14 | **0.7.0.** `baton ops`: mantención de lo desplegado (logs, estado, reinicios, actualizar y reimagen de los servicios del plan, más tareas propias con `[[tasks]]`; tecla `m` en la vista del plan). `ctrl+z` suspende baton y `fg` lo recupera. |
 | 2026-10-14 | **0.8.0.** Soporte de podman (motor `auto`, `BATON_ENGINE` o `engine` en `[defaults]`; docker y podman conviven). La mantención (`m`) se abre dentro de la misma TUI. Baton ya no se cierra solo: pregunta antes de salir. |
 | 2026-10-15 | **0.9.0.** Configuración global (`~/.config/baton/config.toml`, o `BATON_CONFIG`) que se combina con la de cada proyecto, y `baton settings` para ver y cambiar cada valor con su origen (entorno, proyecto, global o por defecto). Nueva preferencia `[ui] confirm_exit`. |
+| 2026-10-15 | **0.10.0.** Plugins por proyecto o globales, como npm: `baton plugin add` instala en el proyecto (`baton/plugins/`, versionado con él) y `--global` en la máquina; el del proyecto gana si hay uno del mismo tipo. **Cambio:** antes `add` instalaba siempre en la máquina, ahora usa `-g` para eso. |
 
 ## Desarrollo
 
