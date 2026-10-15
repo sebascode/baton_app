@@ -225,6 +225,17 @@ La configuración global de la app y de dónde sale cada valor. El archivo globa
 .TP
 .B \-\-proyecto
 En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
+.SS baton docs [plan]
+Escribe la documentación de un plan en markdown: resumen, un diagrama \fBmermaid\fR con el orden de los pasos (los gates como rombos, las dependencias como líneas punteadas y los pasos desactivados con el borde cortado), una tabla de pasos con el detalle de cada uno (comando, timeout, reintentos, gate, rollback), las credenciales, los destinos y las tareas de mantención. Sale por la salida estándar y se puede guardar con \fB\-\-salida\fR. Está pensada para versionarse: \fBnunca incluye valores de credenciales\fR (solo su referencia \fIarchivo.env#PREFIJO\fR y el nombre del proveedor), ni rutas de \fI.baton/\fR, ni el host, el usuario o el directorio de un destino (solo su nombre y tipo, porque esos datos son de cada máquina). Lo que dice el plan, comandos incluidos, se muestra tal cual. Un nombre, una descripción o un comando con símbolos de markdown o de mermaid no rompe el documento. Un plan con errores de validación se documenta igual y sus problemas van a stderr. Sale con 2 si el plan no existe.
+.TP
+.BI \-o " archivo" ", \-\-salida " archivo
+Escribe en un archivo en vez de la salida estándar.
+.TP
+.B \-\-estado
+Agrega cómo terminó la última ejecución (por paso). Cambia con cada ejecución, por eso no va por defecto.
+.TP
+.B \-\-sin\-mermaid
+Sin el diagrama, para visores de markdown que no lo dibujan.
 .SS baton plugin list
 Lista los plugins de los dos ámbitos, el \fBproyecto\fR (\fIbaton/plugins/\fR) y el \fBglobal\fR (esta máquina), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. Si un plugin del proyecto tapa a uno global del mismo tipo, lo dice. Fuera de un proyecto solo muestra el global.
 .SS baton plugin validate ruta
