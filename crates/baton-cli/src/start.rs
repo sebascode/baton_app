@@ -3,6 +3,7 @@
 //! La vista del plan (la pantalla 1) es el centro: desde ahí se edita (`e`), se ejecuta
 //! (`enter`), se ve el pipeline (`v`) y se cambia de plan (`p`).
 
+use baton_core::tr;
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
@@ -15,13 +16,13 @@ use crate::tui_run::{Flags, RunDriver};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// "siguiente:" con los comandos alineados en una columna.
-pub fn next_steps(rows: &[(String, &str)]) -> String {
+pub fn next_steps(rows: &[(String, String)]) -> String {
     let width = rows
         .iter()
         .map(|(c, _)| c.chars().count())
         .max()
         .unwrap_or(0);
-    let mut out = String::from("siguiente:");
+    let mut out = baton_core::tr!("siguiente:");
     for (cmd, what) in rows {
         out.push_str(&format!("\n  {cmd:<width$}  {what}"));
     }
@@ -32,7 +33,13 @@ pub fn next_steps(rows: &[(String, &str)]) -> String {
 fn plan_name(given: &str) -> String {
     let name = slug(given, "plan");
     if name != given {
-        eprintln!("nombre de plan: usando '{name}' (minúsculas, números, - y _)");
+        eprintln!(
+            "{}",
+            tr!(
+                "nombre de plan: usando '{name}' (minúsculas, números, - y _)",
+                name = name
+            )
+        );
     }
     name
 }
@@ -43,27 +50,40 @@ pub fn create(project: &Project, given: &str) -> ExitCode {
     match create_plan(project, &name) {
         Ok(()) => {
             println!(
-                "plan '{name}' creado en {} (vacío)",
-                project.display_path(&project.plan_path(&name))
+                "{}",
+                baton_core::tr!(
+                    "plan '{name}' creado en {path} (vacío)",
+                    name = name,
+                    path = project.display_path(&project.plan_path(&name))
+                )
             );
             println!(
                 "\n{}",
                 next_steps(&[
                     (
                         format!("baton start {name}"),
-                        "abre el plan para agregar sus pasos"
+                        baton_core::tr!("abre el plan para agregar sus pasos")
                     ),
-                    (format!("baton run {name}"), "lo ejecuta cuando tenga pasos"),
+                    (
+                        format!("baton run {name}"),
+                        baton_core::tr!("lo ejecuta cuando tenga pasos")
+                    ),
                 ])
             );
             ExitCode::SUCCESS
         }
         Err(CreateError::AlreadyExists) => {
-            eprintln!("error: ya existe un plan '{name}' (para abrirlo: baton start {name})");
+            eprintln!(
+                "{}",
+                baton_core::tr!(
+                    "error: ya existe un plan '{name}' (para abrirlo: baton start {name})",
+                    name = name
+                )
+            );
             ExitCode::from(EXIT_USAGE)
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             ExitCode::from(EXIT_INVALID)
         }
     }
@@ -79,11 +99,15 @@ pub fn start(project: &Project, given: &str) -> ExitCode {
     if !project.plan_path(&name).exists() {
         match create_plan(project, &name) {
             Ok(()) => eprintln!(
-                "plan '{name}' creado en {} (vacío)",
-                project.display_path(&project.plan_path(&name))
+                "{}",
+                tr!(
+                    "plan '{name}' creado en {path} (vacío)",
+                    name = name,
+                    path = project.display_path(&project.plan_path(&name))
+                )
             ),
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("{}", tr!("error: {e}", e = e));
                 return ExitCode::from(EXIT_INVALID);
             }
         }
@@ -96,8 +120,17 @@ fn has_terminal() -> bool {
 }
 
 fn needs_terminal(plan: &str) -> ExitCode {
-    eprintln!("error: baton start necesita una terminal interactiva");
-    eprintln!("  para ejecutar sin terminal: baton run {plan}");
+    eprintln!(
+        "{}",
+        tr!("error: baton start necesita una terminal interactiva")
+    );
+    eprintln!(
+        "{}",
+        tr!(
+            "  para ejecutar sin terminal: baton run {plan}",
+            plan = plan
+        )
+    );
     ExitCode::from(EXIT_USAGE)
 }
 
@@ -114,7 +147,7 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     let empty = plan.steps.is_empty();
     // un ambiente inválido no impide abrir el plan (el editor sirve para arreglarlo): se avisa
     let ambiente = crate::ambiente::resolve(None, &config).unwrap_or_else(|e| {
-        eprintln!("aviso: {e}; se ignora");
+        eprintln!("{}", tr!("aviso: {e}; se ignora", e = e));
         None
     });
     let mut driver = RunDriver::new(
@@ -134,18 +167,20 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     if !empty && let Some(first) = problems.first() {
         let more = problems.len() - 1;
         let extra = if more > 0 {
-            format!(" (+{more} más)")
+            tr!(" (+{more} más)", more = more)
         } else {
             String::new()
         };
-        app.notify(&format!(
-            "el plan tiene errores, corrígelos desde el editor (e): {first}{extra}"
+        app.notify(&tr!(
+            "el plan tiene errores, corrígelos desde el editor (e): {first}{extra}",
+            first = first,
+            extra = extra
         ));
     }
     match baton_tui::demo::run_app(app, &mut driver) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             ExitCode::FAILURE
         }
     }

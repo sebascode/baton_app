@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use baton_core::events::RunOutcome;
+use baton_core::tr;
 use baton_core::{Config, Plan};
 use baton_exec::{Mode, RunInput, RunOptions, spawn};
 use baton_store::{Project, check_config, check_plan};
@@ -103,7 +104,7 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
             Some(effect) => {
                 driver.on_effect(&mut app, effect);
             }
-            None if app.in_preview() => app.notify("no hay pasos activos que ejecutar"),
+            None if app.in_preview() => app.notify(&tr!("no hay pasos activos que ejecutar")),
             None => {}
         }
         return match baton_tui::demo::run_app(app, &mut driver) {
@@ -172,7 +173,10 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
             .any(|s| s.kind == baton_core::plan::StepKind::Sql)
             && let Err(e) = baton_store::scaffold::add_db_credential(project, &plan_name)
         {
-            eprintln!("error: no se pudo agregar la credencial db: {e}");
+            eprintln!(
+                "{}",
+                tr!("error: no se pudo agregar la credencial db: {e}", e = e)
+            );
             let _ = std::fs::remove_file(project.plan_path(&plan_name));
             return ExitCode::from(EXIT_INVALID);
         }
@@ -202,35 +206,64 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         .collect();
     if !ambientes.is_empty() {
         if let Err(e) = baton_store::init::ensure_baton_dir(project) {
-            eprintln!("aviso: no se pudo crear .baton/: {e}");
+            eprintln!("{}", tr!("aviso: no se pudo crear .baton/: {e}", e = e));
         }
         for amb in &ambientes {
             if let Err(e) = std::fs::create_dir_all(project.credentials_dir().join(amb)) {
-                eprintln!("aviso: no se pudo crear el ambiente '{amb}': {e}");
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "aviso: no se pudo crear el ambiente '{amb}': {e}",
+                        amb = amb,
+                        e = e
+                    )
+                );
             }
         }
     }
 
     println!(
-        "plan '{plan_name}' creado en {}",
-        project.display_path(&project.plan_path(&plan_name))
+        "{}",
+        tr!(
+            "plan '{plan}' creado en {path}",
+            plan = plan_name,
+            path = project.display_path(&project.plan_path(&plan_name))
+        )
     );
     if steps.is_empty() {
         println!(
-            "no encontré docker-compose, Dockerfile, scripts .sh ni archivos .sql en esta carpeta: el plan quedó vacío"
+            "{}",
+            tr!(
+                "no encontré docker-compose, Dockerfile, scripts .sh ni archivos .sql en esta carpeta: el plan quedó vacío"
+            )
         );
     } else {
-        println!("armado con lo que encontré en la carpeta:");
+        println!("{}", tr!("armado con lo que encontré en la carpeta:"));
         for s in &steps {
-            let off = if s.enabled { "" } else { " (desactivado)" };
-            println!("  paso '{}': {} archivo(s){off}", s.id, s.source.0.len());
+            let off = if s.enabled {
+                String::new()
+            } else {
+                tr!(" (desactivado)")
+            };
+            println!(
+                "{}",
+                tr!(
+                    "  paso '{id}': {n} archivo(s){off}",
+                    id = s.id,
+                    n = s.source.0.len(),
+                    off = off
+                )
+            );
         }
         if steps
             .iter()
             .any(|s| s.kind == baton_core::plan::StepKind::Sql)
         {
             println!(
-                "los .sql quedaron desactivados y el plan declara una credencial db (id 'db'): actívalos si baton debe ejecutarlos y completa la conexión (host, base...) al ejecutar"
+                "{}",
+                tr!(
+                    "los .sql quedaron desactivados y el plan declara una credencial db (id 'db'): actívalos si baton debe ejecutarlos y completa la conexión (host, base...) al ejecutar"
+                )
             );
         }
         if steps
@@ -238,7 +271,10 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
             .any(|s| s.kind == baton_core::plan::StepKind::Script)
         {
             println!(
-                "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
+                "{}",
+                tr!(
+                    "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
+                )
             );
         }
         let plugin_kinds: Vec<&str> = steps
@@ -252,33 +288,43 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
                 if !hinted.contains(&(s.kind.label(), used.kind)) {
                     hinted.push((s.kind.label(), used.kind));
                     println!(
-                        "el tipo '{}' acepta la credencial '{}' (si no la declaras, usa lo que ya haya en el entorno). Para usarla, agrega al plan:\n  [[credentials]]\n  id = \"{}\"\n  kind = \"{}\"\n  ref = \"servers.env#{}\"",
-                        s.kind.label(),
-                        used.kind,
-                        used.kind,
-                        used.kind,
-                        used.kind.to_uppercase().replace('-', "_")
+                        "{}",
+                        tr!(
+                            "el tipo '{kind}' acepta la credencial '{cred}' (si no la declaras, usa lo que ya haya en el entorno). Para usarla, agrega al plan:\n  [[credentials]]\n  id = \"{cred}\"\n  kind = \"{cred}\"\n  ref = \"servers.env#{prefix}\"",
+                            kind = s.kind.label(),
+                            cred = used.kind,
+                            prefix = used.kind.to_uppercase().replace('-', "_")
+                        )
                     );
                 }
             }
         }
         if !plugin_kinds.is_empty() {
             println!(
-                "los pasos de plugins ({}) quedaron desactivados porque modifican cosas fuera de esta máquina: revisa su origen y su comando (baton plugin validate) y actívalos cuando corresponda",
-                plugin_kinds.join(", ")
+                "{}",
+                tr!(
+                    "los pasos de plugins ({kinds}) quedaron desactivados porque modifican cosas fuera de esta máquina: revisa su origen y su comando (baton plugin validate) y actívalos cuando corresponda",
+                    kinds = plugin_kinds.join(", ")
+                )
             );
         }
     }
     if !ambientes.is_empty() {
         println!(
-            "ambientes creados: {} (.baton/credentials/<ambiente>/)",
-            ambientes.join(", ")
+            "{}",
+            tr!(
+                "ambientes creados: {list} (.baton/credentials/<ambiente>/)",
+                list = ambientes.join(", ")
+            )
         );
     }
 
     let tip = init_next_steps(&plan_name, steps.is_empty());
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        println!("abriendo el plan para que lo revises (e edita los pasos, esc sale)...");
+        println!(
+            "{}",
+            tr!("abriendo el plan para que lo revises (e edita los pasos, esc sale)...")
+        );
         let code = crate::start::open(project, &plan_name, true);
         println!("{tip}");
         code
@@ -290,28 +336,28 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
 
 /// Qué hacer después de `baton init`.
 fn init_next_steps(plan: &str, empty: bool) -> String {
-    let mut rows: Vec<(String, &str)> = Vec::new();
+    let mut rows: Vec<(String, String)> = Vec::new();
     if empty {
         rows.push((
             format!("baton start {plan}"),
-            "abre el plan para agregar sus pasos",
+            tr!("abre el plan para agregar sus pasos"),
         ));
         rows.push((
-            "baton import <archivo>".to_string(),
-            "o crea otro plan desde un pipeline de GitHub, GitLab o Azure",
+            tr!("baton import <archivo>"),
+            tr!("o crea otro plan desde un pipeline de GitHub, GitLab o Azure"),
         ));
     } else {
         rows.push((
             format!("baton start {plan}"),
-            "revisa el plan y ajusta sus pasos",
+            tr!("revisa el plan y ajusta sus pasos"),
         ));
-        rows.push((format!("baton run {plan}"), "ejecuta el plan directo"));
+        rows.push((format!("baton run {plan}"), tr!("ejecuta el plan directo")));
     }
     rows.push((
         "baton config".to_string(),
-        "destinos, logs y credenciales del proyecto",
+        tr!("destinos, logs y credenciales del proyecto"),
     ));
-    rows.push(("baton".to_string(), "muestra el estado del proyecto"));
+    rows.push(("baton".to_string(), tr!("muestra el estado del proyecto")));
     format!("\n{}", crate::start::next_steps(&rows))
 }
 

@@ -60,10 +60,16 @@ fn keys_in_code() -> BTreeMap<String, String> {
     let mut keys = BTreeMap::new();
     for file in files {
         // las pruebas y este módulo mencionan las macros sin ser textos de la interfaz
-        if file.ends_with("i18n.rs") {
+        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        if name == "i18n.rs" || name.starts_with("tests") {
             continue;
         }
         let text = fs::read_to_string(&file).unwrap();
+        // lo de un `mod tests` no es texto de la interfaz
+        let text = match text.find("#[cfg(test)]\nmod ") {
+            Some(at) => text[..at].to_string(),
+            None => text,
+        };
         for marker in ["tr!(", "tk!(", "tr_dyn("] {
             let mut from = 0;
             while let Some(at) = text[from..].find(marker) {

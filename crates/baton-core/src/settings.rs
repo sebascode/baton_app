@@ -27,10 +27,10 @@ pub enum Origin {
 impl Origin {
     pub fn label(self) -> &'static str {
         match self {
-            Origin::Env => "entorno",
-            Origin::Project => "proyecto",
-            Origin::Global => "global",
-            Origin::Default => "por defecto",
+            Origin::Env => crate::tk!("entorno"),
+            Origin::Project => crate::tk!("proyecto"),
+            Origin::Global => crate::tk!("global"),
+            Origin::Default => crate::tk!("por defecto"),
         }
     }
 }
@@ -74,7 +74,7 @@ pub const KEYS: [Key; 10] = [
         name: "defaults.secrets",
         kind: Kind::Text,
         env: None,
-        default: "(ninguno)",
+        default: crate::tk!("(ninguno)"),
         help: "proveedor de secretos por defecto",
     },
     Key {
@@ -95,21 +95,21 @@ pub const KEYS: [Key; 10] = [
         name: "logs.remote",
         kind: Kind::Text,
         env: None,
-        default: "(ninguna)",
+        default: crate::tk!("(ninguna)"),
         help: "carpeta del destino donde copiar el log",
     },
     Key {
         name: "logs.retention.days",
         kind: Kind::Int,
         env: None,
-        default: "(sin límite)",
+        default: crate::tk!("(sin límite)"),
         help: "días que se conservan los logs",
     },
     Key {
         name: "logs.retention.max_size",
         kind: Kind::Text,
         env: None,
-        default: "(sin límite)",
+        default: crate::tk!("(sin límite)"),
         help: "tamaño máximo de la carpeta de logs (500MB)",
     },
     Key {
@@ -137,7 +137,10 @@ pub fn parse_value(k: &Key, raw: &str) -> Result<Value, String> {
     match k.kind {
         Kind::Text => {
             if raw.trim().is_empty() {
-                Err(format!("{}: el valor no puede estar vacío", k.name))
+                Err(crate::tr!(
+                    "{key}: el valor no puede estar vacío",
+                    key = k.name
+                ))
             } else {
                 Ok(Value::String(raw.to_string()))
             }
@@ -145,22 +148,33 @@ pub fn parse_value(k: &Key, raw: &str) -> Result<Value, String> {
         Kind::Bool => match raw.to_lowercase().as_str() {
             "true" | "si" | "sí" | "s" | "yes" | "y" | "1" => Ok(Value::Boolean(true)),
             "false" | "no" | "n" | "0" => Ok(Value::Boolean(false)),
-            _ => Err(format!("{}: se espera true o false, no '{raw}'", k.name)),
+            _ => Err(crate::tr!(
+                "{key}: se espera true o false, no '{raw}'",
+                key = k.name,
+                raw = raw
+            )),
         },
         Kind::Int => raw
             .parse::<u32>()
             .ok()
             .filter(|n| *n > 0)
             .map(|n| Value::Integer(i64::from(n)))
-            .ok_or_else(|| format!("{}: se espera un número mayor que 0, no '{raw}'", k.name)),
+            .ok_or_else(|| {
+                crate::tr!(
+                    "{key}: se espera un número mayor que 0, no '{raw}'",
+                    key = k.name,
+                    raw = raw
+                )
+            }),
         Kind::Choice(options) => {
             if options.contains(&raw) {
                 Ok(Value::String(raw.to_string()))
             } else {
-                Err(format!(
-                    "{}: '{raw}' no es válido (opciones: {})",
-                    k.name,
-                    options.join(", ")
+                Err(crate::tr!(
+                    "{key}: '{raw}' no es válido (opciones: {options})",
+                    key = k.name,
+                    raw = raw,
+                    options = options.join(", ")
                 ))
             }
         }
@@ -173,13 +187,18 @@ pub fn check_global(table: &Table) -> Vec<Issue> {
     for (name, value) in table {
         if !GLOBAL_SECTIONS.contains(&name.as_str()) {
             let why = match name.as_str() {
-                "targets" => "los destinos son de cada proyecto (.baton/config.toml)",
-                "version" => "la versión es de la configuración de cada proyecto",
-                _ => "no es una sección de la configuración global",
+                "targets" => crate::tr!("los destinos son de cada proyecto (.baton/config.toml)"),
+                "version" => crate::tr!("la versión es de la configuración de cada proyecto"),
+                _ => crate::tr!("no es una sección de la configuración global"),
             };
             out.push(Issue::error(
                 vec![Seg::Key(name.clone())],
-                format!("'{name}': {why} (admite: {})", GLOBAL_SECTIONS.join(", ")),
+                crate::tr!(
+                    "'{name}': {why} (admite: {list})",
+                    name = name,
+                    why = why,
+                    list = GLOBAL_SECTIONS.join(", ")
+                ),
             ));
             continue;
         }
@@ -189,15 +208,17 @@ pub fn check_global(table: &Table) -> Vec<Issue> {
             for k in defaults.keys() {
                 if !GLOBAL_DEFAULTS.contains(&k.as_str()) {
                     let why = if k == "ambiente" {
-                        "el ambiente no se fija globalmente: se elige en cada ejecución"
+                        crate::tr!("el ambiente no se fija globalmente: se elige en cada ejecución")
                     } else {
-                        "no es una clave global"
+                        crate::tr!("no es una clave global")
                     };
                     out.push(Issue::error(
                         vec![Seg::Key("defaults".into()), Seg::Key(k.clone())],
-                        format!(
-                            "defaults.{k}: {why} (admite: {})",
-                            GLOBAL_DEFAULTS.join(", ")
+                        crate::tr!(
+                            "defaults.{k}: {why} (admite: {list})",
+                            k = k,
+                            why = why,
+                            list = GLOBAL_DEFAULTS.join(", ")
                         ),
                     ));
                 }
@@ -237,8 +258,8 @@ pub fn lookup<'a>(table: &'a Table, dotted: &str) -> Option<&'a Value> {
 /// La configuración efectiva: global y proyecto combinados. Los textos que no existen cuentan
 /// como vacíos. El error nombra qué texto no se pudo leer.
 pub fn effective(global: Option<&str>, project: Option<&str>) -> Result<Config, String> {
-    let g = parse_table(global, "la configuración global")?;
-    let p = parse_table(project, "la configuración del proyecto")?;
+    let g = parse_table(global, &crate::tr!("la configuración global"))?;
+    let p = parse_table(project, &crate::tr!("la configuración del proyecto"))?;
     merge(&g, &p)
         .try_into()
         .map_err(|e: toml::de::Error| e.message().to_string())
@@ -249,7 +270,7 @@ pub fn parse_table(text: Option<&str>, what: &str) -> Result<Table, String> {
         None => Ok(Table::new()),
         Some(t) => t
             .parse::<Table>()
-            .map_err(|e| format!("{what}: {}", e.message())),
+            .map_err(|e| crate::tr!("{what}: {msg}", what = what, msg = e.message())),
     }
 }
 

@@ -121,7 +121,7 @@ fn io_diag(path: &Path, e: &io::Error) -> Diagnostic {
         file: path.display().to_string(),
         position: None,
         severity: Severity::Error,
-        message: format!("no se pudo leer: {e}"),
+        message: baton_core::tr!("no se pudo leer: {e}", e = e),
     }
 }
 
@@ -180,7 +180,7 @@ pub fn check_config(project: &Project) -> Checked<Config> {
                     file: gshown,
                     position: e.span().map(|s| position_of_offset(global_text, s.start)),
                     severity: Severity::Error,
-                    message: format!("configuración global: {}", e.message()),
+                    message: baton_core::tr!("configuración global: {msg}", msg = e.message()),
                 }],
             };
         }
@@ -210,7 +210,7 @@ pub fn check_config(project: &Project) -> Checked<Config> {
                     file: gshown,
                     position: None,
                     severity: Severity::Error,
-                    message: format!("configuración global: {msg}"),
+                    message: baton_core::tr!("configuración global: {msg}", msg = msg),
                 }],
             };
         }
@@ -241,7 +241,7 @@ fn global_diag(file: &str, text: &str, i: &Issue) -> Diagnostic {
         file: file.to_string(),
         position: locate(text, &i.path),
         severity: i.severity,
-        message: format!("configuración global: {}", i.message),
+        message: baton_core::tr!("configuración global: {msg}", msg = i.message),
     }
 }
 
@@ -264,12 +264,20 @@ pub enum SetError {
 impl std::fmt::Display for SetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SetError::Io(e) => write!(f, "no se pudo guardar: {e}"),
-            SetError::Parse(e) => write!(f, "el archivo actual no se puede leer: {e}"),
-            SetError::Invalid(e) => write!(f, "no se guardó: {e}"),
+            SetError::Io(e) => write!(f, "{}", baton_core::tr!("no se pudo guardar: {e}", e = e)),
+            SetError::Parse(e) => write!(
+                f,
+                "{}",
+                baton_core::tr!("el archivo actual no se puede leer: {e}", e = e)
+            ),
+            SetError::Invalid(e) => write!(f, "{}", baton_core::tr!("no se guardó: {e}", e = e)),
             SetError::NoPlace => write!(
                 f,
-                "no se sabe dónde guardar la configuración global (define HOME o {CONFIG_ENV})"
+                "{}",
+                baton_core::tr!(
+                    "no se sabe dónde guardar la configuración global (define HOME o {env})",
+                    env = CONFIG_ENV
+                )
             ),
         }
     }
@@ -294,8 +302,9 @@ pub fn set_key(
             (p, other)
         }
         Scope::Project => {
-            let pr = project
-                .ok_or_else(|| SetError::Invalid("no hay un proyecto: usa --global".to_string()))?;
+            let pr = project.ok_or_else(|| {
+                SetError::Invalid(baton_core::tr!("no hay un proyecto: usa --global"))
+            })?;
             let other = gpath
                 .as_deref()
                 .and_then(|g| read_optional(g).ok().flatten());
@@ -317,7 +326,11 @@ pub fn set_key(
             for p in parents {
                 let item = table.entry(p).or_insert(toml_edit::table());
                 table = item.as_table_mut().ok_or_else(|| {
-                    SetError::Parse(format!("'{p}' no es una tabla en {}", path.display()))
+                    SetError::Parse(baton_core::tr!(
+                        "'{name}' no es una tabla en {path}",
+                        name = p,
+                        path = path.display()
+                    ))
                 })?;
             }
             let mut item = value(to_edit_value(v));
@@ -373,9 +386,9 @@ pub fn set_key(
         .parse()
         .map_err(|e: toml::de::Error| SetError::Invalid(e.message().to_string()))?;
     if settings::lookup(&back, key.name) != new {
-        return Err(SetError::Invalid(
-            "el resultado no coincidía con lo pedido".to_string(),
-        ));
+        return Err(SetError::Invalid(baton_core::tr!(
+            "el resultado no coincidía con lo pedido"
+        )));
     }
 
     if let Some(dir) = path.parent() {

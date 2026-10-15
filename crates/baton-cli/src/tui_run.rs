@@ -4,6 +4,7 @@
 use baton_core::compose::Service;
 use baton_core::events::{LogKind, RunCommand, RunEvent, RunOutcome};
 use baton_core::plan::{CredentialKind, Plan, Step};
+use baton_core::tr;
 use baton_core::{Config, Issue, Requirement};
 use baton_exec::{RunHandle, RunInput, RunOptions, scan_compose, spawn};
 use baton_store::history;
@@ -168,15 +169,15 @@ impl RunDriver {
             match edited {
                 Ok(steps) if steps == self.plan.steps => {}
                 _ => {
-                    return app.notify(
-                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de plan",
-                    );
+                    return app.notify(&tr!(
+                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de plan"
+                    ));
                 }
             }
         }
         let checked = check_plan(&self.project, name, Some(&self.config));
         let Some(plan) = checked.value else {
-            return app.notify(&format!("no se pudo leer el plan '{name}'"));
+            return app.notify(&tr!("no se pudo leer el plan '{name}'", name = name));
         };
         self.plan = plan;
         *app = self.initial_app();
@@ -197,15 +198,17 @@ impl RunDriver {
             PlanRequest::Copy { .. } => false,
         };
         if matches!(req, PlanRequest::Delete { .. }) && touches_current {
-            return app.notify("no se puede eliminar el plan abierto: cambia a otro plan primero");
+            return app.notify(&tr!(
+                "no se puede eliminar el plan abierto: cambia a otro plan primero"
+            ));
         }
         if touches_current && let Some(edited) = app.editor_steps() {
             match edited {
                 Ok(steps) if steps == self.plan.steps => {}
                 _ => {
-                    return app.notify(
-                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de renombrar el plan",
-                    );
+                    return app.notify(&tr!(
+                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de renombrar el plan"
+                    ));
                 }
             }
         }
@@ -294,9 +297,9 @@ impl RunDriver {
             errors.push(e.to_string());
         }
         if !errors.is_empty() {
-            app.notify(&format!(
-                "no se pudieron guardar algunas credenciales: {}",
-                errors.join("; ")
+            app.notify(&tr!(
+                "no se pudieron guardar algunas credenciales: {list}",
+                list = errors.join("; ")
             ));
         }
     }
@@ -355,7 +358,7 @@ impl RunDriver {
     fn maint_run(&mut self, app: &mut App, req: &baton_tui::maint_view::MaintRequest) {
         use baton_tui::maint_view::MaintResult;
         if self.maint.is_some() {
-            return app.notify("ya hay algo en curso");
+            return app.notify(&tr!("ya hay algo en curso"));
         }
         let ambiente = self.flags.ambiente.clone();
         let orders = match crate::ops::build_orders(
@@ -367,9 +370,9 @@ impl RunDriver {
         ) {
             Ok(o) => o,
             Err(e) => {
-                app.maint_note("no se pudo preparar");
+                app.maint_note(&tr!("no se pudo preparar"));
                 app.maint_line(&e, true);
-                return app.maint_finished(MaintResult::Failed("no se ejecutó".into()));
+                return app.maint_finished(MaintResult::Failed(tr!("no se ejecutó")));
             }
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -413,10 +416,11 @@ impl RunDriver {
                     {
                         Some(MaintResult::Cancelled)
                     }
-                    Ok(baton_exec::adhoc::Outcome::Exit(e)) => {
-                        Some(MaintResult::Failed(format!("falló ({e:?})")))
-                    }
-                    Err(e) => Some(MaintResult::Failed(format!("no se pudo ejecutar: {e}"))),
+                    Ok(baton_exec::adhoc::Outcome::Exit(e)) => Some(MaintResult::Failed(tr!(
+                        "falló ({e})",
+                        e = format!("{e:?}")
+                    ))),
+                    Err(e) => Some(MaintResult::Failed(tr!("no se pudo ejecutar: {e}", e = e))),
                 };
                 if let Some(done) = done {
                     let _ = tx.send(MaintMsg::Done(done));
@@ -461,10 +465,10 @@ impl RunDriver {
         let state = State::load(&self.project).unwrap_or_default();
         let runs = state.runs(&self.plan.name);
         let Some(run) = runs.get(index) else {
-            return app.notify("esa ejecución ya no está en el historial");
+            return app.notify(&tr!("esa ejecución ya no está en el historial"));
         };
         let Some(path) = &run.log_path else {
-            return app.notify("esa ejecución no guardó log (¿fue un dry-run?)");
+            return app.notify(&tr!("esa ejecución no guardó log (¿fue un dry-run?)"));
         };
         let full = self.project.root.join(path);
         match read_log(&full) {
@@ -473,7 +477,7 @@ impl RunDriver {
                 log.lines,
                 log.note,
             )),
-            Err(e) => app.notify(&format!("no se pudo leer {path}: {e}")),
+            Err(e) => app.notify(&tr!("no se pudo leer {path}: {e}", path = path, e = e)),
         }
     }
 
@@ -483,15 +487,15 @@ impl RunDriver {
             Ok(saved) => {
                 let checked = check_plan(&self.project, &self.plan.name, Some(&self.config));
                 let Some(plan) = checked.value else {
-                    app.notify("se guardó, pero el plan no se pudo volver a leer");
+                    app.notify(&tr!("se guardó, pero el plan no se pudo volver a leer"));
                     return;
                 };
                 self.plan = plan;
                 let shown = self.project.display_path(&saved.path);
                 let message = if saved.changed {
-                    format!("guardado en {shown}")
+                    tr!("guardado en {path}", path = shown)
                 } else {
-                    "sin cambios que guardar".to_string()
+                    tr!("sin cambios que guardar")
                 };
                 app.apply_saved_plan(
                     &self.plan,
@@ -518,13 +522,17 @@ impl RunDriver {
             .collect();
         let mut files = expand_sources(&self.project.root, patterns);
         if files.is_empty() {
-            app.notify("el origen del paso no coincide con ningún archivo: no hay qué escanear");
+            app.notify(&tr!(
+                "el origen del paso no coincide con ningún archivo: no hay qué escanear"
+            ));
             return;
         }
         // solo un compose define servicios: un script (u otro archivo) no se lee como tal
         files.retain(|f| f.extension().is_some_and(|e| e == "yml" || e == "yaml"));
         if files.is_empty() {
-            app.notify("este origen no tiene archivos compose: no hay servicios que escanear");
+            app.notify(&tr!(
+                "este origen no tiene archivos compose: no hay servicios que escanear"
+            ));
             return;
         }
         let scan = scan_compose(&self.project, &files);
@@ -533,7 +541,7 @@ impl RunDriver {
             .iter()
             .map(|s: &baton_exec::ScannedService| ScannedService::from(&s.service as &Service))
             .collect();
-        app.gate_scan_result(&found, "ahora");
+        app.gate_scan_result(&found, &tr!("ahora"));
         if !scan.errors.is_empty() {
             app.notify(&scan.errors.join("; "));
         }
@@ -578,12 +586,12 @@ impl RunDriver {
         match failure {
             Some(msg) => app.step_test_result(false, &msg),
             None => {
-                let noun = if commands == 1 {
-                    "comando resuelto"
+                let msg = if commands == 1 {
+                    tr!("dry-run ok · {n} comando resuelto", n = commands)
                 } else {
-                    "comandos resueltos"
+                    tr!("dry-run ok · {n} comandos resueltos", n = commands)
                 };
-                app.step_test_result(true, &format!("dry-run ok · {commands} {noun}"));
+                app.step_test_result(true, &msg);
             }
         }
     }
@@ -650,15 +658,20 @@ fn run_context(config: &Config, ambiente: Option<&str>) -> String {
     let mut parts = Vec::new();
     if let Some(a) = ambiente {
         parts.push(if config.is_protected(a) {
-            format!("{a} (protegido)")
+            tr!("{name} (protegido)", name = a)
         } else {
             a.to_string()
         });
     }
     let name = config.default_target();
     parts.push(match config.targets.get(name) {
-        Some(Target::Ssh(t)) => format!("{name} ssh {}@{}", t.user, t.host),
-        Some(Target::Context(_)) => format!("{name} docker context"),
+        Some(Target::Ssh(t)) => tr!(
+            "{name} ssh {user}@{host}",
+            name = name,
+            user = t.user,
+            host = t.host
+        ),
+        Some(Target::Context(_)) => tr!("{name} docker context", name = name),
         _ => name.to_string(),
     });
     parts.join(" · ")
@@ -709,14 +722,14 @@ fn test_connection(
             let (registry, user, token) =
                 (value_of("REGISTRY"), value_of("USER"), value_of("TOKEN"));
             if registry.is_empty() || user.is_empty() || token.is_empty() {
-                return (false, "faltan datos para probar".to_string());
+                return (false, tr!("faltan datos para probar"));
             }
             match docker_login(&registry, &user, &token) {
-                Ok(()) => (true, format!("conectado a {registry}")),
+                Ok(()) => (true, tr!("conectado a {registry}", registry = registry)),
                 Err(e) => (false, e),
             }
         }
-        CredentialKind::Ssh => (false, "probar conexión ssh llega en el hito f".to_string()),
+        CredentialKind::Ssh => (false, tr!("probar conexión ssh llega en el hito f")),
         CredentialKind::Db => {
             let resolved: Vec<(String, String)> = baton_core::fields_for(kind)
                 .iter()
@@ -743,7 +756,7 @@ fn test_connection(
         }
         CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
         // `git`, `otro` y los que añade un plugin (no hay forma genérica de probarlos)
-        _ => (false, "sin prueba automática todavía".to_string()),
+        _ => (false, tr!("sin prueba automática todavía")),
     }
 }
 
@@ -780,7 +793,7 @@ fn db_ping(
 ) -> (bool, String) {
     let conn = baton_core::sql::pg_conn(reference, resolved);
     if !conn.env.iter().any(|(n, _)| n == "PGUSER") {
-        return (false, "falta el usuario para probar".to_string());
+        return (false, tr!("falta el usuario para probar"));
     }
     let (default_program, args) = baton_core::sql::pg_ping_command(&conn);
     let program = program.map_or_else(
@@ -793,21 +806,22 @@ fn db_ping(
         Err(Unfinished::NotFound) => (
             false,
             if conn.container.is_some() {
-                "no se encontró docker en el PATH".to_string()
+                tr!("no se encontró docker en el PATH")
             } else {
-                "no se encontró psql en el PATH (o define un contenedor para usar docker exec)"
-                    .to_string()
+                tr!("no se encontró psql en el PATH (o define un contenedor para usar docker exec)")
             },
         ),
         Err(Unfinished::TimedOut) => (
             false,
-            format!("la base no respondió en {} s", timeout.as_secs().max(1)),
+            tr!(
+                "la base no respondió en {n} s",
+                n = timeout.as_secs().max(1)
+            ),
         ),
         Err(Unfinished::Other(e)) => (false, e),
         Ok(done) if done.ok => (
             true,
-            baton_core::sql::pg_ping_summary(&done.stdout)
-                .unwrap_or_else(|| "conectado".to_string()),
+            baton_core::sql::pg_ping_summary(&done.stdout).unwrap_or_else(|| tr!("conectado")),
         ),
         Ok(done) => {
             let passwords: Vec<String> = conn
@@ -817,7 +831,7 @@ fn db_ping(
                 .map(|(_, v)| v.clone())
                 .collect();
             let stderr = baton_core::mask::redact(&done.stderr, &passwords);
-            let line = first_line(&stderr, "la conexión falló");
+            let line = first_line(&stderr, &tr!("la conexión falló"));
             (false, line.trim_start_matches("psql: error: ").to_string())
         }
     }
@@ -833,7 +847,7 @@ fn mysql_ping(
 ) -> (bool, String) {
     let conn = baton_core::sql::my_conn(reference, resolved);
     if !conn.args.contains(&"-u".to_string()) {
-        return (false, "falta el usuario para probar".to_string());
+        return (false, tr!("falta el usuario para probar"));
     }
     let (default_program, args) = baton_core::sql::mysql_ping_command(&conn);
     let program = program.map_or_else(
@@ -844,21 +858,24 @@ fn mysql_ping(
         Err(Unfinished::NotFound) => (
             false,
             if conn.container.is_some() {
-                "no se encontró docker en el PATH".to_string()
+                tr!("no se encontró docker en el PATH")
             } else {
-                "no se encontró mysql en el PATH (o define un contenedor para usar docker exec)"
-                    .to_string()
+                tr!(
+                    "no se encontró mysql en el PATH (o define un contenedor para usar docker exec)"
+                )
             },
         ),
         Err(Unfinished::TimedOut) => (
             false,
-            format!("la base no respondió en {} s", timeout.as_secs().max(1)),
+            tr!(
+                "la base no respondió en {n} s",
+                n = timeout.as_secs().max(1)
+            ),
         ),
         Err(Unfinished::Other(e)) => (false, e),
         Ok(done) if done.ok => (
             true,
-            baton_core::sql::mysql_ping_summary(&done.stdout)
-                .unwrap_or_else(|| "conectado".to_string()),
+            baton_core::sql::mysql_ping_summary(&done.stdout).unwrap_or_else(|| tr!("conectado")),
         ),
         Ok(done) => {
             let passwords: Vec<String> = conn.env.iter().map(|(_, v)| v.clone()).collect();
@@ -869,7 +886,10 @@ fn mysql_ping(
                 .lines()
                 .map(str::trim)
                 .find(|l| l.starts_with("ERROR"))
-                .map_or_else(|| first_line(&stderr, "la conexión falló"), str::to_string);
+                .map_or_else(
+                    || first_line(&stderr, &tr!("la conexión falló")),
+                    str::to_string,
+                );
             (false, line)
         }
     }
@@ -885,7 +905,7 @@ fn sqlite_ping(
     timeout: std::time::Duration,
 ) -> (bool, String) {
     if file.is_empty() {
-        return (false, "falta el archivo para probar".to_string());
+        return (false, tr!("falta el archivo para probar"));
     }
     let expanded = match file.strip_prefix("~/") {
         Some(rest) => std::env::var_os("HOME").map_or_else(
@@ -897,10 +917,13 @@ fn sqlite_ping(
     let path = root.join(expanded);
     if !path.exists() {
         return match path.parent().filter(|p| !p.exists()) {
-            Some(dir) => (false, format!("no existe la carpeta {}", dir.display())),
+            Some(dir) => (
+                false,
+                tr!("no existe la carpeta {path}", path = dir.display()),
+            ),
             None => (
                 true,
-                "el archivo no existe todavía: sqlite3 lo creará al ejecutar".to_string(),
+                tr!("el archivo no existe todavía: sqlite3 lo creará al ejecutar"),
             ),
         };
     }
@@ -910,10 +933,13 @@ fn sqlite_ping(
         |p| p.as_os_str().to_owned(),
     );
     match run_limited(&program, &args, &[], timeout) {
-        Err(Unfinished::NotFound) => (false, "no se encontró sqlite3 en el PATH".to_string()),
+        Err(Unfinished::NotFound) => (false, tr!("no se encontró sqlite3 en el PATH")),
         Err(Unfinished::TimedOut) => (
             false,
-            format!("el archivo no respondió en {} s", timeout.as_secs().max(1)),
+            tr!(
+                "el archivo no respondió en {n} s",
+                n = timeout.as_secs().max(1)
+            ),
         ),
         Err(Unfinished::Other(e)) => (false, e),
         Ok(done) if done.ok => {
@@ -925,12 +951,17 @@ fn sqlite_ping(
                 .map_or_else(|| file.to_string(), |n| n.to_string_lossy().into_owned());
             (
                 true,
-                format!("conectado a {name} (SQLite {version}, {objects} objetos)"),
+                tr!(
+                    "conectado a {name} (SQLite {version}, {objects} objetos)",
+                    name = name,
+                    version = version,
+                    objects = objects
+                ),
             )
         }
         Ok(done) => (
             false,
-            first_line(&done.stderr, "no se pudo abrir el archivo")
+            first_line(&done.stderr, &tr!("no se pudo abrir el archivo"))
                 .trim_start_matches("Error: ")
                 .to_string(),
         ),
@@ -947,18 +978,18 @@ fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => "no se encontró docker en el PATH".to_string(),
-            _ => format!("no se pudo ejecutar docker: {e}"),
+            std::io::ErrorKind::NotFound => tr!("no se encontró docker en el PATH"),
+            _ => tr!("no se pudo ejecutar docker: {e}", e = e),
         })?;
     child
         .stdin
         .take()
         .expect("stdin es piped")
         .write_all(token.as_bytes())
-        .map_err(|e| format!("no se pudo enviar el token: {e}"))?;
+        .map_err(|e| tr!("no se pudo enviar el token: {e}", e = e))?;
     let out = child
         .wait_with_output()
-        .map_err(|e| format!("no se pudo esperar a docker: {e}"))?;
+        .map_err(|e| tr!("no se pudo esperar a docker: {e}", e = e))?;
     if out.status.success() {
         return Ok(());
     }
@@ -967,8 +998,7 @@ fn docker_login(registry: &str, user: &str, token: &str) -> Result<(), String> {
     Err(stderr
         .lines()
         .next_back()
-        .unwrap_or("docker login falló")
-        .to_string())
+        .map_or_else(|| tr!("docker login falló"), str::to_string))
 }
 
 fn describe_issues(issues: &[Issue]) -> String {
@@ -978,9 +1008,9 @@ fn describe_issues(issues: &[Issue]) -> String {
         .map(|i| format!("{}: {}", i.path_string(), i.message))
         .collect();
     let more = issues.len().saturating_sub(3);
-    let mut out = format!("no se guardó: {}", lines.join("; "));
+    let mut out = tr!("no se guardó: {list}", list = lines.join("; "));
     if more > 0 {
-        out.push_str(&format!(" (+{more} más)"));
+        out.push_str(&tr!(" (+{n} más)", n = more));
     }
     out
 }
@@ -1014,9 +1044,11 @@ fn shell_session(
             let access = baton_exec::ssh_access(project, config, ambiente, ssh, bastion);
             let dir = ssh.remote_dir.clone().unwrap_or_else(|| ".".to_string());
             ShellSession {
-                banner: format!(
-                    "shell en {}:{dir}, destino '{name}' (escribe exit para volver a baton)",
-                    access.destination()
+                banner: tr!(
+                    "shell en {dest}:{dir}, destino '{name}' (escribe exit para volver a baton)",
+                    dest = access.destination(),
+                    dir = dir,
+                    name = name
                 ),
                 program: Some("ssh".to_string()),
                 args: access.shell_args(&dir),
@@ -1025,9 +1057,10 @@ fn shell_session(
             }
         }
         Some(Target::Context(c)) => ShellSession {
-            banner: format!(
-                "shell local con DOCKER_CONTEXT={} (destino '{name}'; escribe exit para volver a baton)",
-                c.context
+            banner: tr!(
+                "shell local con DOCKER_CONTEXT={context} (destino '{name}'; escribe exit para volver a baton)",
+                context = c.context,
+                name = name
             ),
             env: vec![("DOCKER_CONTEXT".to_string(), c.context.clone())],
             ..local()
@@ -1065,7 +1098,7 @@ impl Driver for RunDriver {
             Effect::Rescan => self.rescan(app),
             Effect::TestStep(pos) => self.test_step(app, pos),
             Effect::Edit(_) | Effect::AddGate(_) => {
-                app.notify("no se pudo abrir el editor de pasos");
+                app.notify(&tr!("no se pudo abrir el editor de pasos"));
             }
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
