@@ -6,16 +6,18 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use baton_core::{tk, tr};
+
 use crate::run::{Phase, RunState};
 use crate::theme;
 use crate::widgets::{self, fmt_clock, frame, hsep, truncate};
 
 const SHORTCUTS: [(&str, &str); 5] = [
-    ("↑↓", "elegir"),
-    ("1-9", "directo"),
-    ("enter", "confirmar"),
-    ("l", "ver log"),
-    ("v", "pipeline"),
+    ("↑↓", tk!("elegir")),
+    ("1-9", tk!("directo")),
+    ("enter", tk!("confirmar")),
+    ("l", tk!("ver log")),
+    ("v", tk!("pipeline")),
 ];
 
 pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
@@ -24,8 +26,8 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     };
     let step = s.current.and_then(|i| s.rows.get(i).map(|r| (i, r)));
     let title = match step {
-        Some((i, r)) => format!("✗ Paso {} falló · {}", i + 1, r.info.name),
-        None => "✗ Un paso falló".to_string(),
+        Some((i, r)) => tr!("✗ Paso {n} falló · {name}", n = i + 1, name = r.info.name),
+        None => tr!("✗ Un paso falló"),
     };
     let red = Style::new().fg(theme::ERR);
     let inner = frame(
@@ -82,12 +84,12 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     .render(Rect::new(boxed.x + 2, y, text_w as u16, 1), buf);
     if hidden > 0 {
         y += 1;
-        let noun = if hidden == 1 {
-            "línea anterior"
+        let more = if hidden == 1 {
+            tr!("  … {n} línea anterior", n = hidden)
         } else {
-            "líneas anteriores"
+            tr!("  … {n} líneas anteriores", n = hidden)
         };
-        Line::from(Span::styled(format!("  … {hidden} {noun}"), theme::muted()))
+        Line::from(Span::styled(more, theme::muted()))
             .render(Rect::new(boxed.x + 2, y, text_w as u16, 1), buf);
     }
     for line in tail {
@@ -102,7 +104,7 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     // Menú.
     let sep_menu = boxed.bottom() + 1;
     hsep(buf, area, sep_menu, theme::border());
-    Line::from(Span::styled("¿Qué quieres hacer?", theme::secondary()))
+    Line::from(Span::styled(tr!("¿Qué quieres hacer?"), theme::secondary()))
         .render(Rect::new(x, sep_menu + 1, w, 1), buf);
     for (i, opt) in options.iter().enumerate() {
         let y = sep_menu + 2 + i as u16;
@@ -141,12 +143,12 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
     hsep(buf, area, sep_low, theme::border());
     let bar = Rect::new(inner.x + 1, sc_y, content_w, sc_h);
     if s.quit_confirm {
-        let prompt = "¿Abortar y guardar el estado? ";
+        let prompt = tr!("¿Abortar y guardar el estado? ");
         let pw = prompt.chars().count() as u16;
-        Line::from(Span::styled(prompt, Style::new().fg(theme::WARN)))
+        Line::from(Span::styled(prompt.clone(), Style::new().fg(theme::WARN)))
             .render(Rect::new(bar.x, bar.y, pw.min(bar.width), 1), buf);
         let rest = Rect::new(bar.x + pw, bar.y, bar.width.saturating_sub(pw), bar.height);
-        widgets::render_shortcuts(buf, rest, &[("s", "sí"), ("n", "no")]);
+        widgets::render_shortcuts(buf, rest, &[("s", tk!("sí")), ("n", tk!("no"))]);
     } else {
         widgets::render_shortcuts(buf, bar, &SHORTCUTS);
     }

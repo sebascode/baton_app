@@ -2,6 +2,7 @@
 
 use baton_core::plan::{Check, CheckKind, Condition, Gate, GateMode};
 use baton_core::units::{Dur, format_duration};
+use baton_core::{tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -14,7 +15,9 @@ use crate::theme;
 use crate::widgets::{self, frame, hsep, pad, spans_width, truncate};
 
 /// Pregunta al pedir quitar el gate.
-pub(crate) const REMOVE_PROMPT: &str = "¿Quitar el gate de este paso? Se pierden sus checks.";
+pub(crate) fn remove_prompt() -> String {
+    tr!("¿Quitar el gate de este paso? Se pierden sus checks.")
+}
 
 const MODE_MANUAL: usize = 0;
 const COND_AT_LEAST: usize = 1;
@@ -58,9 +61,9 @@ impl From<&baton_core::compose::Service> for ScannedService {
     fn from(svc: &baton_core::compose::Service) -> ScannedService {
         let c = svc.inferred_check();
         let target = match c.kind {
-            CheckKind::Healthcheck => "definido en compose".to_string(),
+            CheckKind::Healthcheck => tr!("definido en compose"),
             CheckKind::Http => c.url.clone().unwrap_or_default(),
-            _ => "sin puertos · contenedor arriba 30s".to_string(),
+            _ => tr!("sin puertos · contenedor arriba 30s"),
         };
         ScannedService {
             name: svc.name.clone(),
@@ -75,10 +78,13 @@ impl GateRow {
         let target = match c.kind {
             CheckKind::Http => RowTarget::Edit(TextField::new(c.url.as_deref().unwrap_or(""))),
             CheckKind::Command => RowTarget::Edit(TextField::new(c.run.as_deref().unwrap_or(""))),
-            CheckKind::Healthcheck => RowTarget::Fixed("definido en compose".into()),
+            CheckKind::Healthcheck => RowTarget::Fixed(tr!("definido en compose")),
             CheckKind::Running => RowTarget::Fixed(match c.min_up {
-                Some(d) => format!("contenedor arriba {}", format_duration(d.as_duration())),
-                None => "contenedor arriba 30s".into(),
+                Some(d) => tr!(
+                    "contenedor arriba {time}",
+                    time = format_duration(d.as_duration())
+                ),
+                None => tr!("contenedor arriba 30s"),
             }),
         };
         let extra = c.service.is_none();
@@ -213,29 +219,37 @@ impl GateState {
         GateState {
             step_name: step_name.into(),
             mode: Field::choice(
-                "modo",
-                &[("manual", false), ("auto por servicio", false)],
-                if auto { "auto por servicio" } else { "manual" },
+                tk!("modo"),
+                &[(tk!("manual"), false), (tk!("auto por servicio"), false)],
+                if auto {
+                    tk!("auto por servicio")
+                } else {
+                    tk!("manual")
+                },
             ),
             condition: Field::choice(
-                "condición",
+                tk!("condición"),
                 &[
-                    ("todos pasan", false),
-                    ("al menos N", false),
-                    ("críticos pasan", false),
+                    (tk!("todos pasan"), false),
+                    (tk!("al menos N"), false),
+                    (tk!("críticos pasan"), false),
                 ],
-                "todos pasan",
+                tk!("todos pasan"),
             ),
             at_least: None,
             scan_source: scan_source.into(),
-            scanned: "sin escanear".into(),
+            scanned: tr!("sin escanear"),
             rows: Vec::new(),
             cursor: 0,
             editing: false,
-            timeout: Field::text("timeout", "60s").width(9),
-            attempts: Field::number("intentos", "6").width(7),
-            parallel: Field::toggle("", "en paralelo", true),
-            rescan: Field::toggle("al ejecutar", "re-escanear antes de correr el gate", true),
+            timeout: Field::text(tk!("timeout"), "60s").width(9),
+            attempts: Field::number(tk!("intentos"), "6").width(7),
+            parallel: Field::toggle("", tk!("en paralelo"), true),
+            rescan: Field::toggle(
+                tk!("al ejecutar"),
+                tk!("re-escanear antes de correr el gate"),
+                true,
+            ),
             focus: GateFocus::Table,
             notice: None,
             removable: true,
@@ -248,9 +262,9 @@ impl GateState {
     pub fn from_gate(step_name: &str, gate: &Gate, scan_source: &str) -> GateState {
         let mut g = GateState::new(step_name, gate.mode == GateMode::Auto, scan_source);
         let cond = match gate.condition {
-            Condition::All => "todos pasan",
-            Condition::AtLeast => "al menos N",
-            Condition::Critical => "críticos pasan",
+            Condition::All => tk!("todos pasan"),
+            Condition::AtLeast => tk!("al menos N"),
+            Condition::Critical => tk!("críticos pasan"),
         };
         g.condition.select(cond);
         g.at_least = gate.at_least;
@@ -278,7 +292,7 @@ impl GateState {
                 t.parse::<u32>()
                     .ok()
                     .filter(|n| *n >= 1)
-                    .ok_or_else(|| "los intentos deben ser un número, al menos 1".to_string())?,
+                    .ok_or_else(|| tr!("los intentos deben ser un número, al menos 1"))?,
             ),
         };
         let condition = match self.condition.index() {
@@ -323,25 +337,28 @@ impl GateState {
     fn condition_text(&self) -> String {
         match self.condition.index() {
             COND_AT_LEAST => match self.at_least {
-                Some(n) => format!("al menos {n}"),
-                None => "al menos N".into(),
+                Some(n) => tr!("al menos {n}", n = n),
+                None => tr!("al menos N"),
             },
-            COND_CRITICAL => "críticos pasan".into(),
-            _ => "todos pasan".into(),
+            COND_CRITICAL => tr!("críticos pasan"),
+            _ => tr!("todos pasan"),
         }
     }
 
     /// Las dos líneas de la tarjeta del editor de pasos.
     pub fn summary(&self) -> (String, String) {
         if !self.is_auto() {
-            return ("manual · pregunta antes de continuar".into(), String::new());
+            return (tr!("manual · pregunta antes de continuar"), String::new());
         }
-        let first = format!("auto por servicio · {}", self.condition_text());
-        let mut second = format!("{} activos", self.active_count());
+        let first = tr!("auto por servicio · {cond}", cond = self.condition_text());
+        let mut second = tr!("{n} activos", n = self.active_count());
         let new = self.new_count();
         if new > 0 {
-            let noun = if new == 1 { "nuevo" } else { "nuevos" };
-            second.push_str(&format!(" · {new} {noun} sin activar"));
+            second.push_str(&if new == 1 {
+                tr!(" · {n} nuevo sin activar", n = new)
+            } else {
+                tr!(" · {n} nuevos sin activar", n = new)
+            });
         }
         (first, second)
     }
@@ -366,10 +383,10 @@ impl GateState {
         }
         self.scanned = when.into();
         self.notice = Some(match (added, removed) {
-            (0, 0) => "escaneo sin cambios".to_string(),
-            (a, 0) => format!("{a} servicio(s) nuevo(s), sin activar"),
-            (0, r) => format!("{r} servicio(s) ya no están en el compose"),
-            (a, r) => format!("{a} nuevo(s) sin activar, {r} eliminado(s)"),
+            (0, 0) => tr!("escaneo sin cambios"),
+            (a, 0) => tr!("{n} servicio(s) nuevo(s), sin activar", n = a),
+            (0, r) => tr!("{n} servicio(s) ya no están en el compose", n = r),
+            (a, r) => tr!("{a} nuevo(s) sin activar, {r} eliminado(s)", a = a, r = r),
         });
     }
 
@@ -426,10 +443,9 @@ impl GateState {
             if self.removable {
                 self.confirm_remove = true;
             } else {
-                self.notice = Some(
+                self.notice = Some(tr!(
                     "un paso de tipo gate necesita su gate: cambia el tipo del paso o elimínalo"
-                        .into(),
-                );
+                ));
             }
             return None;
         }
@@ -533,7 +549,7 @@ impl GateState {
     /// que nunca se activó (no hay nada curado que perder).
     fn ask_to_remove_row(&mut self) {
         match self.rows.get(self.cursor) {
-            None => self.notice = Some("elige un check para borrarlo".into()),
+            None => self.notice = Some(tr!("elige un check para borrarlo")),
             Some(r) if r.is_new => self.remove_row(),
             Some(_) => self.confirm_row_removal = true,
         }
@@ -545,7 +561,7 @@ impl GateState {
             .rows
             .get(self.cursor)
             .map_or("", |r| r.service.as_str());
-        format!("¿Borrar el check «{name}»?")
+        tr!("¿Borrar el check «{name}»?", name = name)
     }
 
     fn remove_row(&mut self) {
@@ -555,9 +571,9 @@ impl GateState {
         let removed = self.rows.remove(self.cursor);
         // el cursor queda en el check que ocupa su lugar (o en la fila de "agregar")
         self.cursor = self.cursor.min(self.rows.len());
-        self.notice = Some(format!(
-            "check «{}» borrado (guarda con ctrl s)",
-            removed.service
+        self.notice = Some(tr!(
+            "check «{name}» borrado (guarda con ctrl s)",
+            name = removed.service
         ));
     }
 
@@ -588,7 +604,7 @@ impl GateState {
         }
         let r = &mut self.rows[self.cursor];
         if r.removed {
-            self.notice = Some("este servicio ya no está en el compose".into());
+            self.notice = Some(tr!("este servicio ya no está en el compose"));
         } else if r.is_new {
             // activar un servicio nuevo es la aceptación explícita del usuario
             r.is_new = false;
@@ -601,13 +617,13 @@ impl GateState {
     fn edit_row(&mut self) {
         match self.rows.get(self.cursor) {
             Some(GateRow { removed: true, .. }) => {
-                self.notice = Some("este servicio ya no está en el compose".into());
+                self.notice = Some(tr!("este servicio ya no está en el compose"));
             }
             Some(GateRow {
                 target: RowTarget::Edit(_),
                 ..
             }) => self.editing = true,
-            Some(_) => self.notice = Some("este check no tiene un objetivo editable".into()),
+            Some(_) => self.notice = Some(tr!("este check no tiene un objetivo editable")),
             None => {}
         }
     }
@@ -616,20 +632,20 @@ impl GateState {
 
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
         if self.confirm_remove || self.confirm_row_removal {
-            return vec![("s", "sí"), ("n", "no")];
+            return vec![("s", tk!("sí")), ("n", tk!("no"))];
         }
         if self.editing {
-            return vec![("enter", "listo"), ("esc", "listo")];
+            return vec![("enter", tk!("listo")), ("esc", tk!("listo"))];
         }
         vec![
-            ("r", "re-escanear"),
-            ("espacio", "activar check"),
-            ("e", "editar check"),
-            ("c", "marcar crítico"),
-            ("b", "borrar check"),
-            ("x", "quitar gate"),
-            ("tab", "sección"),
-            ("esc", "volver"),
+            ("r", tk!("re-escanear")),
+            ("espacio", tk!("activar check")),
+            ("e", tk!("editar check")),
+            ("c", tk!("marcar crítico")),
+            ("b", tk!("borrar check")),
+            ("x", tk!("quitar gate")),
+            ("tab", tk!("sección")),
+            ("esc", tk!("volver")),
         ]
     }
 
@@ -640,12 +656,12 @@ impl GateState {
             vec![
                 Span::styled("◆ ", Style::new().fg(theme::WARN)),
                 Span::styled(
-                    format!("Gate para avanzar · {}", self.step_name),
+                    tr!("Gate para avanzar · {name}", name = self.step_name),
                     theme::bold(),
                 ),
             ],
             vec![Span::styled(
-                "<↻ Re-escanear>",
+                tr!("<↻ Re-escanear>"),
                 Style::new().fg(theme::INFO),
             )],
             theme::border(),
@@ -655,8 +671,9 @@ impl GateState {
         let content_w = inner.width.saturating_sub(2);
         let notice_h = u16::from(self.notice.is_some());
         let row_prompt = self.confirm_row_removal.then(|| self.row_removal_prompt());
+        let remove_prompt = self.confirm_remove.then(remove_prompt);
         let prompt = if self.confirm_remove {
-            Some(REMOVE_PROMPT)
+            remove_prompt.as_deref()
         } else {
             row_prompt.as_deref()
         };
@@ -674,15 +691,15 @@ impl GateState {
         // modo, condición y escaneo
         let label_w = 12;
         let label = |text: &str, focused: bool| Field::text(text, "").label_span(label_w, focused);
-        let mut row = vec![label("modo", self.focus == GateFocus::Mode)];
+        let mut row = vec![label(tk!("modo"), self.focus == GateFocus::Mode)];
         row.extend(self.mode.control(w, self.focus == GateFocus::Mode));
         Line::from(row).render(Rect::new(x, inner.y, w, 1), buf);
 
-        let mut row = vec![label("condición", self.focus == GateFocus::Condition)];
+        let mut row = vec![label(tk!("condición"), self.focus == GateFocus::Condition)];
         let cond_opts: Vec<(String, bool)> = [
-            "todos pasan".to_string(),
+            tr!("todos pasan"),
             self.at_least_option_label(),
-            "críticos pasan".to_string(),
+            tr!("críticos pasan"),
         ]
         .into_iter()
         .map(|s| (s, manual))
@@ -695,17 +712,18 @@ impl GateState {
         Line::from(row).render(Rect::new(x, inner.y + 1, w, 1), buf);
 
         let source = if self.scan_source.is_empty() {
-            "sin origen"
+            tr!("sin origen")
         } else {
-            self.scan_source.as_str()
+            self.scan_source.clone()
         };
-        let scan = format!(
-            "{source} · {} servicios · {}",
-            self.rows.iter().filter(|r| !r.extra && !r.removed).count(),
-            self.scanned
+        let scan = tr!(
+            "{source} · {n} servicios · {scanned}",
+            source = source,
+            n = self.rows.iter().filter(|r| !r.extra && !r.removed).count(),
+            scanned = self.scanned
         );
         Line::from(vec![
-            Span::styled(format!("{:<label_w$}", "escaneo"), theme::secondary()),
+            Span::styled(format!("{:<label_w$}", tr!("escaneo")), theme::secondary()),
             Span::styled(truncate(&scan, w as usize - label_w), Style::new()),
         ])
         .render(Rect::new(x, inner.y + 2, w, 1), buf);
@@ -727,10 +745,10 @@ impl GateState {
 
         // por check / al ejecutar
         let by = table_bottom + 1;
-        let mut row = vec![Field::text("por check", "").label_span(label_w, false)];
-        row.push(Span::styled("timeout ", theme::secondary()));
+        let mut row = vec![Field::text(tk!("por check"), "").label_span(label_w, false)];
+        row.push(Span::styled(tr!("timeout "), theme::secondary()));
         row.extend(self.timeout.control(9, self.focus == GateFocus::Timeout));
-        row.push(Span::styled("   intentos ", theme::secondary()));
+        row.push(Span::styled(tr!("   intentos "), theme::secondary()));
         row.extend(self.attempts.control(7, self.focus == GateFocus::Attempts));
         row.push(Span::raw("   "));
         row.extend(self.parallel.control(20, self.focus == GateFocus::Parallel));
@@ -756,8 +774,8 @@ impl GateState {
     /// Etiqueta de la opción "al menos N": con el número solo una vez elegida.
     fn at_least_option_label(&self) -> String {
         match self.at_least {
-            Some(n) if self.condition.index() == COND_AT_LEAST => format!("al menos {n}"),
-            _ => "al menos N".into(),
+            Some(n) if self.condition.index() == COND_AT_LEAST => tr!("al menos {n}", n = n),
+            _ => tr!("al menos N"),
         }
     }
 
@@ -778,9 +796,9 @@ impl GateState {
         buf.set_style(header, head_style);
         Line::from(vec![
             Span::raw(" ".repeat(6)),
-            Span::raw(format!("{:<svc_w$}", "servicio")),
-            Span::raw(format!("{:<kind_w$}", "tipo de check")),
-            Span::raw("objetivo"),
+            Span::raw(format!("{:<svc_w$}", tr!("servicio"))),
+            Span::raw(format!("{:<kind_w$}", tr!("tipo de check"))),
+            Span::raw(tr!("objetivo")),
         ])
         .style(head_style)
         .render(header, buf);
@@ -809,9 +827,12 @@ impl GateState {
                     ),
                     Span::styled("[+]", Style::new().fg(theme::INFO)),
                     Span::raw("  "),
-                    Span::styled("check extra", Style::new().fg(theme::INFO)),
+                    Span::styled(tr!("check extra"), Style::new().fg(theme::INFO)),
                     Span::raw(" ".repeat((svc_w + kind_w).saturating_sub(11))),
-                    Span::styled("comando o URL que no venga de un servicio", theme::muted()),
+                    Span::styled(
+                        tr!("comando o URL que no venga de un servicio"),
+                        theme::muted(),
+                    ),
                 ])
                 .render(Rect::new(row_area.x - 1, y, row_area.width + 1, 1), buf);
                 continue;
@@ -863,10 +884,10 @@ impl GateState {
             let used = spans_width(&spans) as u16;
             let rest = row_area.width.saturating_sub(used.saturating_sub(1));
             if r.removed {
-                spans.push(Span::styled("eliminado del compose", theme::muted()));
+                spans.push(Span::styled(tr!("eliminado del compose"), theme::muted()));
             } else if r.is_new {
                 spans.push(Span::styled(
-                    "nuevo · detectado en el escaneo",
+                    tr!("nuevo · detectado en el escaneo"),
                     Style::new().fg(theme::WARN),
                 ));
             } else {

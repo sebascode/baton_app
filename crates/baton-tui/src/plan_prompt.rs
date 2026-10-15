@@ -1,6 +1,7 @@
 //! Copiar, renombrar y eliminar un plan desde la TUI: una cajita que pide el nombre nuevo (copiar,
 //! renombrar) o la confirmación (eliminar). Sin disco: devuelve el pedido y quien atiende lo hace.
 
+use baton_core::tr;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -52,7 +53,7 @@ impl Eq for PlanPrompt {}
 impl PlanPrompt {
     pub fn new(op: PlanOp, plan: &str) -> PlanPrompt {
         let initial = match op {
-            PlanOp::Copy => format!("{plan}-copia"),
+            PlanOp::Copy => tr!("{plan}-copia", plan = plan),
             PlanOp::Rename => plan.to_string(),
             PlanOp::Delete => String::new(),
         };
@@ -88,9 +89,9 @@ impl PlanPrompt {
             KeyCode::Enter => {
                 let to = self.input.value().trim().to_string();
                 if to.is_empty() {
-                    self.error = Some("escribe un nombre".into());
+                    self.error = Some(tr!("escribe un nombre"));
                 } else if to == self.plan {
-                    self.error = Some("es el mismo nombre que el actual".into());
+                    self.error = Some(tr!("es el mismo nombre que el actual"));
                 } else {
                     let (from, to) = (self.plan.clone(), to);
                     return PromptOutcome::Submit(match self.op {
@@ -108,9 +109,9 @@ impl PlanPrompt {
 
     fn title(&self) -> String {
         match self.op {
-            PlanOp::Copy => format!(" Copiar plan «{}» ", self.plan),
-            PlanOp::Rename => format!(" Renombrar plan «{}» ", self.plan),
-            PlanOp::Delete => format!(" Eliminar plan «{}» ", self.plan),
+            PlanOp::Copy => tr!(" Copiar plan «{plan}» ", plan = self.plan),
+            PlanOp::Rename => tr!(" Renombrar plan «{plan}» ", plan = self.plan),
+            PlanOp::Delete => tr!(" Eliminar plan «{plan}» ", plan = self.plan),
         }
     }
 
@@ -147,20 +148,20 @@ impl PlanPrompt {
                 line(
                     inner.y,
                     vec![Span::styled(
-                        "Se borra el plan y su historial (los logs quedan).",
+                        tr!("Se borra el plan y su historial (los logs quedan)."),
                         theme::secondary(),
                     )],
                 );
                 line(
                     inner.y + 1,
                     vec![Span::styled(
-                        "[s] eliminar  [n] cancelar",
+                        tr!("[s] eliminar  [n] cancelar"),
                         theme::secondary(),
                     )],
                 );
             }
             _ => {
-                let mut spans = vec![Span::styled("nombre ", theme::secondary())];
+                let mut spans = vec![Span::styled(tr!("nombre "), theme::secondary())];
                 spans.extend(self.input.spans(inner.width.saturating_sub(10), true, None));
                 line(inner.y, spans);
                 match &self.error {
@@ -171,7 +172,7 @@ impl PlanPrompt {
                     None => line(
                         inner.y + 1,
                         vec![Span::styled(
-                            "[enter] aceptar  [esc] cancelar",
+                            tr!("[enter] aceptar  [esc] cancelar"),
                             theme::secondary(),
                         )],
                     ),

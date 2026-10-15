@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 
 use baton_core::events::{CheckInfo, CheckState, StepStatus};
+use baton_core::{tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -167,20 +168,20 @@ fn gate_state(row: &StepRow) -> (Color, String) {
     let standalone = is_gate_step(row);
     match row.info.status {
         // un paso puede fallar antes de llegar a su gate: entonces el gate ni corrió
-        StepStatus::Failed if standalone || any(CheckState::Failed) => (theme::ERR, "falló".into()),
-        StepStatus::Failed => (theme::MUTED, "no llegó a correr".into()),
+        StepStatus::Failed if standalone || any(CheckState::Failed) => (theme::ERR, tr!("falló")),
+        StepStatus::Failed => (theme::MUTED, tr!("no llegó a correr")),
         StepStatus::Gate => {
             let text = match row.gate {
-                Some((a, o)) => format!("intento {a}/{o}"),
-                None => "esperando".into(),
+                Some((a, o)) => tr!("intento {a}/{o}", a = a, o = o),
+                None => tr!("esperando"),
             };
             (theme::WARN, text)
         }
-        StepStatus::Done if warn => (theme::WARN, "con advertencias".into()),
-        StepStatus::Done => (theme::OK, "ok".into()),
-        StepStatus::Skipped => (theme::MUTED, "omitido".into()),
-        StepStatus::Running if standalone => (theme::WARN, "en curso".into()),
-        StepStatus::Running | StepStatus::Pending => (theme::MUTED, "pendiente".into()),
+        StepStatus::Done if warn => (theme::WARN, tr!("con advertencias")),
+        StepStatus::Done => (theme::OK, tr!("ok")),
+        StepStatus::Skipped => (theme::MUTED, tr!("omitido")),
+        StepStatus::Running if standalone => (theme::WARN, tr!("en curso")),
+        StepStatus::Running | StepStatus::Pending => (theme::MUTED, tr!("pendiente")),
     }
 }
 
@@ -427,10 +428,10 @@ fn step_right(row: &StepRow) -> Vec<Span<'static>> {
             };
             (t, Style::new().fg(color))
         }
-        StepStatus::Running => ("en curso".to_string(), Style::new().fg(theme::INFO)),
-        StepStatus::Gate => ("en gate".to_string(), Style::new().fg(theme::WARN)),
-        StepStatus::Failed => ("falló".to_string(), Style::new().fg(theme::ERR)),
-        StepStatus::Skipped => ("omitido".to_string(), theme::muted()),
+        StepStatus::Running => (tr!("en curso"), Style::new().fg(theme::INFO)),
+        StepStatus::Gate => (tr!("en gate"), Style::new().fg(theme::WARN)),
+        StepStatus::Failed => (tr!("falló"), Style::new().fg(theme::ERR)),
+        StepStatus::Skipped => (tr!("omitido"), theme::muted()),
         StepStatus::Pending => (String::new(), Style::new()),
     };
     vec![
@@ -546,11 +547,15 @@ fn build_timeline(state: &RunState, ns: &[Node], cursor: usize, width: u16) -> V
                 let title = if is_gate_step(row) {
                     format!("{} · {}", row.info.name, gate.summary)
                 } else {
-                    format!("gate {}", gate.summary)
+                    tr!("gate {summary}", summary = gate.summary)
                 };
                 let count = if !open && !gate.checks.is_empty() {
                     let n = gate.checks.len();
-                    format!(" · {n} {}", if n == 1 { "check" } else { "checks" })
+                    if n == 1 {
+                        tr!(" · {n} check", n = n)
+                    } else {
+                        tr!(" · {n} checks", n = n)
+                    }
                 } else {
                     String::new()
                 };
@@ -583,7 +588,7 @@ fn build_timeline(state: &RunState, ns: &[Node], cursor: usize, width: u16) -> V
                             c.label.clone()
                         };
                         let detail = if c.is_new {
-                            "nuevo, sin activar".to_string()
+                            tr!("nuevo, sin activar")
                         } else {
                             c.detail.clone()
                         };
@@ -652,10 +657,11 @@ fn status_left(state: &RunState) -> String {
                 targets.push(&r.info.target);
             }
         }
-        return format!(
-            "{} pasos · {gates} gates · {} destinos",
-            state.rows.len(),
-            targets.len()
+        return tr!(
+            "{steps} pasos · {gates} gates · {targets} destinos",
+            steps = state.rows.len(),
+            gates = gates,
+            targets = targets.len()
         );
     }
     let n = state
@@ -667,46 +673,62 @@ fn status_left(state: &RunState) -> String {
         .and_then(|c| state.rows.get(c))
         .map_or("", |r| r.info.name.as_str());
     if name.is_empty() {
-        format!(
-            "{} de {} pasos",
-            state.finished_steps(),
-            state.total_steps()
+        tr!(
+            "{done} de {total} pasos",
+            done = state.finished_steps(),
+            total = state.total_steps()
         )
     } else {
-        format!("Paso {n} de {} · {name}", state.total_steps())
+        tr!(
+            "Paso {n} de {total} · {name}",
+            n = n,
+            total = state.total_steps(),
+            name = name
+        )
     }
 }
 
 fn shortcut_items(state: &RunState) -> Vec<(&'static str, &'static str)> {
     if state.quit_confirm {
-        return vec![("s", "sí"), ("n", "no")];
+        return vec![("s", tk!("sí")), ("n", tk!("no"))];
     }
     if state.ask.is_some() {
-        return vec![("enter", "continuar"), ("n", "detener")];
+        return vec![("enter", tk!("continuar")), ("n", tk!("detener"))];
     }
     if state.preview {
-        return vec![("↑↓", "nodo"), ("espacio", "abrir gate"), ("v", "volver")];
+        return vec![
+            ("↑↓", tk!("nodo")),
+            ("espacio", tk!("abrir gate")),
+            ("v", tk!("volver")),
+        ];
     }
     match state.phase {
         Phase::Running => vec![
-            ("↑↓", "nodo"),
-            ("espacio", "abrir gate"),
-            ("v", "log"),
-            ("p", if state.paused { "reanudar" } else { "pausar" }),
-            ("r", "rollback"),
-            ("s", "saltar gate"),
-            ("q", "salir"),
+            ("↑↓", tk!("nodo")),
+            ("espacio", tk!("abrir gate")),
+            ("v", tk!("log")),
+            (
+                "p",
+                if state.paused {
+                    tk!("reanudar")
+                } else {
+                    tk!("pausar")
+                },
+            ),
+            ("r", tk!("rollback")),
+            ("s", tk!("saltar gate")),
+            ("q", tk!("salir")),
         ],
         Phase::Failed(_) => vec![
-            ("↑↓", "nodo"),
-            ("espacio", "abrir gate"),
-            ("v", "menú de fallo"),
+            ("↑↓", tk!("nodo")),
+            ("espacio", tk!("abrir gate")),
+            ("v", tk!("menú de fallo")),
         ],
         Phase::Finished { .. } => vec![
-            ("↑↓", "nodo"),
-            ("espacio", "abrir gate"),
-            ("v", "resumen"),
-            ("q", "salir"),
+            ("↑↓", tk!("nodo")),
+            ("espacio", tk!("abrir gate")),
+            ("v", tk!("resumen")),
+            ("q", tk!("salir")),
         ],
     }
 }
@@ -731,7 +753,7 @@ pub fn render(state: &RunState, buf: &mut Buffer, area: Rect) {
         area,
         vec![
             Span::styled("◇ ", Style::new().fg(theme::INFO)),
-            Span::styled(format!("Pipeline · {}", state.plan), title_style),
+            Span::styled(tr!("Pipeline · {plan}", plan = state.plan), title_style),
         ],
         right,
         theme::border(),
@@ -759,7 +781,10 @@ pub fn render(state: &RunState, buf: &mut Buffer, area: Rect) {
     };
     let mut left = vec![Span::raw(status_left(state))];
     if state.paused {
-        left.push(Span::styled(" · en pausa", Style::new().fg(theme::WARN)));
+        left.push(Span::styled(
+            tr!(" · en pausa"),
+            Style::new().fg(theme::WARN),
+        ));
     }
     widgets::justify(left, clock, content_w)
         .render(Rect::new(inner.x + 1, inner.y, content_w, 1), buf);
@@ -831,10 +856,10 @@ pub fn render(state: &RunState, buf: &mut Buffer, area: Rect) {
     if top > 0 || below > 0 {
         let mut parts = Vec::new();
         if top > 0 {
-            parts.push(format!("↑ {top} arriba"));
+            parts.push(tr!("↑ {n} arriba", n = top));
         }
         if below > 0 {
-            parts.push(format!("↓ {below} abajo"));
+            parts.push(tr!("↓ {n} abajo", n = below));
         }
         Line::from(Span::styled(parts.join(" · "), theme::muted()))
             .right_aligned()

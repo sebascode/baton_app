@@ -214,6 +214,7 @@ pub fn shortcut_lines(items: &[(&str, &str)], width: u16) -> Vec<Line<'static>> 
     let mut used = 0usize;
     for (key, action) in items {
         let key_text = format!("[{key}]");
+        let action = &*baton_core::i18n::tr_dyn(action);
         let w = key_text.width() + 1 + action.width();
         let sep = if used == 0 { 0 } else { 2 };
         if used > 0 && used + sep + w > width {

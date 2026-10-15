@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use baton_core::Config;
 use baton_core::events::{RunCommand, RunEvent};
+use baton_core::tr;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
@@ -39,8 +40,6 @@ use crate::{failure_view, pipeline_view, run_view, summary_view, theme};
 /// Ancho y alto mínimos soportados (`screens.md`: 80 columnas).
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 16;
-
-const NOT_SAVED: &str = "cambios solo en memoria: guardar en disco aún no está disponible";
 
 /// Pantalla a la que se puede saltar directamente (demo y pruebas).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,7 +170,11 @@ fn rollback_list(r: &RunState) -> Vec<String> {
             )
         })
         .map(|(i, row)| {
-            let what = row.info.undo.as_deref().unwrap_or("nada que deshacer");
+            let what = row
+                .info
+                .undo
+                .clone()
+                .unwrap_or_else(|| tr!("nada que deshacer"));
             format!(
                 "{:>2} {:<w$}  {what}",
                 i + 1,
@@ -693,7 +696,9 @@ impl App {
                 EditorAction::Rescan => Some(Effect::Rescan),
                 EditorAction::Save if !e.can_save => {
                     e.leave_after_save = false;
-                    e.notice = Some(NOT_SAVED.into());
+                    e.notice = Some(tr!(
+                        "cambios solo en memoria: guardar en disco aún no está disponible"
+                    ));
                     None
                 }
                 EditorAction::Save => match e.to_steps() {
@@ -813,9 +818,12 @@ impl App {
 
     pub fn render(&self, buf: &mut Buffer, area: Rect) {
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-            let msg = format!(
-                "Terminal muy pequeña ({}x{}): se necesitan al menos {MIN_WIDTH}x{MIN_HEIGHT}",
-                area.width, area.height
+            let msg = tr!(
+                "Terminal muy pequeña ({w}x{h}): se necesitan al menos {min_w}x{min_h}",
+                w = area.width,
+                h = area.height,
+                min_w = MIN_WIDTH,
+                min_h = MIN_HEIGHT
             );
             buf.set_style(area, Style::new());
             Line::styled(msg, Style::new().fg(theme::WARN)).render(area, buf);
@@ -846,7 +854,7 @@ impl App {
             prompt.render(buf, area);
         }
         if self.quit_ask && area.height > 3 {
-            let text = "¿Salir de baton? [s] sí  [n] seguir aquí";
+            let text = tr!("¿Salir de baton? [s] sí  [n] seguir aquí");
             let y = area.bottom() - 2;
             let w = area.width.saturating_sub(2);
             Line::styled(
