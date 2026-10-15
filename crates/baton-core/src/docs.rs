@@ -35,12 +35,22 @@ pub fn render(
     opts: &Options,
 ) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# Plan {}\n", text(&plan.name));
+    let _ = writeln!(
+        out,
+        "{}\n",
+        crate::tr!("# Plan {name}", name = text(&plan.name))
+    );
     if let Some(d) = &plan.description {
         let _ = writeln!(out, "{}\n", text(d));
     }
-    out.push_str("> Generado con `baton docs`. Se regenera desde `baton/plans/");
-    let _ = writeln!(out, "{}.toml`: no lo edites a mano.\n", plan.name);
+    let _ = writeln!(
+        out,
+        "{}\n",
+        crate::tr!(
+            "> Generado con `baton docs`. Se regenera desde `baton/plans/{plan}.toml`: no lo edites a mano.",
+            plan = plan.name
+        )
+    );
 
     summary(&mut out, plan, config);
     if !opts.no_mermaid && !plan.steps.is_empty() {
@@ -63,42 +73,65 @@ pub fn render(
 
 fn summary(out: &mut String, plan: &Plan, config: Option<&Config>) {
     let active = plan.active_steps().count();
-    out.push_str("## Resumen\n\n");
+    out.push_str(&crate::tr!("## Resumen\n\n"));
     let _ = writeln!(
         out,
-        "- Pasos: {} ({} activos, {} desactivados)",
-        plan.steps.len(),
-        active,
-        plan.steps.len() - active
+        "{}",
+        crate::tr!(
+            "- Pasos: {total} ({active} activos, {off} desactivados)",
+            total = plan.steps.len(),
+            active = active,
+            off = plan.steps.len() - active
+        )
     );
     let used = used_targets(plan, config);
     if !used.is_empty() {
         let _ = writeln!(
             out,
-            "- Destinos: {}",
-            used.iter().map(|t| code(t)).collect::<Vec<_>>().join(", ")
+            "{}",
+            crate::tr!(
+                "- Destinos: {list}",
+                list = used.iter().map(|t| code(t)).collect::<Vec<_>>().join(", ")
+            )
         );
     }
-    let yn = |b: bool| if b { "sí" } else { "no" };
+    let yn = |b: bool| {
+        if b {
+            crate::tr!("sí")
+        } else {
+            crate::tr!("no")
+        }
+    };
     let _ = writeln!(
         out,
-        "- Opciones por defecto: backup {}, rollback automático {}, dry-run {}",
-        yn(plan.options.backup),
-        yn(plan.options.auto_rollback),
-        yn(plan.options.dry_run)
+        "{}",
+        crate::tr!(
+            "- Opciones por defecto: backup {backup}, rollback automático {rollback}, dry-run {dry}",
+            backup = yn(plan.options.backup),
+            rollback = yn(plan.options.auto_rollback),
+            dry = yn(plan.options.dry_run)
+        )
     );
     if !plan.credentials.is_empty() {
-        let _ = writeln!(out, "- Credenciales declaradas: {}", plan.credentials.len());
+        let _ = writeln!(
+            out,
+            "{}",
+            crate::tr!("- Credenciales declaradas: {n}", n = plan.credentials.len())
+        );
     }
     if !plan.tasks.is_empty() {
-        let _ = writeln!(out, "- Tareas de mantención: {}", plan.tasks.len());
+        let _ = writeln!(
+            out,
+            "{}",
+            crate::tr!("- Tareas de mantención: {n}", n = plan.tasks.len())
+        );
     }
     out.push('\n');
 }
 
 fn flow(out: &mut String, plan: &Plan) {
-    out.push_str("## Flujo\n\n");
-    out.push_str("Los pasos corren en este orden. Una línea punteada es una dependencia que no es el paso anterior; un rombo es un gate; un recuadro de líneas cortadas es un paso desactivado.\n\n");
+    out.push_str(&crate::tr!("## Flujo\n\n"));
+    out.push_str(&crate::tr!("Los pasos corren en este orden. Una línea punteada es una dependencia que no es el paso anterior; un rombo es un gate; un recuadro de líneas cortadas es un paso desactivado.\n\n"));
     out.push_str("```mermaid\nflowchart TD\n");
     let mut prev: Option<String> = None;
     let mut off = Vec::new();
@@ -141,12 +174,14 @@ fn flow(out: &mut String, plan: &Plan) {
 }
 
 fn steps(out: &mut String, plan: &Plan, config: Option<&Config>) {
-    out.push_str("## Pasos\n\n");
+    out.push_str(&crate::tr!("## Pasos\n\n"));
     if plan.steps.is_empty() {
-        out.push_str("Este plan todavía no tiene pasos.\n\n");
+        out.push_str(&crate::tr!("Este plan todavía no tiene pasos.\n\n"));
         return;
     }
-    out.push_str("| # | Paso | Tipo | Origen | Destino | Activo |\n|---|---|---|---|---|---|\n");
+    out.push_str(&crate::tr!(
+        "| # | Paso | Tipo | Origen | Destino | Activo |\n|---|---|---|---|---|---|\n"
+    ));
     for (i, s) in plan.steps.iter().enumerate() {
         let _ = writeln!(
             out,
@@ -156,7 +191,11 @@ fn steps(out: &mut String, plan: &Plan, config: Option<&Config>) {
             cell(s.kind.label()),
             cell(&sources(s)),
             cell(&target_of(s, config)),
-            if s.enabled { "sí" } else { "no" }
+            if s.enabled {
+                crate::tr!("sí")
+            } else {
+                crate::tr!("no")
+            }
         );
     }
     out.push('\n');
@@ -171,18 +210,23 @@ fn step_detail(out: &mut String, plan: &Plan, i: usize, s: &Step, config: Option
         let _ = writeln!(out, "{}\n", text(d));
     }
     if !s.enabled {
-        out.push_str("Este paso está **desactivado**: no corre salvo que se active.\n\n");
+        out.push_str(&crate::tr!(
+            "Este paso está **desactivado**: no corre salvo que se active.\n\n"
+        ));
     }
-    let mut facts: Vec<String> = vec![format!("Tipo: {}", code(s.kind.label()))];
+    let mut facts: Vec<String> = vec![crate::tr!("Tipo: {kind}", kind = code(s.kind.label()))];
     if !s.source.is_empty() {
-        facts.push(format!("Origen: {}", sources_code(s)));
+        facts.push(crate::tr!("Origen: {list}", list = sources_code(s)));
     }
-    facts.push(format!("Destino: {}", code(&target_of(s, config))));
+    facts.push(crate::tr!(
+        "Destino: {target}",
+        target = code(&target_of(s, config))
+    ));
     if let Some(t) = s.timeout {
-        facts.push(format!("Timeout: {}", dur(t)));
+        facts.push(crate::tr!("Timeout: {time}", time = dur(t)));
     }
     if s.retries > 0 {
-        facts.push(format!("Reintentos: {}", s.retries));
+        facts.push(crate::tr!("Reintentos: {n}", n = s.retries));
     }
     if !s.depends_on.is_empty() {
         let names: Vec<String> = s
@@ -195,28 +239,28 @@ fn step_detail(out: &mut String, plan: &Plan, i: usize, s: &Step, config: Option
                 )
             })
             .collect();
-        facts.push(format!("Depende de: {}", names.join(", ")));
+        facts.push(crate::tr!("Depende de: {list}", list = names.join(", ")));
     }
     if s.backup_before {
-        facts.push("Hace un backup antes de ejecutarse".to_string());
+        facts.push(crate::tr!("Hace un backup antes de ejecutarse"));
     }
     if let Some(db) = &s.database {
-        facts.push(format!("Base de datos: {}", code(db)));
+        facts.push(crate::tr!("Base de datos: {db}", db = code(db)));
     }
     for f in facts {
         let _ = writeln!(out, "- {f}");
     }
     out.push('\n');
     if let Some(c) = &s.command {
-        out.push_str("Comando:\n\n");
+        out.push_str(&crate::tr!("Comando:\n\n"));
         fenced(out, "sh", c);
     }
     if let Some(c) = &s.dry_run {
-        out.push_str("En `--dry-run` se ejecuta:\n\n");
+        out.push_str(&crate::tr!("En `--dry-run` se ejecuta:\n\n"));
         fenced(out, "sh", c);
     }
     if let Some(c) = &s.rollback {
-        out.push_str("Rollback:\n\n");
+        out.push_str(&crate::tr!("Rollback:\n\n"));
         fenced(out, "sh", c);
     }
     if let Some(g) = &s.gate {
@@ -227,50 +271,62 @@ fn step_detail(out: &mut String, plan: &Plan, i: usize, s: &Step, config: Option
 fn gate_title(g: &Gate) -> String {
     match g.mode {
         GateMode::Manual => g.message.clone().map_or_else(
-            || "Gate manual".to_string(),
-            |m| format!("Gate manual: {m}"),
+            || crate::tr!("Gate manual"),
+            |m| crate::tr!("Gate manual: {msg}", msg = m),
         ),
-        GateMode::Auto => format!("Gate automático ({})", condition(g)),
+        GateMode::Auto => crate::tr!("Gate automático ({cond})", cond = condition(g)),
     }
 }
 
 fn condition(g: &Gate) -> String {
     match g.condition {
-        Condition::All => "todos los checks".to_string(),
-        Condition::AtLeast => format!("al menos {}", g.at_least.unwrap_or(1)),
-        Condition::Critical => "solo los críticos".to_string(),
+        Condition::All => crate::tr!("todos los checks"),
+        Condition::AtLeast => crate::tr!("al menos {n}", n = g.at_least.unwrap_or(1)),
+        Condition::Critical => crate::tr!("solo los críticos"),
     }
 }
 
 fn gate(out: &mut String, g: &Gate) {
-    out.push_str("Gate:\n\n");
+    out.push_str(&crate::tr!("Gate:\n\n"));
     match g.mode {
         GateMode::Manual => {
-            out.push_str("- Modo: manual (pide confirmación)\n");
+            out.push_str(&crate::tr!("- Modo: manual (pide confirmación)\n"));
             if let Some(m) = &g.message {
-                let _ = writeln!(out, "- Pregunta: {}", text(m));
+                let _ = writeln!(out, "{}", crate::tr!("- Pregunta: {msg}", msg = text(m)));
             }
         }
         GateMode::Auto => {
-            out.push_str("- Modo: automático\n");
-            let _ = writeln!(out, "- Condición: {}", condition(g));
+            out.push_str(&crate::tr!("- Modo: automático\n"));
+            let _ = writeln!(
+                out,
+                "{}",
+                crate::tr!("- Condición: {cond}", cond = condition(g))
+            );
             if g.rescan {
-                out.push_str("- Re-escanea los servicios antes de correr el gate\n");
+                out.push_str(&crate::tr!(
+                    "- Re-escanea los servicios antes de correr el gate\n"
+                ));
             }
             if g.parallel {
-                out.push_str("- Los checks corren en paralelo\n");
+                out.push_str(&crate::tr!("- Los checks corren en paralelo\n"));
             }
         }
     }
     if let Some(t) = g.timeout {
-        let _ = writeln!(out, "- Timeout por check: {}", dur(t));
+        let _ = writeln!(
+            out,
+            "{}",
+            crate::tr!("- Timeout por check: {time}", time = dur(t))
+        );
     }
     if let Some(a) = g.attempts {
-        let _ = writeln!(out, "- Intentos por check: {a}");
+        let _ = writeln!(out, "{}", crate::tr!("- Intentos por check: {n}", n = a));
     }
     out.push('\n');
     if !g.checks.is_empty() {
-        out.push_str("| Check | Tipo | Objetivo | Crítico | Activo |\n|---|---|---|---|---|\n");
+        out.push_str(&crate::tr!(
+            "| Check | Tipo | Objetivo | Crítico | Activo |\n|---|---|---|---|---|\n"
+        ));
         for c in &g.checks {
             let _ = writeln!(
                 out,
@@ -278,20 +334,20 @@ fn gate(out: &mut String, g: &Gate) {
                 cell(c.display_name()),
                 check_kind(c.kind),
                 cell(&check_target(c)),
-                if c.critical { "sí" } else { "no" },
-                if c.enabled { "sí" } else { "no" }
+                yes_no(c.critical),
+                yes_no(c.enabled)
             );
         }
         out.push('\n');
     }
 }
 
-fn check_kind(k: CheckKind) -> &'static str {
+fn check_kind(k: CheckKind) -> String {
     match k {
-        CheckKind::Healthcheck => "healthcheck",
-        CheckKind::Http => "http",
-        CheckKind::Command => "comando",
-        CheckKind::Running => "contenedor arriba",
+        CheckKind::Healthcheck => "healthcheck".to_string(),
+        CheckKind::Http => "http".to_string(),
+        CheckKind::Command => crate::tr!("comando"),
+        CheckKind::Running => crate::tr!("contenedor arriba"),
     }
 }
 
@@ -308,8 +364,12 @@ fn credentials(out: &mut String, plan: &Plan) {
     if plan.credentials.is_empty() {
         return;
     }
-    out.push_str("## Credenciales\n\nSolo se muestra de dónde se leen, nunca sus valores.\n\n");
-    out.push_str("| Id | Tipo | Referencia | Proveedor |\n|---|---|---|---|\n");
+    out.push_str(&crate::tr!(
+        "## Credenciales\n\nSolo se muestra de dónde se leen, nunca sus valores.\n\n"
+    ));
+    out.push_str(&crate::tr!(
+        "| Id | Tipo | Referencia | Proveedor |\n|---|---|---|---|\n"
+    ));
     for c in &plan.credentials {
         let _ = writeln!(
             out,
@@ -317,7 +377,11 @@ fn credentials(out: &mut String, plan: &Plan) {
             cell(&c.id),
             cell(c.kind.name()),
             code(&c.reference.to_string()),
-            cell(c.provider.as_deref().unwrap_or("por defecto"))
+            cell(
+                &c.provider
+                    .clone()
+                    .unwrap_or_else(|| crate::tr!("por defecto"))
+            )
         );
     }
     out.push('\n');
@@ -328,17 +392,22 @@ fn targets(out: &mut String, plan: &Plan, config: Option<&Config>) {
     if used.is_empty() {
         return;
     }
-    out.push_str(
-        "## Destinos\n\nSolo el nombre y el tipo: los datos de conexión son de cada máquina.\n\n",
-    );
-    out.push_str("| Destino | Tipo |\n|---|---|\n");
+    out.push_str(&crate::tr!(
+        "## Destinos\n\nSolo el nombre y el tipo: los datos de conexión son de cada máquina.\n\n"
+    ));
+    out.push_str(&crate::tr!("| Destino | Tipo |\n|---|---|\n"));
     for t in &used {
         let kind = match config.and_then(|c| c.targets.get(t)) {
             Some(Target::Ssh(_)) => "ssh",
             Some(Target::Context(_)) => "docker context",
             Some(Target::Local(_)) => "local",
             None if t == LOCAL_TARGET => "local",
-            None => "no declarado",
+            None => "",
+        };
+        let kind = if kind.is_empty() {
+            crate::tr!("no declarado")
+        } else {
+            kind.to_string()
         };
         let _ = writeln!(out, "| {} | {} |", cell(t), kind);
     }
@@ -349,7 +418,7 @@ fn tasks(out: &mut String, plan: &Plan, config: Option<&Config>) {
     if plan.tasks.is_empty() {
         return;
     }
-    out.push_str("## Tareas de mantención\n\nSe ejecutan con `baton ops -t <id>`; no forman parte de la ejecución del plan.\n\n");
+    out.push_str(&crate::tr!("## Tareas de mantención\n\nSe ejecutan con `baton ops -t <id>`; no forman parte de la ejecución del plan.\n\n"));
     for t in &plan.tasks {
         let _ = writeln!(out, "### {} ({})\n", text(&t.name), code(&t.id));
         if let Some(d) = &t.description {
@@ -360,15 +429,19 @@ fn tasks(out: &mut String, plan: &Plan, config: Option<&Config>) {
                 .map_or(LOCAL_TARGET, |c| c.default_target())
                 .to_string()
         });
-        let _ = writeln!(out, "- Destino: {}", code(&target));
+        let _ = writeln!(
+            out,
+            "{}",
+            crate::tr!("- Destino: {target}", target = code(&target))
+        );
         if let Some(d) = &t.dir {
-            let _ = writeln!(out, "- Carpeta: {}", code(d));
+            let _ = writeln!(out, "{}", crate::tr!("- Carpeta: {dir}", dir = code(d)));
         }
         if let Some(x) = t.timeout {
-            let _ = writeln!(out, "- Timeout: {}", dur(x));
+            let _ = writeln!(out, "{}", crate::tr!("- Timeout: {time}", time = dur(x)));
         }
         if t.confirm {
-            out.push_str("- Pide confirmación antes de correr\n");
+            out.push_str(&crate::tr!("- Pide confirmación antes de correr\n"));
         }
         out.push('\n');
         fenced(out, "sh", &t.command);
@@ -376,14 +449,19 @@ fn tasks(out: &mut String, plan: &Plan, config: Option<&Config>) {
 }
 
 fn last(out: &mut String, plan: &Plan, run: &RunSummary) {
-    out.push_str("## Última ejecución\n\n");
+    out.push_str(&crate::tr!("## Última ejecución\n\n"));
     let _ = writeln!(
         out,
-        "Estado: {}. Inicio: {}.\n",
-        text(&run.status),
-        text(&run.started_at)
+        "{}\n",
+        crate::tr!(
+            "Estado: {status}. Inicio: {started}.",
+            status = text(&run.status),
+            started = text(&run.started_at)
+        )
     );
-    out.push_str("| Paso | Estado | Duración | Reintentos |\n|---|---|---|---|\n");
+    out.push_str(&crate::tr!(
+        "| Paso | Estado | Duración | Reintentos |\n|---|---|---|---|\n"
+    ));
     for (id, status, ms, retries) in &run.steps {
         let name = plan
             .steps
@@ -403,6 +481,14 @@ fn last(out: &mut String, plan: &Plan, run: &RunSummary) {
 }
 
 // ------------------------------------------------------------------------------ ayudas
+
+fn yes_no(b: bool) -> String {
+    if b {
+        crate::tr!("sí")
+    } else {
+        crate::tr!("no")
+    }
+}
 
 fn used_targets(plan: &Plan, config: Option<&Config>) -> BTreeSet<String> {
     plan.steps

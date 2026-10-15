@@ -208,3 +208,24 @@ fn settings_can_set_and_show_the_language_and_rejects_unknown_ones() {
     assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
     assert!(err(&o).contains("el idioma 'fr' no existe"), "{}", err(&o));
 }
+
+#[test]
+fn docs_follow_the_language_but_keep_the_commands_and_names_as_written() {
+    let fx = Fx::new();
+    let o = fx.run(Some("en"), &["docs", "demo"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.starts_with("# Plan demo"), "{t}");
+    assert!(
+        t.contains("## Summary") && t.contains("## Flow") && t.contains("## Steps"),
+        "{t}"
+    );
+    assert!(
+        t.contains("| # | Step | Type | Source | Target | Active |"),
+        "{t}"
+    );
+    assert!(t.contains("echo hola"), "el comando va tal cual: {t}");
+    assert!(!t.contains("## Resumen") && !t.contains("Pasos"), "{t}");
+    let es = fx.run(None, &["docs", "demo"]);
+    assert!(out(&es).contains("## Resumen"), "{}", out(&es));
+}

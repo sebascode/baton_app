@@ -1,5 +1,6 @@
 //! `baton docs [plan]`: la documentación del plan en markdown con diagramas mermaid.
 
+use baton_core::tr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -37,7 +38,13 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
     }
     let summary = flags.with_state.then(|| last_run(project, &plan)).flatten();
     if flags.with_state && summary.is_none() {
-        eprintln!("el plan '{plan_name}' todavía no se ejecutó: sin sección de última ejecución");
+        eprintln!(
+            "{}",
+            tr!(
+                "el plan '{plan_name}' todavía no se ejecutó: sin sección de última ejecución",
+                plan_name = plan_name
+            )
+        );
     }
     let text = render(
         &plan,
@@ -55,11 +62,21 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
         }
         Some(path) => match std::fs::write(path, format!("{text}\n")) {
             Ok(()) => {
-                eprintln!("documentación escrita en {}", path.display());
+                eprintln!(
+                    "{}",
+                    tr!("documentación escrita en {path}", path = path.display())
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("error: no se pudo escribir {}: {e}", path.display());
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "error: no se pudo escribir {path}: {e}",
+                        path = path.display(),
+                        e = e
+                    )
+                );
                 ExitCode::from(EXIT_USAGE)
             }
         },
@@ -70,11 +87,11 @@ fn last_run(project: &Project, plan: &Plan) -> Option<RunSummary> {
     let state = State::load(project).ok()?;
     let run = state.last_run(&plan.name)?;
     let status = match run.status {
-        RunStatus::Running => "en curso",
-        RunStatus::Completed => "completada",
-        RunStatus::CompletedWithWarnings => "completada con advertencias",
-        RunStatus::Failed => "falló",
-        RunStatus::Aborted => "abortada",
+        RunStatus::Running => tr!("en curso"),
+        RunStatus::Completed => tr!("completada"),
+        RunStatus::CompletedWithWarnings => tr!("completada con advertencias"),
+        RunStatus::Failed => tr!("falló"),
+        RunStatus::Aborted => tr!("abortada"),
     };
     // en el orden del plan; los pasos que ya no existen quedan al final
     let mut ids: Vec<&String> = plan
@@ -92,17 +109,17 @@ fn last_run(project: &Project, plan: &Plan) -> Option<RunSummary> {
         .filter_map(|id| {
             let r = run.steps.get(id)?;
             let state = match r.status {
-                StepState::Pending => "pendiente",
-                StepState::Running => "en curso",
-                StepState::Done => "hecho",
-                StepState::Failed => "falló",
-                StepState::Skipped => "omitido",
+                StepState::Pending => tr!("pendiente"),
+                StepState::Running => tr!("en curso"),
+                StepState::Done => tr!("hecho"),
+                StepState::Failed => tr!("falló"),
+                StepState::Skipped => tr!("omitido"),
             };
-            Some((id.clone(), state.to_string(), r.duration_ms, r.retries))
+            Some((id.clone(), state, r.duration_ms, r.retries))
         })
         .collect();
     Some(RunSummary {
-        status: status.to_string(),
+        status,
         started_at: run.started_at.clone(),
         steps,
     })
