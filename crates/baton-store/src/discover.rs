@@ -70,6 +70,17 @@ pub fn scan_project(root: &Path) -> Discovered {
     out
 }
 
+/// Los scripts `.sh` del proyecto que son de mantención: todos menos los que viven junto a un
+/// `Dockerfile` (o debajo de su carpeta), que casi siempre son el entrypoint de la imagen. No
+/// son pasos del plan: `baton ops` y la pantalla de mantención los ofrecen por carpeta.
+pub fn maintenance_scripts(root: &Path) -> Vec<PathBuf> {
+    let mut out = Discovered::default();
+    walk(root, root, 0, &mut out);
+    out.scripts.sort();
+    out.dockerfiles.sort();
+    baton_core::script_tree::without_image_scripts(&out.scripts, &out.dockerfiles)
+}
+
 /// Para cada tipo de plugin registrado con `detect`, los archivos que coinciden, sin bajar a las
 /// carpetas que el resto del escaneo ignora (`node_modules`, `vendor`...) ni a las ocultas (el
 /// glob ya no entra en ellas: `.terraform/` guarda copias de módulos que no son del proyecto).

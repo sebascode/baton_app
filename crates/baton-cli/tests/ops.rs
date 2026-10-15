@@ -367,3 +367,73 @@ fn podman_reimage_without_a_service_goes_through_down() {
     );
     assert_eq!(o.status.code(), Some(3));
 }
+
+fn write_script(fx: &Fx, rel: &str, body: &str) {
+    let p = fx.root.join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, body).unwrap();
+}
+
+#[test]
+fn maintenance_scripts_are_listed_by_folder_and_skip_image_entrypoints() {
+    let fx = Fx::new();
+    write_script(&fx, "scripts/db/dump.sh", "#!/bin/sh\necho x\n");
+    write_script(&fx, "scripts/db/restaurar.sh", "echo y\n");
+    write_script(&fx, "scripts/limpiar.sh", "echo z\n");
+    write_script(&fx, "api/Dockerfile", "FROM scratch\n");
+    write_script(&fx, "api/entrypoint.sh", "echo no\n");
+    let o = fx.ops(&[]);
+    let text = out(&o);
+    assert!(text.contains("Scripts de mantención"), "{text}");
+    assert!(text.contains("scripts > db"), "{text}");
+    assert!(text.contains("dump.sh, restaurar.sh"), "{text}");
+    assert!(text.contains("limpiar.sh"), "{text}");
+    assert!(!text.contains("entrypoint.sh"), "{text}");
+    assert!(
+        text.contains("baton ops --script scripts/db/dump.sh"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_script_runs_in_its_own_folder_with_its_shebang_and_always_asks() {
+    let fx = Fx::new();
+    write_script(
+        &fx,
+        "scripts/db/dump.sh",
+        "#!/bin/bash\necho carpeta=$(basename $(pwd)) shell=$BASH_VERSION\n",
+    );
+    let refused = fx.ops(&["--script", "scripts/db/dump.sh"]);
+    assert_eq!(refused.status.code(), Some(2), "{}", err(&refused));
+    assert!(err(&refused).contains("--assume-yes"), "{}", err(&refused));
+    assert!(!out(&refused).contains("carpeta="));
+
+    let o = fx.ops(&["--script", "scripts/db/dump.sh", "--assume-yes"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("carpeta=db"), "{}", out(&o));
+    assert!(out(&o).contains("shell=") && !out(&o).contains("shell=\n"));
+}
+
+#[test]
+fn only_scripts_the_scan_offers_can_be_run() {
+    let fx = Fx::new();
+    write_script(&fx, "scripts/ok.sh", "echo ok\n");
+    write_script(&fx, "node_modules/x/mal.sh", "echo mal\n");
+    for bad in [
+        "../fuera.sh",
+        "node_modules/x/mal.sh",
+        "/bin/sh",
+        "scripts/nada.sh",
+    ] {
+        let o = fx.ops(&["--script", bad, "--assume-yes"]);
+        assert_eq!(o.status.code(), Some(2), "{bad}: {}", err(&o));
+        assert!(
+            err(&o).contains("no es un script de mantención"),
+            "{}",
+            err(&o)
+        );
+    }
+    let o = fx.ops(&["--script", "scripts/ok.sh", "-a", "logs", "--assume-yes"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("no se combinan"), "{}", err(&o));
+}

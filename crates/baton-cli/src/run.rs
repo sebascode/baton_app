@@ -144,6 +144,48 @@ pub struct InitFlags {
     pub no_scan: bool,
 }
 
+/// Antes de `init`, solo con terminal: si no hay git, ofrece iniciarlo; si la carpeta está dentro de
+/// un repositorio cuya raíz es otra (y todavía no hay proyecto), ofrece crear el proyecto en esa
+/// raíz. Devuelve el proyecto donde debe seguir `init`. Sin terminal no pregunta nada (CI).
+pub fn offer_git(project: Project, here: bool) -> Project {
+    use baton_store::git::{self, Offer};
+    if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+        return project;
+    }
+    let existing = project.plans_dir().is_dir() || project.baton_dir().is_dir();
+    let root = git::find_root(&project.root);
+    match git::offer(&project.root, root.as_deref(), existing) {
+        Offer::Nothing => project,
+        Offer::Init => {
+            eprintln!("{}", tr!("Esta carpeta no está en un repositorio git."));
+            if !crate::ops::ask_yes_no(&tr!("¿Iniciar uno aquí?")) {
+                return project;
+            }
+            match git::init_repo(&project.root) {
+                Ok(()) => eprintln!("{}", tr!("repositorio git iniciado")),
+                Err(e) => eprintln!("{}", tr!("aviso: no se pudo iniciar git: {e}", e = e)),
+            }
+            project
+        }
+        Offer::MoveTo(_) if here => project,
+        Offer::MoveTo(top) => {
+            eprintln!(
+                "{}",
+                tr!(
+                    "Esta carpeta está dentro del repositorio git de {top}.",
+                    top = top.display()
+                )
+            );
+            if crate::ops::ask_yes_no(&tr!("¿Crear el proyecto en esa carpeta?")) {
+                eprintln!("{}", tr!("proyecto en {top}", top = top.display()));
+                Project::at(top)
+            } else {
+                project
+            }
+        }
+    }
+}
+
 /// `baton init [plan]`: arma un plan a partir de lo que encuentra en la carpeta (compose,
 /// Dockerfile) y, si hay terminal, abre el editor para revisarlo. No pisa un plan que ya existe.
 pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCode {
@@ -196,6 +238,18 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         }
     }
 
+    // `.baton/` nunca sale de la máquina: queda en el .gitignore desde el primer momento
+    let gitignore_added = match baton_store::init::ensure_gitignored(project) {
+        Ok(added) => added,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                tr!("aviso: no se pudo actualizar .gitignore: {e}", e = e)
+            );
+            false
+        }
+    };
+
     let ambientes: Vec<&str> = flags
         .ambiente
         .as_deref()
@@ -230,11 +284,28 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
             path = project.display_path(&project.plan_path(&plan_name))
         )
     );
+    if gitignore_added {
+        println!("{}", tr!(".baton/ agregado al .gitignore"));
+    }
+    let maint_scripts = if flags.no_scan {
+        0
+    } else {
+        baton_store::discover::maintenance_scripts(&project.root).len()
+    };
+    if maint_scripts > 0 {
+        println!(
+            "{}",
+            tr!(
+                "encontré {n} script(s) .sh: no son pasos del plan, quedan en la mantención (baton ops, o la tecla m en la vista del plan)",
+                n = maint_scripts
+            )
+        );
+    }
     if steps.is_empty() {
         println!(
             "{}",
             tr!(
-                "no encontré docker-compose, Dockerfile, scripts .sh ni archivos .sql en esta carpeta: el plan quedó vacío"
+                "no encontré docker-compose, Dockerfile ni archivos .sql en esta carpeta: el plan quedó vacío"
             )
         );
     } else {
@@ -263,17 +334,6 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
                 "{}",
                 tr!(
                     "los .sql quedaron desactivados y el plan declara una credencial db (id 'db'): actívalos si baton debe ejecutarlos y completa la conexión (host, base...) al ejecutar"
-                )
-            );
-        }
-        if steps
-            .iter()
-            .any(|s| s.kind == baton_core::plan::StepKind::Script)
-        {
-            println!(
-                "{}",
-                tr!(
-                    "los scripts se ordenaron por su nombre (los de verificación al final y los que parecen destructivos desactivados): revisa el orden en el plan"
                 )
             );
         }

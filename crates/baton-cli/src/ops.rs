@@ -28,6 +28,8 @@ pub struct Args {
     pub action: Option<String>,
     pub service: Option<String>,
     pub task: Option<String>,
+    /// Ruta relativa de un script `.sh` suelto del proyecto.
+    pub script: Option<String>,
     pub follow: bool,
     pub lines: u32,
     pub assume_yes: bool,
@@ -98,8 +100,20 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         assume_yes: args.assume_yes,
     };
 
-    if args.action.is_some() && args.task.is_some() {
-        eprintln!("{}", tr!("error: --accion y --tarea no se combinan"));
+    if [
+        args.action.is_some(),
+        args.task.is_some(),
+        args.script.is_some(),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count()
+        > 1
+    {
+        eprintln!(
+            "{}",
+            tr!("error: --accion, --tarea y --script no se combinan")
+        );
         return ExitCode::from(EXIT_USAGE);
     }
     if let Some(name) = &args.action {
@@ -114,6 +128,12 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         }
         return match ctx.orders_for(action, args.service.as_deref()) {
             Ok(orders) => ctx.execute(&orders),
+            Err(e) => usage(&e),
+        };
+    }
+    if let Some(path) = &args.script {
+        return match ctx.script_order(path) {
+            Ok(order) => ctx.execute(&[order]),
             Err(e) => usage(&e),
         };
     }
@@ -186,6 +206,12 @@ struct Ctx<'a> {
     /// Cada servicio con el nombre del paso del que sale.
     services: &'a [(Unit, String)],
     assume_yes: bool,
+}
+
+/// Qué se eligió en el menú de scripts.
+enum ScriptPick {
+    Script(String),
+    Back,
 }
 
 impl Ctx<'_> {
@@ -279,6 +305,47 @@ impl Ctx<'_> {
             confirm: action.needs_confirm(),
             follow: action.is_follow(),
         }
+    }
+
+    /// Un script `.sh` suelto: corre en su carpeta, con el intérprete de su shebang, en el destino
+    /// por defecto, y siempre pide confirmar (suelen ser de recuperación o de datos). Solo se
+    /// aceptan los que el escaneo ofrece, no una ruta cualquiera.
+    fn script_order(&self, rel: &str) -> Result<Order, String> {
+        let rel_path = PathBuf::from(rel.trim_start_matches("./"));
+        let known = baton_store::discover::maintenance_scripts(&self.project.root);
+        if !known.contains(&rel_path) {
+            return Err(tr!(
+                "'{rel}' no es un script de mantención del proyecto (mira la lista con baton ops)",
+                rel = rel
+            ));
+        }
+        let dir = rel_path.parent().unwrap_or(std::path::Path::new(""));
+        let name = rel_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let first = first_line(&self.project.root.join(&rel_path));
+        let target = self
+            .config
+            .defaults
+            .target
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
+        Ok(Order {
+            label: tr!(
+                "script {rel} en {target}",
+                rel = rel_path.display(),
+                target = target
+            ),
+            cwd: self.project.root.join(dir),
+            line: baton_core::step_run::script_command(first.as_deref(), &name),
+            timeout: Some(Duration::from_secs(30 * 60)),
+            // lo que un script usa no se ve en su comando: igual que un paso script del plan
+            all_credentials: true,
+            confirm: true,
+            follow: false,
+            target,
+        })
     }
 
     fn task_order(&self, id: &str) -> Result<Order, String> {
@@ -454,11 +521,43 @@ impl Ctx<'_> {
                 ));
             }
         }
+        let scripts = baton_store::discover::maintenance_scripts(&self.project.root);
+        if !scripts.is_empty() {
+            s.push_str(&tr!("\nScripts de mantención (no son pasos del plan):\n"));
+            let mut dirs: Vec<PathBuf> = scripts
+                .iter()
+                .map(|p| {
+                    p.parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_default()
+                })
+                .collect();
+            dirs.dedup();
+            for d in dirs {
+                let chosen: Vec<String> = d
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                let files: Vec<String> = baton_core::script_tree::children(&scripts, &chosen)
+                    .into_iter()
+                    .filter(|e| !e.is_dir)
+                    .map(|e| e.name)
+                    .collect();
+                s.push_str(&format!(
+                    "  {:<24} {}\n",
+                    baton_core::script_tree::breadcrumb(&chosen),
+                    files.join(", ")
+                ));
+            }
+        }
         s.push_str(&tr!("\nEjemplos:\n"));
         s.push_str(&tr!("  baton ops -a logs -s <servicio> --seguir\n"));
         s.push_str(&tr!("  baton ops -a reimagen -s <servicio>\n"));
         if let Some(t) = self.plan.tasks.first() {
             s.push_str(&format!("  baton ops -t {}\n", t.id));
+        }
+        if let Some(first) = scripts.first() {
+            s.push_str(&format!("  baton ops --script {}\n", first.display()));
         }
         s
     }
@@ -467,6 +566,7 @@ impl Ctx<'_> {
     fn menu(&self, lines: u32) -> ExitCode {
         use inquire::{InquireError, Select};
         let mut last = ExitCode::SUCCESS;
+        let scripts = baton_store::discover::maintenance_scripts(&self.project.root);
         loop {
             let mut items: Vec<Item> = vec![
                 Item::Act(
@@ -495,6 +595,9 @@ impl Ctx<'_> {
                 ),
             ];
             items.extend(self.plan.tasks.iter().map(|t| Item::Task(t.clone())));
+            if !scripts.is_empty() {
+                items.push(Item::Scripts);
+            }
             items.push(Item::Quit);
             let choice = match Select::new(&tr!("Mantención: ¿qué hacemos?"), items)
                 .with_help_message(&tr!(
@@ -514,6 +617,10 @@ impl Ctx<'_> {
             let orders = match choice {
                 Item::Quit => return last,
                 Item::Task(t) => Ok(vec![self.order_for_task(&t)]),
+                Item::Scripts => match self.pick_script(&scripts) {
+                    ScriptPick::Back => continue,
+                    ScriptPick::Script(rel) => self.script_order(&rel).map(|o| vec![o]),
+                },
                 Item::Act(action, _) => {
                     let Some(service) = self.pick_service() else {
                         continue;
@@ -526,6 +633,49 @@ impl Ctx<'_> {
                 Err(e) => eprintln!("{}", tr!("error: {e}", e = e)),
             }
             eprintln!();
+        }
+    }
+
+    /// Elige un script bajando por las carpetas, un nivel por vez: `a > b > c`. El nivel de `c`
+    /// solo se ofrece después de elegir `b`; `← atrás` sube un nivel y, en el primero, vuelve al
+    /// menú.
+    fn pick_script(&self, scripts: &[PathBuf]) -> ScriptPick {
+        use baton_core::script_tree::{breadcrumb, children, script_path};
+        let mut chosen: Vec<String> = Vec::new();
+        loop {
+            let entries = children(scripts, &chosen);
+            let mut labels: Vec<String> = entries
+                .iter()
+                .map(|e| {
+                    if e.is_dir {
+                        format!("{} >", e.name)
+                    } else {
+                        e.name.clone()
+                    }
+                })
+                .collect();
+            labels.push(tr!("← atrás"));
+            let title = tr!("Scripts · {path}", path = breadcrumb(&chosen));
+            let picked = inquire::Select::new(&title, labels.clone())
+                .with_help_message(&tr!(
+                    "↑↓ moverse · enter elegir · escribe para filtrar · esc volver"
+                ))
+                .raw_prompt();
+            let Ok(picked) = picked else {
+                return ScriptPick::Back;
+            };
+            if picked.index == entries.len() {
+                if chosen.pop().is_none() {
+                    return ScriptPick::Back;
+                }
+                continue;
+            }
+            let entry = &entries[picked.index];
+            if entry.is_dir {
+                chosen.push(entry.name.clone());
+            } else {
+                return ScriptPick::Script(script_path(&chosen, &entry.name).display().to_string());
+            }
         }
     }
 
@@ -564,6 +714,8 @@ enum Done {
 enum Item {
     Act(Action, String),
     Task(Task),
+    /// El menú de scripts sueltos por carpeta.
+    Scripts,
     Quit,
 }
 
@@ -572,12 +724,13 @@ impl std::fmt::Display for Item {
         match self {
             Item::Act(_, label) => f.write_str(label),
             Item::Task(t) => write!(f, "{}", tr!("tarea: {name}", name = t.name)),
+            Item::Scripts => f.write_str(&tr!("scripts de mantención…")),
             Item::Quit => f.write_str(&tr!("salir")),
         }
     }
 }
 
-fn ask_yes_no(question: &str) -> bool {
+pub(crate) fn ask_yes_no(question: &str) -> bool {
     let mut err = std::io::stderr();
     let _ = write!(err, "{question}{}", tr!(" (s/N) "));
     let _ = err.flush();
@@ -586,6 +739,15 @@ fn ask_yes_no(question: &str) -> bool {
         return false;
     }
     baton_core::ask::parse_yes_no(line.trim()) == Some(true)
+}
+
+/// La primera línea de un archivo (máx. 512 bytes), para leer su shebang.
+fn first_line(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut buf = [0u8; 512];
+    let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+    text.lines().next().map(str::to_string)
 }
 
 /// Lo que muestra la pantalla de mantención de la TUI: los servicios y las tareas del plan.
@@ -615,6 +777,7 @@ pub(crate) fn maintenance_state(
         })
         .collect();
     MaintState::new(&plan.name, services, tasks)
+        .with_scripts(baton_store::discover::maintenance_scripts(&project.root))
 }
 
 /// Las órdenes de lo que pidió la pantalla de mantención (la confirmación ya la hizo ella).
@@ -634,6 +797,9 @@ pub(crate) fn build_orders(
         services: &services,
         assume_yes: true,
     };
+    if let Some(rel) = &req.script {
+        return ctx.script_order(rel).map(|o| vec![o]);
+    }
     match (&req.task, req.action) {
         (Some(id), _) => ctx.task_order(id).map(|o| vec![o]),
         (None, Some(action)) => ctx.orders_for(action, req.service.as_deref()),

@@ -18,7 +18,9 @@ pub fn ensure_baton_dir(project: &Project) -> io::Result<bool> {
     ensure_gitignored(project)
 }
 
-fn ensure_gitignored(project: &Project) -> io::Result<bool> {
+/// Agrega `.baton/` al `.gitignore` del proyecto si no estaba (lo crea si hace falta). Devuelve
+/// `true` si escribió la línea.
+pub fn ensure_gitignored(project: &Project) -> io::Result<bool> {
     let path = project.root.join(".gitignore");
     let current = match fs::read_to_string(&path) {
         Ok(t) => t,

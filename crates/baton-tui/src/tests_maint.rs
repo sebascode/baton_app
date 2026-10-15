@@ -163,3 +163,67 @@ fn esc_on_the_plan_view_asks_before_closing_baton_but_q_still_quits() {
     assert_eq!(app.handle_key(chr('s')), Some(Effect::Quit));
     assert_eq!(app.handle_key(chr('q')), Some(Effect::Quit));
 }
+
+/// Va a la fila "scripts" de las acciones y la abre.
+fn open_scripts(app: &mut App) {
+    app.handle_key(key(KeyCode::Tab)); // a las acciones
+    for _ in 0..20 {
+        app.handle_key(key(KeyCode::Down)); // hasta la última: scripts
+    }
+    app.handle_key(key(KeyCode::Enter));
+}
+
+#[test]
+fn scripts_open_by_folder_and_the_next_column_only_appears_after_choosing_a_folder() {
+    let mut app = opened();
+    open_scripts(&mut app);
+    let t = shown(&app, 100, 26);
+    assert!(t.contains("Scripts · (raíz)"), "{t}");
+    assert!(t.contains("scripts >"), "{t}");
+    assert!(!t.contains("db >"), "la columna de db no existe aún\n{t}");
+
+    app.handle_key(key(KeyCode::Enter)); // scripts
+    let t = shown(&app, 100, 26);
+    assert!(t.contains("Scripts · scripts"), "{t}");
+    assert!(t.contains("db >") && t.contains("limpiar.sh"), "{t}");
+    assert!(!t.contains("mensual.sh"), "reportes aún no se eligió\n{t}");
+
+    app.handle_key(key(KeyCode::Enter)); // db
+    assert!(!shown(&app, 100, 26).contains("mensual.sh"));
+    app.handle_key(key(KeyCode::Right)); // reportes (las carpetas van primero)
+    let t = shown(&app, 100, 26);
+    assert!(t.contains("Scripts · scripts > db > reportes"), "{t}");
+    assert!(t.contains("mensual.sh"), "{t}");
+}
+
+#[test]
+fn running_a_script_always_asks_and_sends_its_relative_path() {
+    let mut app = opened();
+    open_scripts(&mut app);
+    app.handle_key(key(KeyCode::Enter)); // scripts
+    app.handle_key(key(KeyCode::Down)); // limpiar.sh (después de db >)
+    assert_eq!(app.handle_key(key(KeyCode::Enter)), None, "pide confirmar");
+    assert!(shown(&app, 100, 26).contains("script scripts/limpiar.sh"));
+    // cualquier otra tecla cancela
+    assert_eq!(app.handle_key(chr('n')), None);
+    app.handle_key(key(KeyCode::Enter));
+    let Some(Effect::MaintRun(req)) = app.handle_key(chr('s')) else {
+        panic!("debía pedir la ejecución")
+    };
+    assert_eq!(req.script.as_deref(), Some("scripts/limpiar.sh"));
+    assert!(req.action.is_none() && req.task.is_none());
+}
+
+#[test]
+fn esc_climbs_one_level_and_from_the_root_returns_to_the_actions() {
+    let mut app = opened();
+    open_scripts(&mut app);
+    app.handle_key(key(KeyCode::Enter)); // scripts
+    app.handle_key(key(KeyCode::Esc));
+    assert!(shown(&app, 100, 26).contains("Scripts · (raíz)"));
+    app.handle_key(key(KeyCode::Esc));
+    let t = shown(&app, 100, 26);
+    assert!(t.contains("Acciones") && !t.contains("Scripts ·"), "{t}");
+    // y seguimos en la pantalla de mantención, no en el plan
+    assert!(matches!(app.mode, Mode::Maintenance(_)));
+}

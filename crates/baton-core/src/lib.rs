@@ -24,6 +24,7 @@ pub mod mask;
 pub mod plan;
 pub mod plugin;
 pub mod plugin_source;
+pub mod script_tree;
 pub mod secrets;
 pub mod settings;
 pub mod shell;
