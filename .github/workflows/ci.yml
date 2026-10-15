@@ -104,7 +104,7 @@ jobs:
         if: steps.seen.outputs.hit != 'true'
         run: echo "${{ github.sha }}" > "$RUNNER_TEMP/ci-ok"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: steps.seen.outputs.hit != 'true'
         with:
           name: ${{ steps.seen.outputs.artifact }}
