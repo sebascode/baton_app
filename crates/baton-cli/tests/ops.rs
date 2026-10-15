@@ -322,14 +322,25 @@ fn with_podman_the_same_commands_run_through_podman() {
 fn auto_picks_podman_when_there_is_no_docker() {
     let fx = Fx::new();
     use_podman(&fx);
-    // PATH solo con la carpeta de mentira y lo mínimo del sistema: sin docker real.
+    // PATH solo con la carpeta de mentira y enlaces a lo mínimo del sistema: un runner de CI
+    // puede traer un docker real en /usr/bin.
+    let tools = fx.root.join("_tools");
+    fs::create_dir_all(&tools).unwrap();
+    for name in ["sh", "dirname", "basename", "cat"] {
+        let found = ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| std::path::Path::new(d).join(name))
+            .find(|p| p.exists())
+            .unwrap();
+        std::os::unix::fs::symlink(found, tools.join(name)).unwrap();
+    }
     let o = Command::new(env!("CARGO_BIN_EXE_baton"))
         .arg("-C")
         .arg(&fx.root)
         .args(["ops", "-a", "estado"])
         .env(
             "PATH",
-            format!("{}:/usr/bin:/bin", fx.root.join("_bin").display()),
+            format!("{}:{}", fx.root.join("_bin").display(), tools.display()),
         )
         .env_remove("BATON_ENGINE")
         .env("CI", "1")
