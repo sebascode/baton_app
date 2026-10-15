@@ -6,6 +6,7 @@ pub mod clock;
 pub mod config_edit;
 pub mod credentials;
 pub mod discover;
+pub mod git;
 pub mod global;
 pub mod history;
 pub mod init;

@@ -314,6 +314,9 @@ enum Command {
         /// Ejecuta una tarea del plan (`[[tasks]]`) en lugar de una acción
         #[arg(short = 't', long = "tarea")]
         tarea: Option<String>,
+        /// Ejecuta un script .sh suelto del proyecto (ruta relativa, ej. scripts/db/dump.sh)
+        #[arg(long, value_name = "RUTA")]
+        script: Option<String>,
         /// Con la acción logs, sigue mostrándolos en vivo (ctrl+c para cortar)
         #[arg(long)]
         seguir: bool,
@@ -705,6 +708,7 @@ fn main() -> ExitCode {
             }
             found.unwrap_or_else(|| Project::at(&start))
         };
+        let project = run::offer_git(project, here);
         return run::init(
             &project,
             plan,
@@ -816,6 +820,7 @@ fn main() -> ExitCode {
             accion,
             servicio,
             tarea,
+            script,
             seguir,
             lineas,
             assume_yes,
@@ -828,6 +833,7 @@ fn main() -> ExitCode {
                     action: accion,
                     service: servicio,
                     task: tarea,
+                    script,
                     follow: seguir,
                     lines: lineas,
                     assume_yes,

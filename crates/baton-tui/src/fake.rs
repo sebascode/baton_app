@@ -1112,4 +1112,15 @@ pub fn maintenance() -> crate::maint_view::MaintState {
             confirm: true,
         }],
     )
+    .with_scripts(
+        [
+            "scripts/db/dump.sh",
+            "scripts/db/restaurar.sh",
+            "scripts/db/reportes/mensual.sh",
+            "scripts/limpiar.sh",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect(),
+    )
 }
