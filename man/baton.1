@@ -220,6 +220,11 @@ Lista las ejecuciones anteriores de un plan que baton recuerda (la última y has
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
+.SS baton settings [list|get|set|unset]
+La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR, que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
+.TP
+.B \-\-proyecto
+En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
 .SS baton plugin list
 Lista los plugins instalados en esta máquina (ver \fBPLUGINS\fR), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. No necesita proyecto.
 .SS baton plugin validate ruta
@@ -653,6 +658,9 @@ Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer
 .TP
 .B BATON_ENGINE
 Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: usa docker salvo que el motor se haya fijado a mano, y un docker context siempre es docker.
+.TP
+.B BATON_CONFIG
+Archivo de configuración global en vez de \fI~/.config/baton/config.toml\fR (ver \fBbaton settings\fR).
 .TP
 .B SHELL
 Si \fBshell\-init\fR no recibe un shell, usa el de esta variable.

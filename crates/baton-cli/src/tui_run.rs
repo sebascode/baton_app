@@ -136,6 +136,7 @@ impl RunDriver {
         preview.context = Some(run_context(&self.config, self.flags.ambiente.as_deref()));
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
+            .with_quit_confirm(self.config.ui.confirms_exit())
             .with_editor(self.editor())
             .with_live_pipeline(
                 &self.plan.name,

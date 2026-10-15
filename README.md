@@ -103,6 +103,8 @@ baton last                    # cómo terminó la última ejecución y, si fall�
 baton history                 # las ejecuciones anteriores del plan, una por línea
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
 baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
+baton settings                  # configuración global (~/.config/baton/config.toml) y de dónde sale cada valor
+baton settings set defaults.engine podman   # para todos tus proyectos
 baton db -c "select * from clientes"   # consulta una base del plan (PostgreSQL, MySQL o SQLite), solo lectura
 baton db local                # o abre una sesión interactiva con historial (\? ayuda)
 baton rollback                # deshace la última ejecución
@@ -181,6 +183,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-08 | **0.6.1.** El selector de tipo del editor de pasos ya no se corta: si los tipos no caben (los nativos más los de plugins), muestra una ventana que sigue a la opción elegida, con `‹N` y `N›` para lo que queda oculto. |
 | 2026-10-14 | **0.7.0.** `baton ops`: mantención de lo desplegado (logs, estado, reinicios, actualizar y reimagen de los servicios del plan, más tareas propias con `[[tasks]]`; tecla `m` en la vista del plan). `ctrl+z` suspende baton y `fg` lo recupera. |
 | 2026-10-14 | **0.8.0.** Soporte de podman (motor `auto`, `BATON_ENGINE` o `engine` en `[defaults]`; docker y podman conviven). La mantención (`m`) se abre dentro de la misma TUI. Baton ya no se cierra solo: pregunta antes de salir. |
+| 2026-10-15 | **0.9.0.** Configuración global (`~/.config/baton/config.toml`, o `BATON_CONFIG`) que se combina con la de cada proyecto, y `baton settings` para ver y cambiar cada valor con su origen (entorno, proyecto, global o por defecto). Nueva preferencia `[ui] confirm_exit`. |
 
 ## Desarrollo
 
