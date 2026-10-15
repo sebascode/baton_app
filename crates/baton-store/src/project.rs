@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub const BATON_DIR: &str = ".baton";
 /// Carpeta versionada con los planes, relativa a la raíz.
 pub const PLANS_DIR: &str = "baton/plans";
+/// Plugins del proyecto: se versionan con él (manifiesto y `plugins.lock`).
+pub const PLUGINS_DIR: &str = "baton/plugins";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
@@ -72,6 +74,11 @@ impl Project {
     }
 
     /// Ruta para mostrar: relativa a la raíz cuando se puede.
+    /// La carpeta de plugins de este proyecto (existe o no).
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.root.join(PLUGINS_DIR)
+    }
+
     pub fn display_path(&self, path: &Path) -> String {
         path.strip_prefix(&self.root)
             .unwrap_or(path)

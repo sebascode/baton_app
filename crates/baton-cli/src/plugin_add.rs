@@ -15,11 +15,10 @@ use baton_core::hash::sha256_hex;
 use baton_core::plugin::{MANIFEST_FILE, MAX_MANIFEST_BYTES, Manifest};
 use baton_core::plugin_source::{CommitInfo, LockEntry, Source, parse_commit};
 use baton_store::plugins::{
-    check_manifest_text, install_manifest, plugins_dir, read_lock, read_manifest_text,
-    remove_plugin, write_lock,
+    check_manifest_text, install_manifest, read_lock, read_manifest_text, remove_plugin, write_lock,
 };
 
-use crate::plugin_cmd::describe;
+use crate::plugin_cmd::{describe, target_dir};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// Lo que se va a instalar: ya traído, verificado y validado, pero todavía no escrito.
@@ -372,13 +371,11 @@ impl Ask for Terminal {
     }
 }
 
-/// `baton plugin add <fuente>`.
-pub fn add(source_text: &str) -> ExitCode {
-    let Some(dir) = plugins_dir() else {
-        eprintln!(
-            "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
-        );
-        return ExitCode::from(EXIT_USAGE);
+/// `baton plugin add <fuente> [--global]`.
+pub fn add(source_text: &str, start: &Path, global: bool) -> ExitCode {
+    let dir = match target_dir(global, start) {
+        Ok(d) => d,
+        Err(code) => return code,
     };
     ExitCode::from(add_in(
         &dir,
@@ -465,13 +462,11 @@ pub fn add_in(
     }
 }
 
-/// `baton plugin remove <nombre> [--yes]`.
-pub fn remove(name: &str, yes: bool) -> ExitCode {
-    let Some(dir) = plugins_dir() else {
-        eprintln!(
-            "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
-        );
-        return ExitCode::from(EXIT_USAGE);
+/// `baton plugin remove <nombre> [--yes] [--global]`.
+pub fn remove(name: &str, yes: bool, start: &Path, global: bool) -> ExitCode {
+    let dir = match target_dir(global, start) {
+        Ok(d) => d,
+        Err(code) => return code,
     };
     ExitCode::from(remove_in(
         &dir,

@@ -374,6 +374,9 @@ enum PluginAction {
     Add {
         /// `github:dueño/repo@versión` (un tag o un commit) o una carpeta local
         fuente: String,
+        /// Instala en esta máquina (para todos los proyectos) en vez de en el proyecto
+        #[arg(short, long)]
+        global: bool,
     },
     /// Quita un plugin instalado
     Remove {
@@ -382,6 +385,9 @@ enum PluginAction {
         /// No pregunta (necesario sin terminal)
         #[arg(long)]
         yes: bool,
+        /// Quita el de esta máquina en vez del del proyecto
+        #[arg(short, long)]
+        global: bool,
     },
     /// Crea la carpeta de un plugin nuevo con un manifiesto para empezar
     New {
@@ -614,19 +620,6 @@ fn main() -> ExitCode {
         return settings_cmd::run(&action, &start);
     }
 
-    // `plugin` informa por su cuenta de lo que no se pudo cargar: no se registra antes.
-    if let Some(Command::Plugin { action }) = &cli.command {
-        return match action {
-            PluginAction::List => plugin_cmd::list(),
-            PluginAction::Validate { ruta } => plugin_cmd::validate(ruta),
-            PluginAction::Add { fuente } => plugin_add::add(fuente),
-            PluginAction::Remove { nombre, yes } => plugin_add::remove(nombre, *yes),
-            PluginAction::New { nombre } => plugin_add::new(nombre),
-        };
-    }
-    // Los tipos de paso de los plugins instalados tienen que existir antes de leer cualquier plan.
-    plugin_cmd::register_at_startup();
-
     let start = match cli.dir {
         Some(d) => d,
         None => match std::env::current_dir() {
@@ -637,6 +630,24 @@ fn main() -> ExitCode {
             }
         },
     };
+
+    // `plugin` informa por su cuenta de lo que no se pudo cargar: no se registra antes.
+    if let Some(Command::Plugin { action }) = &cli.command {
+        return match action {
+            PluginAction::List => plugin_cmd::list(&start),
+            PluginAction::Validate { ruta } => plugin_cmd::validate(ruta),
+            PluginAction::Add { fuente, global } => plugin_add::add(fuente, &start, *global),
+            PluginAction::Remove {
+                nombre,
+                yes,
+                global,
+            } => plugin_add::remove(nombre, *yes, &start, *global),
+            PluginAction::New { nombre } => plugin_add::new(nombre),
+        };
+    }
+    // Los tipos de paso de los plugins (del proyecto y globales) tienen que existir antes de leer
+    // cualquier plan.
+    plugin_cmd::register_at_startup(Project::discover(&start).as_ref());
 
     if let Some(Command::Prompt { format }) = &cli.command {
         return shell_init::prompt(&start, format.as_deref());
