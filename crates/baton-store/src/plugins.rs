@@ -9,6 +9,7 @@
 //! el commit y el sha256 de lo que se instaló. En cada arranque un plugin registrado cuyo
 //! manifiesto ya no coincide **no se carga**: lo instalado no cambia sin que se note.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -322,8 +323,26 @@ pub fn list_installed(dir: &Path) -> Vec<Installed> {
 /// problemas de los que no se pudieron cargar (los avisos de validación no se incluyen: son para
 /// `baton plugin validate`).
 pub fn register_installed(dir: &Path) -> Vec<Diagnostic> {
+    register_scoped(dir, &HashSet::new()).0
+}
+
+/// Registra los plugins de `dir` menos los cuyo tipo ya cargó un ámbito más cercano (`skip`): un
+/// plugin del proyecto tapa al global del mismo tipo. Devuelve los problemas y los tipos que
+/// esta carpeta reclama (se hayan podido cargar o no).
+pub fn register_scoped(dir: &Path, skip: &HashSet<String>) -> (Vec<Diagnostic>, HashSet<String>) {
     let mut problems = Vec::new();
+    let mut loaded = HashSet::new();
     for plugin in list_installed(dir) {
+        if let Some(m) = &plugin.manifest
+            && skip.contains(m.type_name())
+        {
+            continue;
+        }
+        // el tipo queda reclamado aunque este plugin no se pueda cargar: si el del proyecto falla
+        // (por ejemplo, su manifiesto cambió), el global del mismo tipo no ocupa su lugar en silencio
+        if let Some(m) = &plugin.manifest {
+            loaded.insert(m.type_name().to_string());
+        }
         if let Some(why) = plugin.lock_problem() {
             problems.push(diag(&plugin.manifest_path, None, Severity::Error, why));
         } else if plugin.is_valid() {
@@ -334,6 +353,22 @@ pub fn register_installed(dir: &Path) -> Vec<Diagnostic> {
         } else {
             problems.extend(plugin.diagnostics.into_iter().filter(Diagnostic::is_error));
         }
+    }
+    (problems, loaded)
+}
+
+/// Registra los plugins del proyecto y, después, los globales que no choquen con un tipo del
+/// proyecto (el proyecto gana: fija la versión que usa sin depender de lo que haya instalado).
+pub fn register_all(project_dir: Option<&Path>, global_dir: Option<&Path>) -> Vec<Diagnostic> {
+    let mut problems = Vec::new();
+    let mut taken = HashSet::new();
+    if let Some(dir) = project_dir {
+        let (p, loaded) = register_scoped(dir, &taken);
+        problems.extend(p);
+        taken = loaded;
+    }
+    if let Some(dir) = global_dir {
+        problems.extend(register_scoped(dir, &taken).0);
     }
     problems
 }
