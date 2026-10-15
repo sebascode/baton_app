@@ -8,32 +8,86 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use baton_core::plugin::{MANIFEST_FILE, Manifest};
-use baton_store::plugins::{check_manifest_file, list_installed, plugins_dir, register_installed};
+use baton_store::Project;
+use baton_store::plugins::{check_manifest_file, list_installed, plugins_dir, register_all};
 
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// Registra los tipos de paso de los plugins instalados. Un plugin que no se pudo cargar se avisa
 /// por stderr y no impide usar baton ni los demás plugins.
-pub fn register_at_startup() {
-    let Some(dir) = plugins_dir() else { return };
-    for problem in register_installed(&dir) {
+pub fn register_at_startup(project: Option<&Project>) {
+    let project_dir = project.map(Project::plugins_dir);
+    for problem in register_all(project_dir.as_deref(), plugins_dir().as_deref()) {
         eprintln!("advertencia: plugin no cargado: {problem}");
     }
 }
 
-pub fn list() -> ExitCode {
-    let Some(dir) = plugins_dir() else {
-        eprintln!(
-            "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
-        );
-        return ExitCode::from(EXIT_USAGE);
-    };
-    let installed = list_installed(&dir);
-    if installed.is_empty() {
-        println!("no hay plugins instalados en {}", dir.display());
-        return ExitCode::SUCCESS;
+/// La carpeta donde instalar o quitar: la del proyecto (lo normal, como un `npm install`) o la de
+/// la máquina con `--global`. Fuera de un proyecto solo hay la global y se pide pedirla.
+pub fn target_dir(global: bool, start: &Path) -> Result<PathBuf, ExitCode> {
+    if global {
+        return plugins_dir().ok_or_else(|| {
+            eprintln!(
+                "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
+            );
+            ExitCode::from(EXIT_USAGE)
+        });
     }
-    println!("plugins en {}", dir.display());
+    match Project::discover(start) {
+        Some(p) => Ok(p.plugins_dir()),
+        None => {
+            eprintln!(
+                "error: no estás dentro de un proyecto de baton: usa --global para los plugins de esta máquina"
+            );
+            Err(ExitCode::from(EXIT_USAGE))
+        }
+    }
+}
+
+pub fn list(start: &Path) -> ExitCode {
+    let project = Project::discover(start);
+    let global = plugins_dir();
+    match &project {
+        Some(p) => print_scope("proyecto", &p.plugins_dir()),
+        None => println!("proyecto: (no estás dentro de uno)"),
+    }
+    match &global {
+        Some(dir) => print_scope("global", dir),
+        None => {
+            eprintln!(
+                "error: no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)"
+            );
+            return ExitCode::from(EXIT_USAGE);
+        }
+    }
+    // un tipo del proyecto tapa al global del mismo nombre: se dice para que no sorprenda
+    if let (Some(p), Some(g)) = (&project, &global) {
+        let mine: Vec<String> = list_installed(&p.plugins_dir())
+            .iter()
+            .filter_map(|i| i.manifest.as_ref().map(|m| m.type_name().to_string()))
+            .collect();
+        for plugin in list_installed(g) {
+            if let Some(m) = &plugin.manifest
+                && mine.iter().any(|t| t == m.type_name())
+            {
+                println!(
+                    "nota: el plugin global '{}' (tipo {}) queda tapado por el del proyecto",
+                    m.name,
+                    m.type_name()
+                );
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn print_scope(scope: &str, dir: &Path) {
+    let installed = list_installed(dir);
+    if installed.is_empty() {
+        println!("{scope}: sin plugins ({})", dir.display());
+        return;
+    }
+    println!("{scope}: {}", dir.display());
     for plugin in &installed {
         match (&plugin.manifest, plugin.is_valid()) {
             (Some(m), true) if plugin.is_loadable() => {
@@ -61,7 +115,6 @@ pub fn list() -> ExitCode {
             }
         }
     }
-    ExitCode::SUCCESS
 }
 
 /// Qué credencial pide un plugin y a qué variables de los comandos la convierte. Es lo que hay que

@@ -75,14 +75,19 @@ baton plugin validate make-build
 Muestra el comando, el dry-run y los programas que exige, y señala con `archivo:línea:columna` lo
 que esté mal.
 
-**4. Instálalo en tu máquina.**
+**4. Instálalo.**
 
 ```sh
 baton plugin add ./make-build
 ```
 
-Te muestra lo que va a ejecutar y pregunta. Necesita una terminal. Para ver los instalados:
-`baton plugin list`.
+Dentro de un proyecto lo deja en `baton/plugins/`, que se versiona con él: quien clone el proyecto ya
+lo tiene, y `plugins.lock` fija su commit y su sha256. Para tenerlo en toda tu máquina, sin ligarlo
+a un proyecto, usa `baton plugin add --global ./make-build` (fuera de un proyecto, `--global` es
+obligatorio). Si el proyecto y la máquina tienen un plugin del mismo tipo, gana el del proyecto.
+
+Te muestra lo que va a ejecutar y pregunta. Necesita una terminal. Para ver los instalados, en los
+dos ámbitos: `baton plugin list`.
 
 **5. Úsalo en un plan.** En `baton/plans/construir.toml`:
 

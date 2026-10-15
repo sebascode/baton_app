@@ -156,8 +156,9 @@ que esté escrita. baton conserva la ejecución, las credenciales, los logs y lo
 ```sh
 baton plugin new mi-plugin        # crea un manifiesto para empezar
 baton plugin validate mi-plugin   # lo revisa y muestra lo que ejecutaría
-baton plugin add ./mi-plugin      # lo instala (o github:dueño/repo@v1.0.0, con commit firmado)
-baton plugin list                 # los instalados
+baton plugin add ./mi-plugin      # lo instala en el proyecto, en baton/plugins/ (o github:dueño/repo@v1.0.0, con commit firmado)
+baton plugin add -g ./mi-plugin   # o en toda tu máquina
+baton plugin list                 # los instalados, de los dos ámbitos
 ```
 
 Para escribir uno, con un tutorial de cinco minutos, la referencia completa y cómo publicarlo
