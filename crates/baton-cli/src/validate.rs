@@ -34,6 +34,9 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
     let mut tally = Tally::default();
 
     let config = check_config(project);
+    if let Some(g) = baton_store::global::global_path().filter(|g| g.exists()) {
+        println!("  configuración global: {}", g.display());
+    }
     tally.report(
         &project.display_path(&project.config_path()),
         &config.diagnostics,

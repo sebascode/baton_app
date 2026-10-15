@@ -6,6 +6,7 @@ pub mod clock;
 pub mod config_edit;
 pub mod credentials;
 pub mod discover;
+pub mod global;
 pub mod history;
 pub mod init;
 pub mod load;
@@ -19,5 +20,6 @@ pub mod secrets;
 pub mod sources;
 pub mod state;
 
-pub use load::{Checked, Diagnostic, check_config, check_plan};
+pub use global::check_config;
+pub use load::{Checked, Diagnostic, check_plan, check_project_config};
 pub use project::Project;

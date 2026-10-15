@@ -427,6 +427,22 @@ mod tests {
     }
 
     #[test]
+    fn the_ui_section_survives_saving_a_change_elsewhere() {
+        let original =
+            "[ui]\nconfirm_exit = false\n\n[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n";
+        let (_t, p) = project_with(original);
+        let mut c = Config::parse(&read(&p)).unwrap();
+        let Target::Context(t) = c.targets.get_mut("prod").unwrap() else {
+            panic!()
+        };
+        t.context = "otro".into();
+        save_config(&p, &c).unwrap();
+        let text = read(&p);
+        assert!(text.contains("confirm_exit = false"), "{text}");
+        assert!(!Config::parse(&text).unwrap().ui.confirms_exit());
+    }
+
+    #[test]
     fn secret_providers_survive_saving_a_change_elsewhere() {
         let original = "[defaults]\nsecrets = \"vault\"\n\n# de dónde salen los tokens\n[secrets.vault]\ntype = \"command\"\nget = \"vault kv get -field={campo} secret/{prefijo}\"\ntimeout = \"10s\"\n\n[targets.prod]\ntype = \"context\"\ncontext = \"qa\"\n";
         let (_t, p) = project_with(original);

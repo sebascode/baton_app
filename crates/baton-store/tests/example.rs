@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use baton_core::config::Target;
 use baton_core::plan::{CheckKind, Condition, GateMode, StepKind};
 use baton_store::sources::expand_sources;
-use baton_store::{Project, check_config, check_plan};
+use baton_store::{Project, check_plan, check_project_config};
 
 fn example() -> Project {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/stack-produccion");
@@ -16,7 +16,7 @@ fn example() -> Project {
 #[test]
 fn example_config_loads_cleanly() {
     let project = example();
-    let cfg = check_config(&project);
+    let cfg = check_project_config(&project);
     assert!(cfg.diagnostics.is_empty(), "{:?}", cfg.diagnostics);
     let cfg = cfg.value.unwrap();
 
@@ -37,7 +37,7 @@ fn example_config_loads_cleanly() {
 fn example_plan_loads_cleanly() {
     let project = example();
     assert_eq!(project.list_plans(), ["instalar"]);
-    let cfg = check_config(&project).value.unwrap();
+    let cfg = check_project_config(&project).value.unwrap();
     let checked = check_plan(&project, "instalar", Some(&cfg));
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let plan = checked.value.unwrap();
@@ -98,7 +98,7 @@ fn example_plan_loads_cleanly() {
 #[test]
 fn example_sources_match_the_files_on_disk() {
     let project = example();
-    let cfg = check_config(&project).value.unwrap();
+    let cfg = check_project_config(&project).value.unwrap();
     let plan = check_plan(&project, "instalar", Some(&cfg)).value.unwrap();
     // El editor de pasos muestra "4 archivos" para este glob.
     let services = plan.step("services").unwrap();

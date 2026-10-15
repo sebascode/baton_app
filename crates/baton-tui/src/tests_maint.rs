@@ -147,6 +147,12 @@ fn esc_with_nothing_running_returns_to_the_plan() {
 }
 
 #[test]
+fn with_confirm_exit_off_esc_quits_without_asking() {
+    let mut app = App::new(fake::preview()).with_quit_confirm(false);
+    assert_eq!(app.handle_key(key(KeyCode::Esc)), Some(Effect::Quit));
+}
+
+#[test]
 fn esc_on_the_plan_view_asks_before_closing_baton_but_q_still_quits() {
     let mut app = App::new(fake::preview());
     assert_eq!(app.handle_key(key(KeyCode::Esc)), None);

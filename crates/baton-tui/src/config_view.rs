@@ -177,6 +177,9 @@ pub struct ConfigState {
     /// acá al guardar, sin tocarlos.
     base: Config,
     pub notice: Option<String>,
+    /// Valores que aplican pero vienen de la configuración global (`clave = valor`), para que no
+    /// se busquen en `.baton/config.toml`. Se muestran en la pestaña Logs.
+    pub global_notes: Vec<String>,
 }
 
 fn retention_text(r: &Retention) -> String {
@@ -413,6 +416,7 @@ impl ConfigState {
             list_cursor: 0,
             prompt: None,
             notice: None,
+            global_notes: Vec::new(),
             base: config.clone(),
         }
     }
@@ -452,7 +456,14 @@ impl ConfigState {
             // los proveedores de secretos no se editan en esta pantalla: se conservan tal cual
             secrets: self.base.secrets.clone(),
             ambientes: self.base.ambientes.clone(),
+            ui: self.base.ui.clone(),
         })
+    }
+
+    /// Los valores que vienen de la configuración global, para mostrarlos en la pestaña Logs.
+    pub fn with_global_notes(mut self, notes: Vec<String>) -> ConfigState {
+        self.global_notes = notes;
+        self
     }
 
     pub fn set_status(&mut self, idx: usize, status: TargetStatus) {
@@ -831,6 +842,23 @@ impl ConfigState {
             Some(self.logs.focus),
             label_width(&self.logs.fields),
         );
+        // lo que aplica pero no está en este archivo: viene de la configuración global
+        let n = self.global_notes.len() as u16;
+        if n > 0 && rows.height > self.logs.fields.len() as u16 * 2 + n + 2 {
+            let top = area.y + area.height - n - 1;
+            Line::from(Span::styled(
+                "desde la configuración global (baton settings):",
+                theme::muted(),
+            ))
+            .render(Rect::new(area.x, top, area.width, 1), buf);
+            for (i, note) in self.global_notes.iter().enumerate() {
+                Line::from(vec![
+                    Span::styled("  global  ", Style::new().fg(theme::INFO)),
+                    Span::raw(note.clone()),
+                ])
+                .render(Rect::new(area.x, top + 1 + i as u16, area.width, 1), buf);
+            }
+        }
     }
 
     fn render_credentials(&self, buf: &mut Buffer, area: Rect) {

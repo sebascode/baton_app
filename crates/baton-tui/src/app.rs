@@ -145,6 +145,8 @@ pub struct App {
     protect: Option<crate::protect::ProtectPrompt>,
     /// Se preguntó "¿salir de baton?" y se espera la respuesta (nada cierra baton por sí solo).
     quit_ask: bool,
+    /// `[ui] confirm_exit`: si es falso, esc y enter salen sin preguntar.
+    quit_confirm: bool,
 }
 
 /// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
@@ -189,6 +191,7 @@ impl App {
             protected: None,
             protect: None,
             quit_ask: false,
+            quit_confirm: true,
         }
     }
 
@@ -201,6 +204,7 @@ impl App {
             protected: None,
             protect: None,
             quit_ask: false,
+            quit_confirm: true,
         }
     }
 
@@ -213,12 +217,19 @@ impl App {
             protected: None,
             protect: None,
             quit_ask: false,
+            quit_confirm: true,
         }
     }
 
     /// Marca el ambiente de esta ejecución como protegido (lo decide el usuario en `config.toml`).
     pub fn protecting(mut self, ambiente: &str) -> App {
         self.protected = Some(ambiente.to_string());
+        self
+    }
+
+    /// Si `esc` y `enter` preguntan antes de cerrar baton (`[ui] confirm_exit`, por defecto sí).
+    pub fn with_quit_confirm(mut self, ask: bool) -> App {
+        self.quit_confirm = ask;
         self
     }
 
@@ -304,6 +315,9 @@ impl App {
 
     /// Pregunta si salir (la respuesta es la próxima tecla: `s` sale, otra sigue).
     fn ask_quit(&mut self) -> Option<Effect> {
+        if !self.quit_confirm {
+            return Some(Effect::Quit);
+        }
         self.quit_ask = true;
         None
     }
