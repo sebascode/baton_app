@@ -1,6 +1,6 @@
 //! Plantillas de los comandos de un proveedor de secretos (`[secrets.<nombre>].get`).
 
-use crate::config::{AzureKeyvaultProvider, SecretProvider, VaultProvider};
+use crate::config::{AzureKeyvaultProvider, BitwardenProvider, SecretProvider, VaultProvider};
 use crate::credential::CredentialRef;
 use crate::template::placeholders;
 
@@ -54,6 +54,7 @@ pub fn provider_command(
         SecretProvider::Command(c) => render(&c.get, ambiente, r, field),
         SecretProvider::Vault(v) => vault_command(v, ambiente, r, field),
         SecretProvider::AzureKeyvault(a) => azure_command(a, ambiente, r, field),
+        SecretProvider::Bitwarden(b) => bitwarden_command(b, ambiente, r, field),
     }
 }
 
@@ -123,6 +124,23 @@ fn azure_command(
     }
     cmd.push_str(" --query value -o tsv");
     cmd
+}
+
+fn bitwarden_command(
+    b: &BitwardenProvider,
+    ambiente: Option<&str>,
+    r: &CredentialRef,
+    field: &str,
+) -> String {
+    let item = render(
+        b.item.as_deref().unwrap_or("{prefijo}-{campo}"),
+        ambiente,
+        r,
+        field,
+    );
+    let part = b.read.as_deref().unwrap_or("password");
+    // sin `--nointeraction`, `bw` con la bóveda bloqueada se queda esperando una contraseña
+    format!("bw get {} {} --nointeraction", quote(part), quote(&item))
 }
 
 #[cfg(test)]
@@ -232,6 +250,29 @@ mod tests {
         assert_eq!(
             provider_command(&named, Some("qa.eu"), &r(), "TOKEN"),
             "az keyvault secret show --vault-name 'kv' --name 'qa-eu-GHCR-token' --subscription 'mi sub' --query value -o tsv"
+        );
+    }
+
+    #[test]
+    fn bitwarden_preset_reads_a_named_item_without_ever_asking() {
+        let p = provider("type = \"bitwarden\"\n");
+        assert_eq!(
+            provider_command(&p, Some("prod"), &r(), "TOKEN"),
+            "bw get 'password' 'GHCR-token' --nointeraction"
+        );
+        let named = provider(
+            "type = \"bitwarden\"\nitem = \"baton {ambiente} {prefijo} {campo}\"\nread = \"notes\"\n",
+        );
+        assert_eq!(
+            provider_command(&named, Some("prod"), &r(), "USER"),
+            "bw get 'notes' 'baton prod GHCR user' --nointeraction"
+        );
+        // un nombre con comillas no sale del argumento
+        let tricky = provider("type = \"bitwarden\"\nitem = \"it's {campo}\"\n");
+        assert!(
+            provider_command(&tricky, None, &r(), "TOKEN").contains("'it'\\''s token'"),
+            "{}",
+            provider_command(&tricky, None, &r(), "TOKEN")
         );
     }
 

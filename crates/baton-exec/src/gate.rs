@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use baton_core::compose::{Resolution, ResolvedCheck, Service, resolve_gate_checks};
 use baton_core::events::{CheckState, Failure, FailureKind, LogKind, RunCommand, RunEvent};
 use baton_core::plan::{Check, CheckKind, Condition, Gate};
+use baton_core::tr;
 use baton_store::sources::expand_sources;
 use futures_util::future::join_all;
 use tokio::sync::mpsc::UnboundedReceiver as Rx;
@@ -88,7 +89,7 @@ pub(crate) async fn run_auto_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: us
         ctx.log(
             step,
             LogKind::Success,
-            "dry-run: gate automático no evaluado",
+            tr!("dry-run: gate automático no evaluado"),
         );
         return GateResult::Passed;
     }
@@ -114,12 +115,16 @@ pub(crate) async fn run_auto_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: us
     report_resolution(ctx, step, &res);
 
     if res.checks.is_empty() {
-        ctx.log(step, LogKind::Output, "el gate no tiene checks activos");
+        ctx.log(
+            step,
+            LogKind::Output,
+            tr!("el gate no tiene checks activos"),
+        );
         push_warning(
             ctx,
-            format!(
-                "{}: el gate no tenía checks activos, no se comprobó nada",
-                ps.step.name
+            tr!(
+                "{name}: el gate no tenía checks activos, no se comprobó nada",
+                name = ps.step.name
             ),
         );
         return GateResult::Passed;
@@ -149,10 +154,10 @@ pub(crate) async fn run_auto_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: us
                 None | Some(RunCommand::Abort) => return GateResult::Interrupted(Interrupt::Abort),
                 Some(RunCommand::Rollback) => return GateResult::Interrupted(Interrupt::Rollback),
                 Some(RunCommand::SkipGate) => {
-                    ctx.log(step, LogKind::Error, "gate saltado por el usuario");
-                    push_warning(ctx, format!("{}: el gate se saltó a pedido del usuario", ps.step.name));
+                    ctx.log(step, LogKind::Error, tr!("gate saltado por el usuario"));
+                    push_warning(ctx, tr!("{name}: el gate se saltó a pedido del usuario", name = ps.step.name));
                     for rc in &res.checks {
-                        update(ctx, step, rc, CheckState::Skipped, Some("saltado".into()));
+                        update(ctx, step, rc, CheckState::Skipped, Some(tr!("saltado")));
                     }
                     return GateResult::Passed;
                 }
@@ -177,9 +182,9 @@ fn report_resolution(ctx: &Ctx, step: usize, res: &Resolution) {
         ctx.log(
             step,
             LogKind::Output,
-            format!(
-                "el gate no tenía checks: se infirieron {} desde el compose",
-                res.checks.len()
+            tr!(
+                "el gate no tenía checks: se infirieron {n} desde el compose",
+                n = res.checks.len()
             ),
         );
     }
@@ -187,14 +192,20 @@ fn report_resolution(ctx: &Ctx, step: usize, res: &Resolution) {
         ctx.log(
             step,
             LogKind::Output,
-            format!("servicio nuevo sin activar: {s} (actívalo desde el editor del gate)"),
+            tr!(
+                "servicio nuevo sin activar: {s} (actívalo desde el editor del gate)",
+                s = s
+            ),
         );
     }
     for s in &res.removed {
         ctx.log(
             step,
             LogKind::Output,
-            format!("check ignorado: el servicio '{s}' ya no está en el compose"),
+            tr!(
+                "check ignorado: el servicio '{s}' ya no está en el compose",
+                s = s
+            ),
         );
     }
 }
@@ -230,35 +241,46 @@ fn evaluate(ctx: &Ctx, step: usize, gate: &Gate, outcomes: &[CheckOutcome]) -> G
             ctx.log(
                 step,
                 LogKind::Retry,
-                format!(
-                    "check {} no pasó pero el gate avanza: {}",
-                    o.label, o.detail
+                tr!(
+                    "check {label} no pasó pero el gate avanza: {detail}",
+                    label = o.label,
+                    detail = o.detail
                 ),
             );
             push_warning(
                 ctx,
-                format!("{name}: el check {} falló ({})", o.label, o.detail),
+                tr!(
+                    "{name}: el check {label} falló ({detail})",
+                    name = name,
+                    label = o.label,
+                    detail = o.detail
+                ),
             );
         }
         ctx.log(
             step,
             LogKind::Success,
-            format!("gate ok: {passed} de {} checks pasaron", outcomes.len()),
+            tr!(
+                "gate ok: {passed} de {total} checks pasaron",
+                passed = passed,
+                total = outcomes.len()
+            ),
         );
         return GateResult::Passed;
     }
 
     let message = match gate.condition {
-        Condition::All => format!("El gate falló: {}", describe(&blocking)),
-        Condition::AtLeast => format!(
-            "El gate falló: pasaron {passed} de {} checks y se necesitan {} ({})",
-            outcomes.len(),
-            gate.at_least.unwrap_or(1),
-            describe(&failed)
+        Condition::All => tr!("El gate falló: {what}", what = describe(&blocking)),
+        Condition::AtLeast => tr!(
+            "El gate falló: pasaron {passed} de {total} checks y se necesitan {need} ({what})",
+            passed = passed,
+            total = outcomes.len(),
+            need = gate.at_least.unwrap_or(1),
+            what = describe(&failed)
         ),
-        Condition::Critical => format!(
-            "El gate falló: checks críticos sin pasar: {}",
-            describe(&blocking)
+        Condition::Critical => tr!(
+            "El gate falló: checks críticos sin pasar: {what}",
+            what = describe(&blocking)
         ),
     };
     ctx.log(step, LogKind::Error, message.clone());
@@ -300,7 +322,7 @@ async fn run_check(
 ) -> CheckOutcome {
     let label = rc.check.display_name().to_string();
     let critical = rc.check.critical;
-    let mut last = ProbeError::new("sin intentos", "");
+    let mut last = ProbeError::new(tr!("sin intentos"), "");
 
     for attempt in 1..=t.attempts {
         ctx.emit(RunEvent::GateAttempt {
@@ -385,8 +407,8 @@ impl Captured {
     /// Última línea útil de la salida de error, o del código de salida.
     fn why(&self) -> String {
         match self.exit {
-            Exit::TimedOut => "se agotó el tiempo del comando".to_string(),
-            Exit::Signal => "el comando terminó por una señal".to_string(),
+            Exit::TimedOut => tr!("se agotó el tiempo del comando"),
+            Exit::Signal => tr!("el comando terminó por una señal"),
             Exit::Code(c) => self
                 .stderr
                 .iter()
@@ -460,8 +482,10 @@ async fn probe(
             let line = format!("curl -fsS -o /dev/null -m {secs} {}", sh_quote(&url));
             let c = capture(ctx, target, line.clone(), &ctx.project.root, t.timeout).await?;
             match c.exit {
-                e if e.success() => Ok("responde".to_string()),
-                Exit::Code(127) => Err(ProbeError::new("no se encontró curl en el PATH", line)),
+                e if e.success() => Ok(tr!("responde")),
+                Exit::Code(127) => {
+                    Err(ProbeError::new(tr!("no se encontró curl en el PATH"), line))
+                }
                 _ => Err(ProbeError::new(c.why(), line)),
             }
         }
@@ -477,11 +501,15 @@ async fn probe(
             }
             match c.stdout.first().map(|s| s.trim()) {
                 Some("healthy") => Ok("healthy".to_string()),
-                Some("sin-healthcheck") => {
-                    Err(ProbeError::new("el contenedor no define healthcheck", line))
-                }
+                Some("sin-healthcheck") => Err(ProbeError::new(
+                    tr!("el contenedor no define healthcheck"),
+                    line,
+                )),
                 Some(other) => Err(ProbeError::new(other.to_string(), line)),
-                None => Err(ProbeError::new("sin respuesta de docker inspect", line)),
+                None => Err(ProbeError::new(
+                    tr!("sin respuesta de docker inspect"),
+                    line,
+                )),
             }
         }
         CheckKind::Running => {
@@ -497,28 +525,34 @@ async fn probe(
             let text = c.stdout.first().cloned().unwrap_or_default();
             let (running, started) = text.split_once(' ').unwrap_or((text.as_str(), ""));
             if running.trim() != "true" {
-                return Err(ProbeError::new("el contenedor no está corriendo", line));
+                return Err(ProbeError::new(
+                    tr!("el contenedor no está corriendo"),
+                    line,
+                ));
             }
             let min_up = check
                 .min_up
                 .map_or(baton_core::compose::DEFAULT_MIN_UP, |d| d.as_duration());
             let up = uptime(started.trim()).ok_or_else(|| {
                 ProbeError::new(
-                    format!("no se entendió la hora de inicio '{started}'"),
+                    tr!(
+                        "no se entendió la hora de inicio '{started}'",
+                        started = started
+                    ),
                     line.clone(),
                 )
             })?;
             if up >= min_up {
-                Ok(format!(
-                    "arriba {}",
-                    humantime::format_duration(Duration::from_secs(up.as_secs()))
+                Ok(tr!(
+                    "arriba {time}",
+                    time = humantime::format_duration(Duration::from_secs(up.as_secs()))
                 ))
             } else {
                 Err(ProbeError::new(
-                    format!(
-                        "arriba hace {}, se piden {}",
-                        humantime::format_duration(Duration::from_secs(up.as_secs())),
-                        humantime::format_duration(min_up)
+                    tr!(
+                        "arriba hace {up}, se piden {min}",
+                        up = humantime::format_duration(Duration::from_secs(up.as_secs())),
+                        min = humantime::format_duration(min_up)
                     ),
                     line,
                 ))
@@ -549,7 +583,10 @@ async fn container_id(
     let service = check.service.as_deref().unwrap_or_default();
     let Some(found) = lookup.iter().find(|s| s.service.name == service) else {
         return Err(ProbeError::new(
-            format!("el servicio '{service}' no está en los compose del paso"),
+            tr!(
+                "el servicio '{service}' no está en los compose del paso",
+                service = service
+            ),
             String::new(),
         ));
     };
@@ -573,6 +610,9 @@ async fn container_id(
     }
     match c.stdout.iter().map(|l| l.trim()).find(|l| !l.is_empty()) {
         Some(id) => Ok(id.to_string()),
-        None => Err(ProbeError::new("el contenedor todavía no existe", line)),
+        None => Err(ProbeError::new(
+            tr!("el contenedor todavía no existe"),
+            line,
+        )),
     }
 }

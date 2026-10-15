@@ -6,6 +6,7 @@ use std::cell::Cell;
 
 use baton_core::events::{LogKind, LogLine};
 use baton_core::maintenance::Action;
+use baton_core::{i18n::tr_dyn, tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -108,15 +109,15 @@ impl MaintState {
         let mut rows: Vec<(String, String, Row)> = Vec::new();
         rows.push((
             "logs".into(),
-            "las últimas líneas".into(),
+            tr!("las últimas líneas"),
             Row::Action(Action::Logs {
                 follow: false,
                 tail: TAIL,
             }),
         ));
         rows.push((
-            "logs en vivo".into(),
-            "seguirlos hasta cortar (x)".into(),
+            tr!("logs en vivo"),
+            tr!("seguirlos hasta cortar (x)"),
             Row::Action(Action::Logs {
                 follow: true,
                 tail: TAIL,
@@ -124,16 +125,20 @@ impl MaintState {
         ));
         for (name, what) in Action::CATALOG.iter().skip(1) {
             if let Some(a) = Action::parse(name, false, TAIL) {
-                rows.push(((*name).to_string(), (*what).to_string(), Row::Action(a)));
+                rows.push((
+                    (*name).to_string(),
+                    tr_dyn(what).into_owned(),
+                    Row::Action(a),
+                ));
             }
         }
         for (i, t) in tasks.iter().enumerate() {
             let what = if t.description.is_empty() {
-                "tarea del plan".to_string()
+                tr!("tarea del plan")
             } else {
                 t.description.clone()
             };
-            rows.push((format!("tarea · {}", t.name), what, Row::Task(i)));
+            rows.push((tr!("tarea · {name}", name = t.name), what, Row::Task(i)));
         }
         MaintState {
             plan: plan.into(),
@@ -163,7 +168,7 @@ impl MaintState {
         match row {
             Row::Action(a) => {
                 let svc = self.selected_service().map(|s| s.name.clone());
-                let what = svc.clone().unwrap_or_else(|| "todos los servicios".into());
+                let what = svc.clone().unwrap_or_else(|| tr!("todos los servicios"));
                 Some((
                     MaintRequest {
                         action: Some(*a),
@@ -182,7 +187,7 @@ impl MaintState {
                         service: None,
                         task: Some(t.id.clone()),
                     },
-                    format!("tarea {}", t.name),
+                    tr!("tarea {name}", name = t.name),
                     t.confirm,
                 ))
             }
@@ -226,12 +231,12 @@ impl MaintState {
     pub fn finish(&mut self, result: MaintResult) {
         let label = self.running.take().unwrap_or_default();
         let (kind, msg) = match result {
-            MaintResult::Ok => (LogKind::Success, format!("{label} · listo")),
-            MaintResult::Cancelled => (LogKind::Retry, format!("{label} · cortado")),
+            MaintResult::Ok => (LogKind::Success, tr!("{label} · listo", label = label)),
+            MaintResult::Cancelled => (LogKind::Retry, tr!("{label} · cortado", label = label)),
             MaintResult::Failed(why) => (LogKind::Error, format!("{label} · {why}")),
         };
         self.push(kind, msg);
-        self.notice = Some("terminó · elige otra acción o esc para volver al plan".into());
+        self.notice = Some(tr!("terminó · elige otra acción o esc para volver al plan"));
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<MaintAction> {
@@ -264,7 +269,7 @@ impl MaintState {
             KeyCode::Char('x') => return self.running.is_some().then_some(MaintAction::Cancel),
             KeyCode::Enter => {
                 if self.running.is_some() {
-                    self.notice = Some("ya hay algo en curso (x lo corta)".into());
+                    self.notice = Some(tr!("ya hay algo en curso (x lo corta)"));
                 } else if let Some((req, label, confirm)) = self.request() {
                     if confirm {
                         self.ask = Some(Ask::Run(req, label));
@@ -314,8 +319,8 @@ impl MaintState {
 
     fn prompt(&self) -> Option<String> {
         self.ask.as_ref().map(|a| match a {
-            Ask::Run(_, label) => format!("¿Ejecutar {label}? (s/N)"),
-            Ask::Leave => "Hay algo en curso. ¿Cortarlo y volver al plan? (s/N)".to_string(),
+            Ask::Run(_, label) => tr!("¿Ejecutar {label}? (s/N)", label = label),
+            Ask::Leave => tr!("Hay algo en curso. ¿Cortarlo y volver al plan? (s/N)"),
         })
     }
 
@@ -329,7 +334,7 @@ impl MaintState {
             buf,
             area,
             vec![Span::styled(
-                format!("Mantención · {}", self.plan),
+                tr!("Mantención · {plan}", plan = self.plan),
                 theme::bold(),
             )],
             state,
@@ -337,14 +342,14 @@ impl MaintState {
         );
         let w = inner.width.saturating_sub(2);
         let mut shortcuts: Vec<(&str, &str)> = vec![
-            ("tab", "cambiar de lista"),
-            ("↑↓", "mover"),
-            ("enter", "ejecutar"),
+            ("tab", tk!("cambiar de lista")),
+            ("↑↓", tk!("mover")),
+            ("enter", tk!("ejecutar")),
         ];
         if self.running.is_some() {
-            shortcuts.push(("x", "cortar"));
+            shortcuts.push(("x", tk!("cortar")));
         }
-        shortcuts.extend([("PgUp PgDn", "salida"), ("esc", "volver al plan")]);
+        shortcuts.extend([("PgUp PgDn", tk!("salida")), ("esc", tk!("volver al plan"))]);
         let prompt = self.prompt();
         let sc_h = widgets::prompt_bar_height(&shortcuts, w, prompt.as_deref());
         let sc_y = inner.bottom().saturating_sub(sc_h);
@@ -388,7 +393,7 @@ impl MaintState {
         self.view_height.set(body.height as usize);
         if self.log.is_empty() {
             Line::from(Span::styled(
-                "elige una acción y pulsa enter; la salida aparece aquí",
+                tr!("elige una acción y pulsa enter; la salida aparece aquí"),
                 theme::muted(),
             ))
             .render(Rect::new(body.x, body.y, body.width, 1), buf);
@@ -403,9 +408,9 @@ impl MaintState {
             line.render(Rect::new(body.x, body.y + i as u16, body.width, 1), buf);
         }
         if scroll > 0 && body.width > 20 {
-            let hint = "[G] ir al final";
+            let hint = tr!("[G] ir al final");
             let hw = hint.chars().count() as u16;
-            Line::from(Span::styled(hint, Style::new().fg(theme::WARN))).render(
+            Line::from(Span::styled(hint.clone(), Style::new().fg(theme::WARN))).render(
                 Rect::new(body.right() - hw, sep_low.saturating_sub(1), hw, 1),
                 buf,
             );
@@ -424,9 +429,8 @@ impl MaintState {
 
     fn render_services(&self, buf: &mut Buffer, area: Rect) {
         let focused = self.focus == Focus::Services;
-        self.head(buf, area, "Servicios", focused);
-        let mut items: Vec<(String, String)> =
-            vec![("todos los servicios".to_string(), String::new())];
+        self.head(buf, area, &tr!("Servicios"), focused);
+        let mut items: Vec<(String, String)> = vec![(tr!("todos los servicios"), String::new())];
         items.extend(
             self.services
                 .iter()
@@ -456,8 +460,8 @@ impl MaintState {
     fn render_actions(&self, buf: &mut Buffer, area: Rect) {
         let focused = self.focus == Focus::Actions;
         let head = match self.selected_service() {
-            Some(s) => format!("Acciones · {}", s.name),
-            None => "Acciones · todos los servicios".to_string(),
+            Some(s) => tr!("Acciones · {name}", name = s.name),
+            None => tr!("Acciones · todos los servicios"),
         };
         self.head(buf, area, &head, focused);
         let rows = area.height.saturating_sub(1) as usize;

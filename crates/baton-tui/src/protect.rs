@@ -9,6 +9,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use baton_core::tr;
+
 use crate::forms::TextField;
 use crate::preview::RunRequest;
 use crate::theme;
@@ -81,9 +83,9 @@ impl ProtectPrompt {
                     return ProtectOutcome::Confirm(self.action.clone());
                 }
                 self.error = Some(if self.input.is_empty() {
-                    format!("escribe {} para confirmar", self.ambiente)
+                    tr!("escribe {name} para confirmar", name = self.ambiente)
                 } else {
-                    "no coincide con el nombre del ambiente".into()
+                    tr!("no coincide con el nombre del ambiente")
                 });
             }
             _ => {
@@ -93,30 +95,41 @@ impl ProtectPrompt {
         ProtectOutcome::Open
     }
 
-    fn lines(&self) -> (String, String, &'static str) {
+    fn lines(&self) -> (String, String, String) {
         let at = if self.ambiente.is_empty() {
             String::new()
         } else {
-            format!(" en «{}»", self.ambiente)
+            tr!(" en «{name}»", name = self.ambiente)
         };
         match &self.action {
             Guarded::Run(req) => {
                 let n = req.steps.len();
-                let noun = if n == 1 { "paso" } else { "pasos" };
-                (
-                    format!(" Ejecutar{at} "),
-                    format!("Vas a ejecutar {n} {noun} de «{}».", self.plan),
-                    "ejecutar",
-                )
+                let what = if n == 1 {
+                    tr!(
+                        "Vas a ejecutar {n} paso de «{plan}».",
+                        n = n,
+                        plan = self.plan
+                    )
+                } else {
+                    tr!(
+                        "Vas a ejecutar {n} pasos de «{plan}».",
+                        n = n,
+                        plan = self.plan
+                    )
+                };
+                (tr!(" Ejecutar{at} ", at = at), what, tr!("ejecutar"))
             }
             Guarded::Rollback => (
-                format!(" Rollback{at} "),
+                tr!(" Rollback{at} ", at = at),
                 if self.list.is_empty() {
-                    format!("Vas a deshacer pasos de «{}».", self.plan)
+                    tr!("Vas a deshacer pasos de «{plan}».", plan = self.plan)
                 } else {
-                    format!("Se deshace, del último al primero, en «{}»:", self.plan)
+                    tr!(
+                        "Se deshace, del último al primero, en «{plan}»:",
+                        plan = self.plan
+                    )
                 },
-                "hacer rollback",
+                tr!("hacer rollback"),
             ),
         }
     }
@@ -164,7 +177,7 @@ impl ProtectPrompt {
                 );
             }
         };
-        line(y, vec![Span::raw(what)]);
+        line(y, vec![Span::raw(what.clone())]);
         y += 1;
         if !self.list.is_empty() {
             y += 1;
@@ -182,7 +195,7 @@ impl ProtectPrompt {
             if hidden > 0 {
                 line(
                     y,
-                    vec![Span::styled(format!("  … {hidden} más"), theme::muted())],
+                    vec![Span::styled(tr!("  … {n} más", n = hidden), theme::muted())],
                 );
                 y += 1;
             }
@@ -190,7 +203,7 @@ impl ProtectPrompt {
         if self.typed {
             y += 1;
             let mut ask = vec![Span::styled(
-                format!("Para confirmar escribe {}  ", self.ambiente),
+                tr!("Para confirmar escribe {name}  ", name = self.ambiente),
                 theme::secondary(),
             )];
             ask.extend(self.input.spans(inner.width.saturating_sub(40), true, None));
@@ -200,7 +213,7 @@ impl ProtectPrompt {
         let tail = match &self.error {
             Some(e) => Span::styled(e.clone(), Style::new().fg(theme::WARN)),
             None => Span::styled(
-                format!("[enter] {verb}  [esc] cancelar"),
+                tr!("[enter] {verb}  [esc] cancelar", verb = verb),
                 theme::secondary(),
             ),
         };

@@ -5,6 +5,7 @@
 
 use baton_core::plan::{Plan, Sources, Step, StepKind};
 use baton_core::units::{Dur, format_duration};
+use baton_core::{tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -42,7 +43,7 @@ const F_BACKUP: usize = 10;
 /// Solo existe si el plan declara varias credenciales `db`: cuál usa un paso `sql`.
 const F_DATABASE: usize = 11;
 /// Lo que muestra el selector de base cuando el paso no elige ninguna.
-const NO_DATABASE: &str = "(ninguna)";
+const NO_DATABASE: &str = tk!("(ninguna)");
 
 /// Datos con los que se crea un paso en el editor.
 #[derive(Debug, Clone, Default)]
@@ -90,19 +91,21 @@ impl StepDraft {
         if !spec.target.is_empty() && !target_refs.contains(&spec.target.as_str()) {
             target_refs.push(&spec.target);
         }
-        let source = Field::text("origen", &spec.source);
+        let source = Field::text(tk!("origen"), &spec.source);
         let mut fields = vec![
-            Field::text("nombre", &spec.name),
-            Field::choice("tipo", &kind_options(), &spec.kind),
+            Field::text(tk!("nombre"), &spec.name),
+            Field::choice(tk!("tipo"), &kind_options(), &spec.kind),
             source,
-            Field::drop("destino", &target_refs, &spec.target),
-            Field::text("comando", &spec.command),
-            Field::deps("depende de"),
-            Field::text("timeout", &spec.timeout).width(8),
-            Field::number("reintentos", &spec.retries).width(6).inline(),
-            Field::card("gate para avanzar"),
-            Field::text("rollback", &spec.rollback),
-            Field::toggle("backup", "antes de este paso", spec.backup_before),
+            Field::drop(tk!("destino"), &target_refs, &spec.target),
+            Field::text(tk!("comando"), &spec.command),
+            Field::deps(tk!("depende de")),
+            Field::text(tk!("timeout"), &spec.timeout).width(8),
+            Field::number(tk!("reintentos"), &spec.retries)
+                .width(6)
+                .inline(),
+            Field::card(tk!("gate para avanzar")),
+            Field::text(tk!("rollback"), &spec.rollback),
+            Field::toggle(tk!("backup"), tk!("antes de este paso"), spec.backup_before),
         ];
         if !db_ids.is_empty() {
             let mut options: Vec<&str> = vec![NO_DATABASE];
@@ -112,7 +115,7 @@ impl StepDraft {
             } else {
                 spec.database.as_str()
             };
-            fields.push(Field::drop("base (sql)", &options, selected));
+            fields.push(Field::drop(tk!("base (sql)"), &options, selected));
         }
         StepDraft {
             id,
@@ -339,10 +342,14 @@ impl EditorState {
         for (pos, d) in self.steps.iter().enumerate() {
             match self.draft_to_step(d, &ids) {
                 Ok(step) => out.push(step),
-                Err(msgs) => errors.extend(
-                    msgs.into_iter()
-                        .map(|m| format!("paso {} ({}): {m}", pos + 1, d.name())),
-                ),
+                Err(msgs) => errors.extend(msgs.into_iter().map(|m| {
+                    tr!(
+                        "paso {n} ({name}): {msg}",
+                        n = pos + 1,
+                        name = d.name(),
+                        msg = m
+                    )
+                })),
             }
         }
         if errors.is_empty() {
@@ -403,7 +410,7 @@ impl EditorState {
 
         let name = f(F_NAME).trim().to_string();
         if name.is_empty() {
-            errors.push("el nombre no puede estar vacío".to_string());
+            errors.push(tr!("el nombre no puede estar vacío"));
         }
         let sources: Vec<String> = f(F_SOURCE)
             .split(',')
@@ -429,7 +436,7 @@ impl EditorState {
             t => match t.parse::<Dur>() {
                 Ok(v) => Some(v),
                 Err(e) => {
-                    errors.push(format!("timeout: {e}"));
+                    errors.push(tr!("timeout: {e}", e = e));
                     None
                 }
             },
@@ -437,7 +444,7 @@ impl EditorState {
         let retries = match f(F_RETRIES).trim() {
             "" => 0,
             t => t.parse::<u32>().unwrap_or_else(|_| {
-                errors.push("reintentos debe ser un número".to_string());
+                errors.push(tr!("reintentos debe ser un número"));
                 0
             }),
         };
@@ -445,7 +452,7 @@ impl EditorState {
             Some(g) => match g.to_gate(origin.and_then(|o| o.gate.as_ref())) {
                 Ok(g) => Some(g),
                 Err(e) => {
-                    errors.push(format!("gate: {e}"));
+                    errors.push(tr!("gate: {e}", e = e));
                     None
                 }
             },
@@ -542,7 +549,7 @@ impl EditorState {
         let id = self.next_id;
         self.next_id += 1;
         let spec = StepSpec {
-            name: "Nuevo paso".into(),
+            name: tr!("Nuevo paso"),
             kind: "comando".into(),
             target: self.targets.first().cloned().unwrap_or_default(),
             timeout: "5m".into(),
@@ -565,12 +572,12 @@ impl EditorState {
         // la copia es un paso nuevo: su id sale de su nombre al guardar
         copy.step_id = String::new();
         self.next_id += 1;
-        let name = format!("{} (copia)", copy.name());
+        let name = tr!("{name} (copia)", name = copy.name());
         copy.form.fields[F_NAME].set_text(&name);
         self.steps.insert(self.selected + 1, copy);
         self.selected += 1;
         self.test = None;
-        self.notice = Some("paso duplicado".into());
+        self.notice = Some(tr!("paso duplicado"));
     }
 
     fn select(&mut self, idx: usize) {
@@ -679,7 +686,7 @@ impl EditorState {
         self.confirm_gate_removal = false;
         if let Some(step) = self.steps.get_mut(self.selected) {
             step.gate = None;
-            self.notice = Some("gate quitado".into());
+            self.notice = Some(tr!("gate quitado"));
         }
     }
 
@@ -693,7 +700,7 @@ impl EditorState {
         if self.selected < self.steps.len() {
             self.confirm_step_removal = true;
         } else {
-            self.notice = Some("elige un paso para borrarlo".into());
+            self.notice = Some(tr!("elige un paso para borrarlo"));
         }
     }
 
@@ -716,11 +723,12 @@ impl EditorState {
             .map_or(String::new(), |s| s.form.fields[F_NAME].value());
         let deps = self.dependents_of_selected();
         if deps.is_empty() {
-            format!("¿Borrar el paso «{name}»?")
+            tr!("¿Borrar el paso «{name}»?", name = name)
         } else {
-            format!(
-                "¿Borrar el paso «{name}»? {} dejará de depender de él.",
-                deps.join(", ")
+            tr!(
+                "¿Borrar el paso «{name}»? {list} dejará de depender de él.",
+                name = name,
+                list = deps.join(", ")
             )
         }
     }
@@ -747,9 +755,11 @@ impl EditorState {
         self.gate_open = false;
         self.test = None;
         self.notice = Some(match released {
-            0 => format!("paso «{name}» borrado (guarda con ctrl s)"),
-            n => format!(
-                "paso «{name}» borrado; {n} paso(s) ya no dependen de él (guarda con ctrl s)"
+            0 => tr!("paso «{name}» borrado (guarda con ctrl s)", name = name),
+            n => tr!(
+                "paso «{name}» borrado; {n} paso(s) ya no dependen de él (guarda con ctrl s)",
+                name = name,
+                n = n
             ),
         });
     }
@@ -758,11 +768,11 @@ impl EditorState {
     fn ask_to_remove_gate(&mut self) {
         let Some(step) = self.current() else { return };
         self.notice = if step.gate.is_none() {
-            Some("este paso no tiene gate".into())
+            Some(tr!("este paso no tiene gate"))
         } else if step.kind() == "gate" {
-            Some(
-                "un paso de tipo gate necesita su gate: cambia el tipo del paso o elimínalo".into(),
-            )
+            Some(tr!(
+                "un paso de tipo gate necesita su gate: cambia el tipo del paso o elimínalo"
+            ))
         } else {
             self.confirm_gate_removal = true;
             None
@@ -885,33 +895,33 @@ impl EditorState {
 
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
         if self.confirm_gate_removal || self.confirm_step_removal {
-            return vec![("s", "sí"), ("n", "no")];
+            return vec![("s", tk!("sí")), ("n", tk!("no"))];
         }
         if self.confirm_leave {
             return vec![
-                ("g", "guardar y salir"),
-                ("d", "descartar"),
-                ("otra tecla", "seguir editando"),
+                ("g", tk!("guardar y salir")),
+                ("d", tk!("descartar")),
+                ("otra tecla", tk!("seguir editando")),
             ];
         }
         let mut items = vec![
-            ("tab", "campo"),
-            ("ctrl g", "configurar gate"),
-            ("ctrl t", "probar paso"),
-            ("ctrl d", "duplicar"),
-            ("ctrl x", "borrar paso"),
-            ("ctrl s", "guardar"),
-            ("esc", "volver"),
+            ("tab", tk!("campo")),
+            ("ctrl g", tk!("configurar gate")),
+            ("ctrl t", tk!("probar paso")),
+            ("ctrl d", tk!("duplicar")),
+            ("ctrl x", tk!("borrar paso")),
+            ("ctrl s", tk!("guardar")),
+            ("esc", tk!("volver")),
         ];
         // con el foco en la lista basta una letra
         if self.focus == Focus::List && self.selected < self.steps.len() {
-            items.insert(0, ("b", "borrar paso"));
+            items.insert(0, ("b", tk!("borrar paso")));
         }
         // con el foco en la tarjeta de un gate existente se ofrece quitarlo
         let on_card =
             self.focus == Focus::Field(F_GATE) && self.current().is_some_and(|s| s.gate.is_some());
         if on_card {
-            items.insert(2, ("x", "quitar gate"));
+            items.insert(2, ("x", tk!("quitar gate")));
         }
         items
     }
@@ -928,22 +938,22 @@ impl EditorState {
             area,
             {
                 let mut title = vec![Span::styled(
-                    format!("✎ Editar paso · plan {}", self.plan),
+                    tr!("✎ Editar paso · plan {plan}", plan = self.plan),
                     theme::bold(),
                 )];
                 if self.is_dirty() {
                     title.push(Span::styled(
-                        "  ● sin guardar",
+                        tr!("  ● sin guardar"),
                         Style::new().fg(theme::WARN),
                     ));
                 }
                 title
             },
             vec![Span::styled(
-                format!(
-                    "paso {} de {}",
-                    (self.selected + 1).min(self.steps.len()),
-                    self.steps.len()
+                tr!(
+                    "paso {n} de {total}",
+                    n = (self.selected + 1).min(self.steps.len()),
+                    total = self.steps.len()
                 ),
                 theme::secondary(),
             )],
@@ -956,10 +966,12 @@ impl EditorState {
         let step_prompt = self
             .confirm_step_removal
             .then(|| self.step_removal_prompt());
+        let leave_prompt = tr!("Hay cambios sin guardar en este plan.");
+        let gate_prompt = crate::gate_view::remove_prompt();
         let prompt = if self.confirm_leave {
-            Some("Hay cambios sin guardar en este plan.")
+            Some(leave_prompt.as_str())
         } else if self.confirm_gate_removal {
-            Some(crate::gate_view::REMOVE_PROMPT)
+            Some(gate_prompt.as_str())
         } else {
             step_prompt.as_deref()
         };
@@ -1020,7 +1032,10 @@ impl EditorState {
             };
             let mut spans = vec![marker];
             if i == self.steps.len() {
-                spans.push(Span::styled("+ nuevo paso", Style::new().fg(theme::INFO)));
+                spans.push(Span::styled(
+                    tr!("+ nuevo paso"),
+                    Style::new().fg(theme::INFO),
+                ));
             } else {
                 let text = format!("{} {}", i + 1, self.steps[i].name());
                 let style = if selected && list_focus {
@@ -1043,9 +1058,9 @@ impl EditorState {
     fn render_form(&self, buf: &mut Buffer, outer: Rect, right: Rect) {
         let Some(step) = self.current() else {
             let msg = if self.steps.is_empty() {
-                "no hay pasos: elige + nuevo paso"
+                tr!("no hay pasos: elige + nuevo paso")
             } else {
-                "elige un paso"
+                tr!("elige un paso")
             };
             Line::from(Span::styled(msg, theme::muted()))
                 .render(Rect::new(right.x + 2, right.y + 1, right.width, 1), buf);
@@ -1079,7 +1094,11 @@ impl EditorState {
             } else {
                 let count = match (i, step.source_count) {
                     (F_SOURCE, Some(n)) => {
-                        format!("{n} {}", if n == 1 { "archivo" } else { "archivos" })
+                        if n == 1 {
+                            tr!("{n} archivo", n = n)
+                        } else {
+                            tr!("{n} archivos", n = n)
+                        }
                     }
                     _ => String::new(),
                 };
@@ -1107,7 +1126,7 @@ impl EditorState {
                 ("├", "┤"),
                 theme::border(),
             );
-            Line::from(Span::styled("gate para avanzar", theme::secondary()))
+            Line::from(Span::styled(tr!("gate para avanzar"), theme::secondary()))
                 .render(Rect::new(content.x, sep1 + 1, content.width, 1), buf);
             self.render_gate_card(
                 buf,
@@ -1126,8 +1145,11 @@ impl EditorState {
                 ("├", "┤"),
                 theme::border(),
             );
-            Line::from(Span::styled("recuperación · opcional", theme::secondary()))
-                .render(Rect::new(content.x, sep2 + 1, content.width, 1), buf);
+            Line::from(Span::styled(
+                tr!("recuperación · opcional"),
+                theme::secondary(),
+            ))
+            .render(Rect::new(content.x, sep2 + 1, content.width, 1), buf);
             let rec = &fields[F_ROLLBACK..];
             let rows = Rect::new(
                 content.x,
@@ -1151,7 +1173,7 @@ impl EditorState {
                 let ty = sep2 + 2 + used;
                 if ty < bottom {
                     Line::from(vec![
-                        Span::styled(format!("{sym} prueba: "), Style::new().fg(color)),
+                        Span::styled(tr!("{sym} prueba: ", sym = sym), Style::new().fg(color)),
                         Span::styled(msg.clone(), Style::new().fg(color)),
                     ])
                     .render(Rect::new(content.x, ty, content.width, 1), buf);
@@ -1178,15 +1200,16 @@ impl EditorState {
                     } else {
                         " "
                     };
-                    format!(
-                        "‹ [{mark}] {} ›  espacio para alternar",
-                        name_of(*id).unwrap_or_default()
+                    tr!(
+                        "‹ [{mark}] {name} ›  espacio para alternar",
+                        mark = mark,
+                        name = name_of(*id).unwrap_or_default()
                     )
                 }
-                None => "no hay pasos anteriores".to_string(),
+                None => tr!("no hay pasos anteriores"),
             }
         } else if step.depends.is_empty() {
-            "ninguna".to_string()
+            tr!("ninguna")
         } else {
             step.depends
                 .iter()
@@ -1219,7 +1242,7 @@ impl EditorState {
             .border_style(border)
             .render(area, buf);
         let inner = Rect::new(area.x + 2, area.y + 1, area.width.saturating_sub(4), 2);
-        let link = Span::styled("configurar ›", Style::new().fg(theme::INFO));
+        let link = Span::styled(tr!("configurar ›"), Style::new().fg(theme::INFO));
         match &step.gate {
             Some(g) => {
                 let (first, second) = g.summary();
@@ -1235,10 +1258,10 @@ impl EditorState {
                 }
             }
             None => {
-                let left = vec![Span::styled("sin gate", theme::muted())];
+                let left = vec![Span::styled(tr!("sin gate"), theme::muted())];
                 justify(
                     left,
-                    vec![Span::styled("añadir ›", Style::new().fg(theme::INFO))],
+                    vec![Span::styled(tr!("añadir ›"), Style::new().fg(theme::INFO))],
                     inner.width,
                 )
                 .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);

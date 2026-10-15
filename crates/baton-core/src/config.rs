@@ -46,6 +46,9 @@ pub struct Ui {
     /// Preguntar antes de cerrar baton con `esc` o `enter` (por defecto sí). `q` y `ctrl+c`
     /// siguen saliendo directo.
     pub confirm_exit: Option<bool>,
+    /// Idioma de la interfaz y de los mensajes: `es` (por defecto), `en` o `auto` (el del
+    /// sistema). `BATON_LANG` manda sobre esto.
+    pub language: Option<String>,
 }
 
 impl Ui {
@@ -148,6 +151,8 @@ pub enum SecretProvider {
     Vault(VaultProvider),
     #[serde(rename = "azure-keyvault")]
     AzureKeyvault(AzureKeyvaultProvider),
+    #[serde(rename = "bitwarden")]
+    Bitwarden(BitwardenProvider),
 }
 
 impl SecretProvider {
@@ -156,6 +161,7 @@ impl SecretProvider {
             SecretProvider::Command(_) => "command",
             SecretProvider::Vault(_) => "vault",
             SecretProvider::AzureKeyvault(_) => "azure-keyvault",
+            SecretProvider::Bitwarden(_) => "bitwarden",
         }
     }
 
@@ -165,6 +171,7 @@ impl SecretProvider {
             SecretProvider::Command(p) => p.timeout,
             SecretProvider::Vault(p) => p.timeout,
             SecretProvider::AzureKeyvault(p) => p.timeout,
+            SecretProvider::Bitwarden(p) => p.timeout,
         }
     }
 }
@@ -199,6 +206,21 @@ pub struct AzureKeyvaultProvider {
     pub subscription: Option<String>,
     pub timeout: Option<Dur>,
 }
+
+/// Bitwarden (`bw`): `bw get <parte> <ítem>`. Usa la sesión que ya tenga la máquina
+/// (`BW_SESSION`, de `bw unlock --raw`); baton no desbloquea la bóveda ni la pregunta.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BitwardenProvider {
+    /// Nombre del ítem, con placeholders; por defecto `{prefijo}-{campo}`. Tiene que ser único.
+    pub item: Option<String>,
+    /// Qué parte del ítem se lee: `password` (por defecto), `username`, `notes`, `uri` o `totp`.
+    pub read: Option<String>,
+    pub timeout: Option<Dur>,
+}
+
+/// Partes de un ítem de Bitwarden que `bw get` sabe imprimir.
+pub const BITWARDEN_PARTS: [&str; 5] = ["password", "username", "notes", "uri", "totp"];
 
 /// Corre un comando (`sh -c`) por campo de credencial y toma su salida como el valor.
 /// Placeholders: `{ambiente} {prefijo} {campo} {variable} {archivo}` (ver `secrets::render`).

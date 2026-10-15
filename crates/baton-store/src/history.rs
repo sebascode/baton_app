@@ -28,12 +28,16 @@ pub fn ago(from: &str, now: DateTime<FixedOffset>) -> String {
     };
     let secs = (now - from).num_seconds().max(0);
     match secs {
-        0..=44 => "ahora".to_string(),
-        45..=3_599 => format!("hace {} min", (secs + 30) / 60),
-        3_600..=86_399 => format!("hace {} h", secs / 3_600),
+        0..=44 => baton_core::tr!("ahora"),
+        45..=3_599 => baton_core::tr!("hace {n} min", n = (secs + 30) / 60),
+        3_600..=86_399 => baton_core::tr!("hace {n} h", n = secs / 3_600),
         _ => {
             let days = secs / 86_400;
-            format!("hace {days} {}", if days == 1 { "día" } else { "días" })
+            if days == 1 {
+                baton_core::tr!("hace {n} día", n = days)
+            } else {
+                baton_core::tr!("hace {n} días", n = days)
+            }
         }
     }
 }
@@ -165,12 +169,14 @@ pub fn banner(state: &State, plan: &Plan, now: DateTime<FixedOffset>) -> Option<
         })
         .map(|s| s.id.clone());
     let detail = match (out, &failed) {
-        (RunOutcome::Completed, _) => "completada".to_string(),
-        (RunOutcome::CompletedWithWarnings, _) => "completada con advertencias".to_string(),
-        (RunOutcome::Failed, Some(id)) => format!("falló en «{}»", name_of(id)),
-        (RunOutcome::Failed, None) => "falló".to_string(),
-        (RunOutcome::Aborted, Some(id)) => format!("abortada en «{}»", name_of(id)),
-        (RunOutcome::Aborted, None) => "abortada".to_string(),
+        (RunOutcome::Completed, _) => baton_core::tr!("completada"),
+        (RunOutcome::CompletedWithWarnings, _) => baton_core::tr!("completada con advertencias"),
+        (RunOutcome::Failed, Some(id)) => baton_core::tr!("falló en «{name}»", name = name_of(id)),
+        (RunOutcome::Failed, None) => baton_core::tr!("falló"),
+        (RunOutcome::Aborted, Some(id)) => {
+            baton_core::tr!("abortada en «{name}»", name = name_of(id))
+        }
+        (RunOutcome::Aborted, None) => baton_core::tr!("abortada"),
     };
     let done = run
         .steps

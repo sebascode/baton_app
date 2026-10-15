@@ -37,6 +37,8 @@ mod tests_edit;
 #[cfg(test)]
 mod tests_history;
 #[cfg(test)]
+mod tests_i18n;
+#[cfg(test)]
 mod tests_maint;
 #[cfg(test)]
 mod tests_pipeline;

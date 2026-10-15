@@ -1,12 +1,14 @@
 //! `baton settings`: la configuración global de la app y de dónde sale cada valor (entorno,
 //! proyecto, global o el valor por defecto), para no buscarlo a mano en `.baton/`.
 
+use baton_core::i18n::tr_dyn;
+use baton_core::tr;
 use std::path::Path;
 use std::process::ExitCode;
 
 use baton_core::settings::{self, KEYS, Key, Origin};
 use baton_store::Project;
-use baton_store::global::{Layers, Scope, SetError, global_path, set_key};
+use baton_store::global::{Layers, Scope, SetError, set_key};
 
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
@@ -41,9 +43,21 @@ pub fn run(action: &Action, start: &Path) -> ExitCode {
 }
 
 fn unknown(name: &str) -> ExitCode {
-    eprintln!("error: '{name}' no es una clave que se pueda cambiar con settings");
-    eprintln!("claves: {}", KEYS.map(|k| k.name).join(", "));
-    eprintln!("las demás (secrets, ambientes) se editan en el archivo");
+    eprintln!(
+        "{}",
+        tr!(
+            "error: '{name}' no es una clave que se pueda cambiar con settings",
+            name = name
+        )
+    );
+    eprintln!(
+        "{}",
+        tr!("claves: {list}", list = KEYS.map(|k| k.name).join(", "))
+    );
+    eprintln!(
+        "{}",
+        tr!("las demás (secrets, ambientes) se editan en el archivo")
+    );
     ExitCode::from(EXIT_USAGE)
 }
 
@@ -51,21 +65,10 @@ fn unknown(name: &str) -> ExitCode {
 fn layers(project: Option<&Project>) -> Result<Layers, ExitCode> {
     match project {
         Some(p) => Layers::read(p).map_err(|d| {
-            eprintln!("error: {d}");
+            eprintln!("{}", tr!("error: {d}", d = d));
             ExitCode::from(EXIT_INVALID)
         }),
-        None => {
-            let path = global_path();
-            let text = path
-                .as_deref()
-                .and_then(|p| std::fs::read_to_string(p).ok());
-            Ok(Layers {
-                global_path: path,
-                global: text,
-                project_path: Default::default(),
-                project: None,
-            })
-        }
+        None => Ok(Layers::global_only()),
     }
 }
 
@@ -75,13 +78,24 @@ fn list(project: Option<&Project>) -> ExitCode {
         Err(code) => return code,
     };
     match &layers.global_path {
-        Some(p) if layers.global.is_some() => println!("global:   {}", p.display()),
-        Some(p) => println!("global:   {} (no existe todavía)", p.display()),
-        None => println!("global:   (sin HOME ni BATON_CONFIG: no hay dónde)"),
+        Some(p) if layers.global.is_some() => {
+            println!("{}", tr!("global:   {path}", path = p.display()))
+        }
+        Some(p) => println!(
+            "{}",
+            tr!("global:   {path} (no existe todavía)", path = p.display())
+        ),
+        None => println!(
+            "{}",
+            tr!("global:   (sin HOME ni BATON_CONFIG: no hay dónde)")
+        ),
     }
     match project {
-        Some(_) => println!("proyecto: {}", layers.project_path.display()),
-        None => println!("proyecto: (no estás dentro de uno)"),
+        Some(_) => println!(
+            "{}",
+            tr!("proyecto: {path}", path = layers.project_path.display())
+        ),
+        None => println!("{}", tr!("proyecto: (no estás dentro de uno)")),
     }
     println!();
     let width = KEYS.iter().map(|k| k.name.len()).max().unwrap_or(0);
@@ -92,17 +106,25 @@ fn list(project: Option<&Project>) -> ExitCode {
         .unwrap_or(0);
     for k in &KEYS {
         let (value, origin) = shown(k, &layers);
-        println!("{:<width$}  {:<vwidth$}  {}", k.name, value, origin.label());
+        println!(
+            "{:<width$}  {:<vwidth$}  {}",
+            k.name,
+            value,
+            tr_dyn(origin.label())
+        );
     }
     println!();
-    println!("baton settings set <clave> <valor> [--proyecto]   baton settings unset <clave>");
+    println!(
+        "{}",
+        tr!("baton settings set <clave> <valor> [--proyecto]   baton settings unset <clave>")
+    );
     ExitCode::SUCCESS
 }
 
 fn shown(k: &Key, layers: &Layers) -> (String, Origin) {
     match layers.resolve(k) {
         (o, Some(v)) => (v, o),
-        (o, None) => (k.default.to_string(), o),
+        (o, None) => (tr_dyn(k.default).into_owned(), o),
     }
 }
 
@@ -124,16 +146,16 @@ fn get(project: Option<&Project>, name: &str) -> ExitCode {
 /// "de la configuración global (/ruta)", "del proyecto (/ruta)", "de BATON_ENGINE"...
 fn describe(origin: Origin, k: &Key, layers: &Layers) -> String {
     match origin {
-        Origin::Env => format!("de {}", k.env.unwrap_or("el entorno")),
-        Origin::Project => format!("del proyecto: {}", layers.project_path.display()),
-        Origin::Global => format!(
-            "de la configuración global: {}",
-            layers
+        Origin::Env => tr!("de {name}", name = k.env.unwrap_or("el entorno")),
+        Origin::Project => tr!("del proyecto: {path}", path = layers.project_path.display()),
+        Origin::Global => tr!(
+            "de la configuración global: {path}",
+            path = layers
                 .global_path
                 .as_deref()
                 .map_or(String::new(), |p| p.display().to_string())
         ),
-        Origin::Default => "valor por defecto".to_string(),
+        Origin::Default => tr!("valor por defecto"),
     }
 }
 
@@ -149,7 +171,7 @@ fn change(
     let value = match raw.map(|r| settings::parse_value(k, r)).transpose() {
         Ok(v) => v,
         Err(msg) => {
-            eprintln!("error: {msg}");
+            eprintln!("{}", tr!("error: {msg}", msg = msg));
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -160,13 +182,29 @@ fn change(
     };
     match set_key(project, scope, k, value.as_ref()) {
         Ok(path) => {
-            let verb = if value.is_some() {
-                "guardado"
-            } else {
-                "quitado"
+            let message = match (value.is_some(), in_project) {
+                (true, true) => tr!(
+                    "{name} guardado en proyecto: {path}",
+                    name = name,
+                    path = path.display()
+                ),
+                (true, false) => tr!(
+                    "{name} guardado en global: {path}",
+                    name = name,
+                    path = path.display()
+                ),
+                (false, true) => tr!(
+                    "{name} quitado en proyecto: {path}",
+                    name = name,
+                    path = path.display()
+                ),
+                (false, false) => tr!(
+                    "{name} quitado en global: {path}",
+                    name = name,
+                    path = path.display()
+                ),
             };
-            let where_ = if in_project { "proyecto" } else { "global" };
-            println!("{name} {verb} en {where_}: {}", path.display());
+            println!("{message}");
             // si algo más fuerte lo tapa, se dice: si no, el cambio parecería no hacer nada
             if let Ok(layers) = layers(project) {
                 let (origin, _) = layers.resolve(k);
@@ -177,23 +215,26 @@ fn change(
                 };
                 if value.is_some() && origin != expected && origin != Origin::Default {
                     eprintln!(
-                        "aviso: el valor efectivo sigue viniendo de otro lado ({})",
-                        describe(origin, k, &layers)
+                        "{}",
+                        tr!(
+                            "aviso: el valor efectivo sigue viniendo de otro lado ({origin})",
+                            origin = describe(origin, k, &layers)
+                        )
                     );
                 }
             }
             ExitCode::SUCCESS
         }
         Err(SetError::NoPlace) => {
-            eprintln!("error: {}", SetError::NoPlace);
+            eprintln!("{}", tr!("error: {e}", e = SetError::NoPlace));
             ExitCode::from(EXIT_USAGE)
         }
         Err(e @ SetError::Invalid(_)) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             ExitCode::from(EXIT_USAGE)
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             ExitCode::from(EXIT_INVALID)
         }
     }

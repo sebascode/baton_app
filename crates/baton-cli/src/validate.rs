@@ -1,6 +1,7 @@
 //! `baton validate [plan]`: revisa `.baton/config.toml` y los planes e imprime los problemas
 //! como `archivo:línea:columna: error: mensaje`.
 
+use baton_core::tr;
 use std::process::ExitCode;
 
 use baton_store::{Diagnostic, Project, check_config, check_plan};
@@ -23,9 +24,9 @@ impl Tally {
         self.errors += errors;
         self.warnings += diagnostics.len() - errors;
         match (errors, detail) {
-            (0, Some(d)) => println!("✓ {what} ({d})"),
-            (0, None) => println!("✓ {what}"),
-            _ => println!("✗ {what}"),
+            (0, Some(d)) => println!("{}", tr!("✓ {what} ({d})", what = what, d = d)),
+            (0, None) => println!("{}", tr!("✓ {what}", what = what)),
+            _ => println!("{}", tr!("✗ {what}", what = what)),
         }
     }
 }
@@ -35,7 +36,10 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
 
     let config = check_config(project);
     if let Some(g) = baton_store::global::global_path().filter(|g| g.exists()) {
-        println!("  configuración global: {}", g.display());
+        println!(
+            "{}",
+            tr!("  configuración global: {path}", path = g.display())
+        );
     }
     tally.report(
         &project.display_path(&project.config_path()),
@@ -57,15 +61,21 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
         None => project.list_plans(),
     };
     if names.is_empty() {
-        println!("no hay planes en {}", baton_store::project::PLANS_DIR);
+        println!(
+            "{}",
+            tr!(
+                "no hay planes en {path}",
+                path = baton_store::project::PLANS_DIR
+            )
+        );
     }
     for name in &names {
         let checked = check_plan(project, name, config.value.as_ref());
         let detail = checked.value.as_ref().map(|p| {
-            format!(
-                "{} pasos, {} activos",
-                p.steps.len(),
-                p.active_steps().count()
+            tr!(
+                "{total} pasos, {active} activos",
+                total = p.steps.len(),
+                active = p.active_steps().count()
             )
         });
         tally.report(
@@ -84,16 +94,28 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
 }
 
 fn summary(errors: usize, warnings: usize) -> String {
-    let plural =
-        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let errs = |n: usize| {
+        if n == 1 {
+            tr!("{n} error", n = n)
+        } else {
+            tr!("{n} errores", n = n)
+        }
+    };
+    let warns = |n: usize| {
+        if n == 1 {
+            tr!("{n} advertencia", n = n)
+        } else {
+            tr!("{n} advertencias", n = n)
+        }
+    };
     match (errors, warnings) {
-        (0, 0) => "todo en orden".to_string(),
-        (0, w) => format!("sin errores, {}", plural(w, "advertencia", "advertencias")),
-        (e, 0) => plural(e, "error", "errores"),
-        (e, w) => format!(
-            "{}, {}",
-            plural(e, "error", "errores"),
-            plural(w, "advertencia", "advertencias")
+        (0, 0) => tr!("todo en orden"),
+        (0, w) => tr!("sin errores, {warnings}", warnings = warns(w)),
+        (e, 0) => errs(e),
+        (e, w) => tr!(
+            "{errors}, {warnings}",
+            errors = errs(e),
+            warnings = warns(w)
         ),
     }
 }

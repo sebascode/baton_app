@@ -8,15 +8,17 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use baton_core::{tk, tr};
+
 use crate::run::{Phase, RunState, StepRow};
 use crate::theme;
 use crate::widgets::{self, fmt_clock, fmt_duration, frame, hsep, truncate};
 
 const SHORTCUTS: [(&str, &str); 4] = [
-    ("enter", "volver al plan"),
-    ("l", "ver log"),
-    ("v", "pipeline"),
-    ("q", "salir"),
+    ("enter", tk!("volver al plan")),
+    ("l", tk!("ver log")),
+    ("v", tk!("pipeline")),
+    ("q", tk!("salir")),
 ];
 const CARD_W: u16 = 18;
 
@@ -25,30 +27,35 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
         return;
     };
     let (symbol, verb, color, bg) = match outcome {
-        RunOutcome::Completed => ("✓", "completado", theme::OK, theme::OK_BG),
+        RunOutcome::Completed => ("✓", tr!("completado"), theme::OK, theme::OK_BG),
         RunOutcome::CompletedWithWarnings => (
             "!",
-            "completado con advertencias",
+            tr!("completado con advertencias"),
             theme::WARN,
             theme::WARN_BG,
         ),
-        RunOutcome::Failed => ("✗", "falló", theme::ERR, theme::ERR_BG),
-        RunOutcome::Aborted => ("!", "abortado", theme::WARN, theme::WARN_BG),
+        RunOutcome::Failed => ("✗", tr!("falló"), theme::ERR, theme::ERR_BG),
+        RunOutcome::Aborted => ("!", tr!("abortado"), theme::WARN, theme::WARN_BG),
     };
     let style = Style::new().fg(color);
     let inner = frame(
         buf,
         area,
         vec![Span::styled(
-            format!("{symbol} Plan {} {verb}", s.plan),
+            tr!(
+                "{symbol} Plan {plan} {verb}",
+                symbol = symbol,
+                plan = s.plan,
+                verb = verb
+            ),
             style,
         )],
         vec![Span::styled(
-            format!(
-                "{}/{} pasos · {}",
-                s.finished_steps(),
-                s.total_steps(),
-                fmt_clock(s.elapsed)
+            tr!(
+                "{done}/{total} pasos · {time}",
+                done = s.finished_steps(),
+                total = s.total_steps(),
+                time = fmt_clock(s.elapsed)
             ),
             style,
         )],
@@ -117,10 +124,10 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
 
     let mut footer = Vec::new();
     if let Some(p) = &summary.log_path {
-        footer.push(("log", p.clone()));
+        footer.push((tr!("log"), p.clone()));
     }
     if let Some(c) = &summary.undo_command {
-        footer.push(("deshacer", c.clone()));
+        footer.push((tr!("deshacer"), c.clone()));
     }
     for (label, value) in footer {
         if y >= sep_low {
@@ -180,16 +187,16 @@ impl Table {
         let mut text = format!(
             "{:<n$} {:<p$} {:<r$} {:>t$}",
             "#",
-            "paso",
-            "resultado",
-            "duración",
+            tr!("paso"),
+            tr!("resultado"),
+            tr!("duración"),
             n = self.num,
             p = self.name,
             r = self.result,
             t = self.time
         );
         if self.bar > 0 {
-            text.push_str(" dónde se fue el tiempo");
+            text.push_str(&tr!(" dónde se fue el tiempo"));
         }
         Line::from(Span::styled(text, theme::muted()))
     }
@@ -216,14 +223,14 @@ fn step_line(
         Style::new()
     };
     let result = match status {
-        StepStatus::Done if row.retries == 1 => "ok · 1 reintento".to_string(),
-        StepStatus::Done if row.retries > 1 => format!("ok · {} reintentos", row.retries),
-        StepStatus::Done => "ok".to_string(),
-        StepStatus::Failed => "falló".to_string(),
-        StepStatus::Skipped => "omitido".to_string(),
-        StepStatus::Gate => "gate".to_string(),
-        StepStatus::Running => "en curso".to_string(),
-        StepStatus::Pending => "sin ejecutar".to_string(),
+        StepStatus::Done if row.retries == 1 => tr!("ok · 1 reintento"),
+        StepStatus::Done if row.retries > 1 => tr!("ok · {n} reintentos", n = row.retries),
+        StepStatus::Done => tr!("ok"),
+        StepStatus::Failed => tr!("falló"),
+        StepStatus::Skipped => tr!("omitido"),
+        StepStatus::Gate => tr!("gate"),
+        StepStatus::Running => tr!("en curso"),
+        StepStatus::Pending => tr!("sin ejecutar"),
     };
     let time = match row.elapsed {
         Some(d) => fmt_duration(d),
@@ -266,37 +273,43 @@ fn chips(s: &RunState) -> Line<'static> {
         .filter(|r| r.info.status == StepStatus::Skipped)
         .count();
     let retries: u32 = s.rows.iter().map(|r| r.retries).sum();
-    let mut parts = vec![format!(
-        "{ran} {} ejecutado{}",
-        if ran == 1 { "paso" } else { "pasos" },
-        if ran == 1 { "" } else { "s" }
-    )];
+    let mut parts = vec![if ran == 1 {
+        tr!("{n} paso ejecutado", n = ran)
+    } else {
+        tr!("{n} pasos ejecutados", n = ran)
+    }];
     if retries > 0 {
-        parts.push(format!(
-            "{retries} reintento{}",
-            if retries == 1 { "" } else { "s" }
-        ));
+        parts.push(if retries == 1 {
+            tr!("{n} reintento", n = retries)
+        } else {
+            tr!("{n} reintentos", n = retries)
+        });
     }
     if skipped > 0 {
-        parts.push(format!(
-            "{skipped} omitido{}",
-            if skipped == 1 { "" } else { "s" }
-        ));
+        parts.push(if skipped == 1 {
+            tr!("{n} omitido", n = skipped)
+        } else {
+            tr!("{n} omitidos", n = skipped)
+        });
     }
     Line::from(Span::styled(parts.join(" · "), theme::secondary()))
 }
 
-fn cards(summary: &RunSummary) -> Vec<(&'static str, String)> {
+fn cards(summary: &RunSummary) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if let Some(n) = summary.containers {
-        out.push(("contenedores", format!("{n} arriba")));
+        out.push((tr!("contenedores"), tr!("{n} arriba", n = n)));
     }
     if let Some(n) = summary.images {
-        let noun = if n == 1 { "nueva" } else { "nuevas" };
-        out.push(("imágenes", format!("{n} {noun}")));
+        let value = if n == 1 {
+            tr!("{n} nueva", n = n)
+        } else {
+            tr!("{n} nuevas", n = n)
+        };
+        out.push((tr!("imágenes"), value));
     }
     if let Some(b) = summary.backup_bytes {
-        out.push(("backup", ByteSize(b).to_string()));
+        out.push((tr!("backup"), ByteSize(b).to_string()));
     }
     out
 }

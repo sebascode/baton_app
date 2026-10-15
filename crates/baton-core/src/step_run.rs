@@ -162,14 +162,14 @@ pub fn check_kind_label(kind: CheckKind) -> &'static str {
 
 fn check_info(c: &Check) -> CheckInfo {
     let detail = match c.kind {
-        CheckKind::Healthcheck => "definido en compose".to_string(),
+        CheckKind::Healthcheck => crate::tr!("definido en compose"),
         CheckKind::Http => c.url.clone().unwrap_or_default(),
         CheckKind::Running => c
             .min_up
             .map(|d| {
-                format!(
-                    "contenedor arriba {}",
-                    humantime::format_duration(d.as_duration())
+                crate::tr!(
+                    "contenedor arriba {time}",
+                    time = humantime::format_duration(d.as_duration())
                 )
             })
             .unwrap_or_default(),
@@ -190,20 +190,21 @@ fn check_info(c: &Check) -> CheckInfo {
 pub fn gate_info(g: &Gate) -> GateInfo {
     let manual = g.mode == GateMode::Manual;
     let summary = if manual {
-        format!(
-            "manual · {}",
-            g.message
-                .as_deref()
-                .unwrap_or("pregunta antes de continuar")
+        crate::tr!(
+            "manual · {what}",
+            what = g
+                .message
+                .clone()
+                .unwrap_or_else(|| crate::tr!("pregunta antes de continuar"))
         )
     } else {
         let cond = match (g.condition, g.at_least) {
-            (Condition::All, _) => "todos pasan".to_string(),
-            (Condition::AtLeast, Some(n)) => format!("al menos {n}"),
-            (Condition::AtLeast, None) => "al menos N".to_string(),
-            (Condition::Critical, _) => "críticos pasan".to_string(),
+            (Condition::All, _) => crate::tr!("todos pasan"),
+            (Condition::AtLeast, Some(n)) => crate::tr!("al menos {n}", n = n),
+            (Condition::AtLeast, None) => crate::tr!("al menos N"),
+            (Condition::Critical, _) => crate::tr!("críticos pasan"),
         };
-        let mut s = format!("auto por servicio · {cond}");
+        let mut s = crate::tr!("auto por servicio · {cond}", cond = cond);
         if let Some(t) = g.timeout {
             s.push_str(&format!(
                 " · {}",

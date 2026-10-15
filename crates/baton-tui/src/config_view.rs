@@ -8,6 +8,7 @@ use baton_core::config::{
     Target,
 };
 use baton_core::units::ByteSize;
+use baton_core::{tk, tr};
 use indexmap::IndexMap;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -21,7 +22,7 @@ use crate::plan_prompt::{PlanOp, PlanPrompt, PlanRequest, PromptOutcome};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, pad, shortcuts_height, truncate};
 
-const NONE_OPTION: &str = "(ninguno)";
+const NONE_OPTION: &str = tk!("(ninguno)");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigTab {
@@ -41,10 +42,10 @@ impl ConfigTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            ConfigTab::Destinos => "Destinos",
-            ConfigTab::Logs => "Logs",
-            ConfigTab::Credenciales => "Credenciales",
-            ConfigTab::Planes => "Planes",
+            ConfigTab::Destinos => tk!("Destinos"),
+            ConfigTab::Logs => tk!("Logs"),
+            ConfigTab::Credenciales => tk!("Credenciales"),
+            ConfigTab::Planes => tk!("Planes"),
         }
     }
 
@@ -90,10 +91,10 @@ pub enum TargetStatus {
 impl TargetStatus {
     fn spans(self) -> Vec<Span<'static>> {
         let (mark, text, color) = match self {
-            TargetStatus::Ok => ("●", "ok", theme::OK),
-            TargetStatus::Slow => ("●", "lento", theme::WARN),
-            TargetStatus::Error => ("●", "error", theme::ERR),
-            TargetStatus::Untested => ("○", "sin probar", theme::MUTED),
+            TargetStatus::Ok => ("●", tr!("ok"), theme::OK),
+            TargetStatus::Slow => ("●", tr!("lento"), theme::WARN),
+            TargetStatus::Error => ("●", tr!("error"), theme::ERR),
+            TargetStatus::Untested => ("○", tr!("sin probar"), theme::MUTED),
         };
         // ancho fijo (el de "○ sin probar") para que las columnas queden alineadas
         vec![Span::styled(
@@ -120,10 +121,11 @@ pub struct TargetItem {
 impl TargetItem {
     pub fn subtitle(&self) -> String {
         match self.kind {
-            TargetKind::Local => "esta máquina".into(),
-            TargetKind::Context => format!(
-                "docker context {}",
-                self.form
+            TargetKind::Local => tr!("esta máquina"),
+            TargetKind::Context => tr!(
+                "docker context {name}",
+                name = self
+                    .form
                     .field("contexto")
                     .map(|f| f.value())
                     .unwrap_or_default()
@@ -134,7 +136,11 @@ impl TargetItem {
                 if bastion.is_empty() || bastion == NONE_OPTION {
                     format!("{}@{}:{}", get("usuario"), get("host"), self.port)
                 } else {
-                    format!("{}@{} · vía bastion", get("usuario"), get("host"))
+                    tr!(
+                        "{user}@{host} · vía bastion",
+                        user = get("usuario"),
+                        host = get("host")
+                    )
                 }
             }
         }
@@ -185,10 +191,10 @@ pub struct ConfigState {
 fn retention_text(r: &Retention) -> String {
     let mut parts = Vec::new();
     if let Some(d) = r.days {
-        parts.push(format!("{d} días"));
+        parts.push(tr!("{n} días", n = d));
     }
     if let Some(s) = r.max_size {
-        parts.push(format!("máx {s}"));
+        parts.push(tr!("máx {size}", size = s));
     }
     parts.join(" · ")
 }
@@ -197,10 +203,17 @@ fn retention_text(r: &Retention) -> String {
 fn parse_retention(text: &str) -> Result<Retention, String> {
     let mut r = Retention::default();
     for part in text.split('·').map(str::trim).filter(|s| !s.is_empty()) {
-        let bad = || format!("retención: no se entendió '{part}' (usa 'N días' y/o 'máx TAMAÑO')");
+        let bad = || {
+            tr!(
+                "retención: no se entendió '{part}' (usa 'N días' y/o 'máx TAMAÑO')",
+                part = part
+            )
+        };
         if let Some(n) = part
             .strip_suffix("días")
             .or_else(|| part.strip_suffix("día"))
+            .or_else(|| part.strip_suffix("days"))
+            .or_else(|| part.strip_suffix("day"))
         {
             r.days = Some(n.trim().parse().map_err(|_| bad())?);
         } else if let Some(rest) = part
@@ -237,7 +250,7 @@ pub fn target_of(t: &TargetItem, name: &str) -> Result<Target, String> {
         TargetKind::Context => {
             let context = get("contexto");
             if context.trim().is_empty() {
-                return Err(format!("destino '{name}': falta el contexto"));
+                return Err(tr!("destino '{name}': falta el contexto", name = name));
             }
             Ok(Target::Context(ContextTarget { context }))
         }
@@ -245,13 +258,16 @@ pub fn target_of(t: &TargetItem, name: &str) -> Result<Target, String> {
             let host = get("host");
             let user = get("usuario");
             if host.trim().is_empty() {
-                return Err(format!("destino '{name}': falta el host"));
+                return Err(tr!("destino '{name}': falta el host", name = name));
             }
             if user.trim().is_empty() {
-                return Err(format!("destino '{name}': falta el usuario"));
+                return Err(tr!("destino '{name}': falta el usuario", name = name));
             }
             let credential = match opt(get("credencial")) {
-                Some(s) => Some(s.parse().map_err(|e| format!("destino '{name}': {e}"))?),
+                Some(s) => Some(
+                    s.parse()
+                        .map_err(|e: String| tr!("destino '{name}': {e}", name = name, e = e))?,
+                ),
                 None => None,
             };
             Ok(Target::Ssh(SshTarget {
@@ -375,7 +391,7 @@ impl ConfigState {
                 Target::Context(c) => TargetItem {
                     name: name.clone(),
                     kind: TargetKind::Context,
-                    form: Form::new(vec![Field::text("contexto", &c.context)]),
+                    form: Form::new(vec![Field::text(tk!("contexto"), &c.context)]),
                     status: TargetStatus::Untested,
                     port: 22,
                     implicit: false,
@@ -385,21 +401,25 @@ impl ConfigState {
         }
 
         let logs = &config.logs;
-        let export = Field::toggle("exportar", "enviar a OTLP / syslog", logs.export.enabled);
+        let export = Field::toggle(
+            tk!("exportar"),
+            tk!("enviar a OTLP / syslog"),
+            logs.export.enabled,
+        );
         let logs_form = Form::new(vec![
-            Field::text("local", config.log_template()),
-            Field::text("en destino", logs.remote.as_deref().unwrap_or(""))
-                .hint("(copia en cada host)"),
+            Field::text(tk!("local"), config.log_template()),
+            Field::text(tk!("en destino"), logs.remote.as_deref().unwrap_or(""))
+                .hint(tk!("(copia en cada host)")),
             Field::radio(
-                "formato",
-                &["texto", "json"],
+                tk!("formato"),
+                &[tk!("texto"), "json"],
                 if logs.format == LogFormat::Json {
                     "json"
                 } else {
-                    "texto"
+                    tk!("texto")
                 },
             ),
-            Field::text("retención", &retention_text(&logs.retention)),
+            Field::text(tk!("retención"), &retention_text(&logs.retention)),
             export,
         ]);
 
@@ -494,7 +514,7 @@ impl ConfigState {
         item.is_new = true;
         item.form
             .fields
-            .insert(0, Field::text("nombre", "nuevo-destino"));
+            .insert(0, Field::text(tk!("nombre"), "nuevo-destino"));
         self.targets.push(item);
         self.cursor = self.targets.len() - 1;
         self.tab = ConfigTab::Destinos;
@@ -630,35 +650,39 @@ impl ConfigState {
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
         match self.tab {
             ConfigTab::Destinos if self.in_form => vec![
-                ("tab", "sección"),
-                ("↑↓", "campo"),
-                ("esc", "volver a la lista"),
-                ("ctrl s", "guardar"),
+                ("tab", tk!("sección")),
+                ("↑↓", tk!("campo")),
+                ("esc", tk!("volver a la lista")),
+                ("ctrl s", tk!("guardar")),
             ],
             ConfigTab::Destinos => vec![
-                ("tab", "sección"),
-                ("a", "añadir destino"),
-                ("t", "probar conexión"),
-                ("enter", "editar"),
-                ("ctrl s", "guardar"),
+                ("tab", tk!("sección")),
+                ("a", tk!("añadir destino")),
+                ("t", tk!("probar conexión")),
+                ("enter", tk!("editar")),
+                ("ctrl s", tk!("guardar")),
             ],
             ConfigTab::Logs => vec![
-                ("tab", "sección"),
-                ("↑↓", "campo"),
-                ("ctrl s", "guardar"),
-                ("esc", "volver"),
+                ("tab", tk!("sección")),
+                ("↑↓", tk!("campo")),
+                ("ctrl s", tk!("guardar")),
+                ("esc", tk!("volver")),
             ],
             ConfigTab::Credenciales => {
-                vec![("tab", "sección"), ("↑↓", "elegir"), ("esc", "volver")]
+                vec![
+                    ("tab", tk!("sección")),
+                    ("↑↓", tk!("elegir")),
+                    ("esc", tk!("volver")),
+                ]
             }
             ConfigTab::Planes => vec![
-                ("tab", "sección"),
-                ("↑↓", "elegir"),
-                ("enter", "editar plan"),
-                ("c", "copiar"),
-                ("r", "renombrar"),
-                ("d", "eliminar"),
-                ("esc", "volver"),
+                ("tab", tk!("sección")),
+                ("↑↓", tk!("elegir")),
+                ("enter", tk!("editar plan")),
+                ("c", tk!("copiar")),
+                ("r", tk!("renombrar")),
+                ("d", tk!("eliminar")),
+                ("esc", tk!("volver")),
             ],
         }
     }
@@ -668,7 +692,7 @@ impl ConfigState {
             buf,
             area,
             vec![Span::styled(
-                format!("⚙ Configuración · {}", self.project),
+                tr!("⚙ Configuración · {project}", project = self.project),
                 theme::bold(),
             )],
             vec![Span::styled(self.path.clone(), theme::secondary())],
@@ -722,15 +746,15 @@ impl ConfigState {
                 spans.push(Span::styled(" │ ", theme::muted()));
                 underline.push(Span::raw("   "));
             }
-            let label = tab.label();
+            let label = baton_core::i18n::tr_dyn(tab.label()).into_owned();
             if *tab == self.tab {
-                spans.push(Span::styled(label, theme::bold()));
+                spans.push(Span::styled(label.clone(), theme::bold()));
                 underline.push(Span::styled(
                     "━".repeat(label.chars().count()),
                     Style::new().fg(theme::INFO),
                 ));
             } else {
-                spans.push(Span::styled(label, theme::secondary()));
+                spans.push(Span::styled(label.clone(), theme::secondary()));
                 underline.push(Span::raw(" ".repeat(label.chars().count())));
             }
         }
@@ -744,7 +768,7 @@ impl ConfigState {
     }
 
     fn render_targets(&self, buf: &mut Buffer, area: Rect) {
-        self.section_title(buf, area, "destinos de ejecución");
+        self.section_title(buf, area, &tr!("destinos de ejecución"));
         let name_w = self
             .targets
             .iter()
@@ -795,7 +819,7 @@ impl ConfigState {
             return;
         }
         if t.form.fields.is_empty() {
-            Line::from(Span::styled("sin opciones que editar", theme::muted()))
+            Line::from(Span::styled(tr!("sin opciones que editar"), theme::muted()))
                 .render(Rect::new(area.x + 2, form_y, area.width, 1), buf);
             return;
         }
@@ -809,7 +833,10 @@ impl ConfigState {
         Block::new()
             .borders(Borders::ALL)
             .border_style(theme::border())
-            .title(Span::styled(format!(" editando: {} ", t.name), title_style))
+            .title(Span::styled(
+                tr!(" editando: {name} ", name = t.name),
+                title_style,
+            ))
             .render(boxed, buf);
         let fields_area = Rect::new(
             boxed.x + 2,
@@ -847,13 +874,13 @@ impl ConfigState {
         if n > 0 && rows.height > self.logs.fields.len() as u16 * 2 + n + 2 {
             let top = area.y + area.height - n - 1;
             Line::from(Span::styled(
-                "desde la configuración global (baton settings):",
+                tr!("desde la configuración global (baton settings):"),
                 theme::muted(),
             ))
             .render(Rect::new(area.x, top, area.width, 1), buf);
             for (i, note) in self.global_notes.iter().enumerate() {
                 Line::from(vec![
-                    Span::styled("  global  ", Style::new().fg(theme::INFO)),
+                    Span::styled(tr!("  global  "), Style::new().fg(theme::INFO)),
                     Span::raw(note.clone()),
                 ])
                 .render(Rect::new(area.x, top + 1 + i as u16, area.width, 1), buf);
@@ -862,10 +889,14 @@ impl ConfigState {
     }
 
     fn render_credentials(&self, buf: &mut Buffer, area: Rect) {
-        self.section_title(buf, area, "credenciales referenciadas por los destinos");
+        self.section_title(
+            buf,
+            area,
+            &tr!("credenciales referenciadas por los destinos"),
+        );
         if self.cred_refs.is_empty() {
             Line::from(Span::styled(
-                "ningún destino usa credenciales",
+                tr!("ningún destino usa credenciales"),
                 theme::muted(),
             ))
             .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
@@ -895,13 +926,13 @@ impl ConfigState {
                 Span::raw(" "),
                 Span::styled(format!("{:<28}", c.reference), Style::new()),
                 Span::styled(
-                    format!("usada por {}", c.used_by.join(", ")),
+                    tr!("usada por {list}", list = c.used_by.join(", ")),
                     theme::secondary(),
                 ),
             ];
             justify(
                 left,
-                vec![Span::styled("○ sin verificar", theme::muted())],
+                vec![Span::styled(tr!("○ sin verificar"), theme::muted())],
                 area.width,
             )
             .render(Rect::new(area.x, y, area.width, 1), buf);
@@ -909,10 +940,10 @@ impl ConfigState {
     }
 
     fn render_plans(&self, buf: &mut Buffer, area: Rect) {
-        self.section_title(buf, area, "planes en baton/plans/");
+        self.section_title(buf, area, &tr!("planes en baton/plans/"));
         if self.plans.is_empty() {
             Line::from(Span::styled(
-                "no hay planes todavía: crea uno con baton init o baton import",
+                tr!("no hay planes todavía: crea uno con baton init o baton import"),
                 theme::muted(),
             ))
             .render(Rect::new(area.x, area.y + 2, area.width, 1), buf);
@@ -962,14 +993,14 @@ fn ssh_item(name: &str, cred_options: &[String], ssh_names: &[String]) -> Target
         name: name.into(),
         kind: TargetKind::Ssh,
         form: Form::new(vec![
-            Field::text("host", ""),
-            Field::text("usuario", ""),
-            Field::drop("credencial", &creds, NONE_OPTION),
-            Field::text("directorio", ""),
-            Field::drop("bastion", &bastions, NONE_OPTION),
+            Field::text(tk!("host"), ""),
+            Field::text(tk!("usuario"), ""),
+            Field::drop(tk!("credencial"), &creds, NONE_OPTION),
+            Field::text(tk!("directorio"), ""),
+            Field::drop(tk!("bastion"), &bastions, NONE_OPTION),
             Field::toggle(
-                "sincronizar",
-                "rsync carpetas del plan antes de ejecutar",
+                tk!("sincronizar"),
+                tk!("rsync carpetas del plan antes de ejecutar"),
                 true,
             ),
         ]),

@@ -3,6 +3,7 @@
 use baton_core::events::{LastRunBanner, RunOutcome, StepInfo};
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_core::step_run::{gate_info, step_info};
+use baton_core::{i18n::tr_dyn, tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -108,49 +109,48 @@ pub struct PreviewState {
 
 /// Los campos del paso que interesan antes de ejecutar (panel derecho de la vista del plan).
 fn step_detail(step: &Step) -> Vec<(&'static str, String)> {
-    let mut out = vec![("tipo", step.kind.label().to_string())];
+    let mut out = vec![(tk!("tipo"), step.kind.label().to_string())];
     let src: Vec<&str> = step.source.iter().collect();
     if !src.is_empty() {
-        out.push(("origen", src.join(", ")));
+        out.push((tk!("origen"), src.join(", ")));
     }
     out.push((
-        "destino",
-        step.target.clone().unwrap_or_else(|| "por defecto".into()),
+        tk!("destino"),
+        step.target.clone().unwrap_or_else(|| tr!("por defecto")),
     ));
     let mut limits = Vec::new();
     if let Some(t) = step.timeout {
         limits.push(widgets::fmt_duration(t.as_duration()));
     }
     if step.retries > 0 {
-        let noun = if step.retries == 1 {
-            "reintento"
+        limits.push(if step.retries == 1 {
+            tr!("{n} reintento", n = step.retries)
         } else {
-            "reintentos"
-        };
-        limits.push(format!("{} {noun}", step.retries));
+            tr!("{n} reintentos", n = step.retries)
+        });
     }
     if !limits.is_empty() {
-        out.push(("límites", limits.join(" · ")));
+        out.push((tk!("límites"), limits.join(" · ")));
     }
     if let Some(cmd) = step.command.as_deref().filter(|c| !c.trim().is_empty()) {
-        out.push(("comando", cmd.trim().to_string()));
+        out.push((tk!("comando"), cmd.trim().to_string()));
     }
     if let Some(dry) = step.dry_run.as_deref().filter(|d| !d.trim().is_empty()) {
-        out.push(("dry-run", dry.trim().to_string()));
+        out.push((tk!("dry-run"), dry.trim().to_string()));
     }
     if !step.depends_on.is_empty() {
-        out.push(("depende de", step.depends_on.join(", ")));
+        out.push((tk!("depende de"), step.depends_on.join(", ")));
     }
     if step.kind != StepKind::Gate
         && let Some(g) = &step.gate
     {
-        out.push(("gate", gate_info(g).summary));
+        out.push((tk!("gate"), gate_info(g).summary));
     }
     if let Some(r) = step.rollback.as_deref() {
-        out.push(("rollback", r.to_string()));
+        out.push((tk!("rollback"), r.to_string()));
     }
     if step.backup_before {
-        out.push(("backup antes", "sí".into()));
+        out.push((tk!("backup antes"), tr!("sí")));
     }
     out
 }
@@ -173,12 +173,12 @@ fn step_meta(step: &Step) -> String {
 }
 
 const SHORTCUTS: [(&str, &str); 6] = [
-    ("espacio", "activar"),
-    ("shift ↑↓", "mover"),
-    ("e", "editar paso"),
-    ("g", "añadir gate"),
-    ("v", "pipeline"),
-    ("enter", "ejecutar"),
+    ("espacio", tk!("activar")),
+    ("shift ↑↓", tk!("mover")),
+    ("e", tk!("editar paso")),
+    ("g", tk!("añadir gate")),
+    ("v", tk!("pipeline")),
+    ("enter", tk!("ejecutar")),
 ];
 
 /// Todos los pasos de un plan como los muestra el pipeline (para verlo antes de ejecutar).
@@ -223,9 +223,9 @@ impl PreviewState {
                 meta: step_meta(s),
                 tag: Tag::new(match (s.kind, s.gate.as_ref()) {
                     (StepKind::Gate, Some(g)) if g.mode == GateMode::Manual => {
-                        "gate manual".to_string()
+                        tr!("gate manual")
                     }
-                    (StepKind::Gate, _) => "gate auto".to_string(),
+                    (StepKind::Gate, _) => tr!("gate auto"),
                     (kind, _) => kind.label().to_string(),
                 }),
                 enabled: s.enabled,
@@ -305,10 +305,9 @@ impl PreviewState {
             return;
         };
         if op == PlanOp::Delete && *name == self.plan {
-            self.notice = vec![
+            self.notice = vec![tr!(
                 "no se puede eliminar el plan abierto: cambia a otro plan primero (o usa baton delete)"
-                    .to_string(),
-            ];
+            )];
             return;
         }
         self.prompt = Some(Box::new(PlanPrompt::new(op, name)));
@@ -319,13 +318,13 @@ impl PreviewState {
         let mut items = SHORTCUTS.to_vec();
         let at = items.len() - 1; // antes de "ejecutar"
         if self.can_switch() {
-            items.insert(items.len() - 1, ("p", "planes"));
+            items.insert(items.len() - 1, ("p", tk!("planes")));
         }
         // lo de la última ejecución solo aparece si hay una
         if let Some(b) = &self.last_run {
-            let mut extra = vec![("h", "historial"), ("l", "último log")];
+            let mut extra = vec![("h", tk!("historial")), ("l", tk!("último log"))];
             if b.can_resume {
-                extra.push(("u", "reanudar"));
+                extra.push(("u", tk!("reanudar")));
             }
             for (n, e) in extra.into_iter().enumerate() {
                 items.insert(at + n, e);
@@ -333,10 +332,10 @@ impl PreviewState {
         }
         // con listas largas el filtro es la forma de llegar a un paso
         if self.steps.len() > 8 || !self.filter.is_empty() {
-            items.insert(items.len() - 1, ("/", "filtrar"));
+            items.insert(items.len() - 1, ("/", tk!("filtrar")));
         }
-        items.insert(items.len() - 1, ("m", "mantención"));
-        items.insert(items.len() - 1, ("?", "ayuda"));
+        items.insert(items.len() - 1, ("m", tk!("mantención")));
+        items.insert(items.len() - 1, ("?", tk!("ayuda")));
         items
     }
 
@@ -437,7 +436,9 @@ impl PreviewState {
     /// Mueve el paso bajo el cursor una posición; el cursor lo acompaña.
     fn move_step(&mut self, delta: isize) {
         if !self.filter.is_empty() {
-            self.notice = vec!["con un filtro activo no se mueven pasos: quítalo con esc".into()];
+            self.notice = vec![tr!(
+                "con un filtro activo no se mueven pasos: quítalo con esc"
+            )];
             return;
         }
         let target = self.cursor.saturating_add_signed(delta);
@@ -495,12 +496,12 @@ impl PreviewState {
                 return Some(PreviewAction::Run(self.request()));
             }
             KeyCode::Enter if self.steps.is_empty() => {
-                self.notice = vec![
-                    "este plan no tiene pasos todavía: pulsa e para agregar el primero".to_string(),
-                ]
+                self.notice = vec![tr!(
+                    "este plan no tiene pasos todavía: pulsa e para agregar el primero"
+                )]
             }
             KeyCode::Enter => {
-                self.notice = vec!["no hay pasos activos: activa alguno con espacio".to_string()]
+                self.notice = vec![tr!("no hay pasos activos: activa alguno con espacio")]
             }
             KeyCode::Char('p') if self.can_switch() => {
                 let at = self.plans.iter().position(|p| *p == self.plan).unwrap_or(0);
@@ -534,7 +535,7 @@ impl PreviewState {
             buf,
             area,
             vec![Span::styled(
-                format!("Revisar plan: {}", self.plan),
+                tr!("Revisar plan: {plan}", plan = self.plan),
                 theme::bold(),
             )],
             {
@@ -546,10 +547,10 @@ impl PreviewState {
                     right.push(Span::styled(" · ", theme::muted()));
                 }
                 right.push(Span::styled(
-                    format!(
-                        "{} pasos · {} activos",
-                        self.steps.len(),
-                        self.active_count()
+                    tr!(
+                        "{total} pasos · {active} activos",
+                        total = self.steps.len(),
+                        active = self.active_count()
                     ),
                     theme::secondary(),
                 ));
@@ -646,7 +647,7 @@ impl PreviewState {
         };
         Line::from(vec![
             Span::styled(format!("{symbol} "), Style::new().fg(color)),
-            Span::styled("Última ejecución: ", theme::secondary()),
+            Span::styled(tr!("Última ejecución: "), theme::secondary()),
             Span::styled(b.detail.clone(), Style::new().fg(color)),
             Span::styled(when, theme::secondary()),
         ])
@@ -660,7 +661,7 @@ impl PreviewState {
             .len()
             .min(over.height.saturating_sub(4) as usize)
             .max(1);
-        let hint = "↑↓ · enter abrir · c copiar · r renombrar · d eliminar · esc";
+        let hint = tr!("↑↓ · enter abrir · c copiar · r renombrar · d eliminar · esc");
         let widest = self
             .plans
             .iter()
@@ -683,7 +684,7 @@ impl PreviewState {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(theme::border())
-            .title(Span::styled(" Cambiar de plan ", theme::bold()));
+            .title(Span::styled(tr!(" Cambiar de plan "), theme::bold()));
         let inner = block.inner(area);
         block.render(area, buf);
         let cursor = self.switcher.unwrap_or(0);
@@ -739,13 +740,13 @@ impl PreviewState {
     fn render_list(&self, buf: &mut Buffer, list: Rect) {
         if self.steps.is_empty() {
             let lines = [
-                "Este plan no tiene pasos todavía.",
-                "Pulsa e para agregar el primero.",
+                tr!("Este plan no tiene pasos todavía."),
+                tr!("Pulsa e para agregar el primero."),
             ];
             for (n, text) in lines.iter().enumerate() {
                 let y = list.y + 1 + n as u16;
                 if y < list.bottom() {
-                    Line::from(Span::styled(*text, theme::muted())).render(
+                    Line::from(Span::styled(text.clone(), theme::muted())).render(
                         Rect::new(list.x + 2, y, list.width.saturating_sub(2), 1),
                         buf,
                     );
@@ -756,7 +757,10 @@ impl PreviewState {
         let shown = self.visible();
         if shown.is_empty() {
             Line::from(Span::styled(
-                format!("Ningún paso coincide con «{}».", self.filter.trim()),
+                tr!(
+                    "Ningún paso coincide con «{filter}».",
+                    filter = self.filter.trim()
+                ),
                 theme::muted(),
             ))
             .render(
@@ -784,13 +788,13 @@ impl PreviewState {
         let top = list.y + u16::from(above > 0);
         let digits = self.steps.len().to_string().len();
         let note = |n: usize, arrow: &str, y: u16, buf: &mut Buffer| {
-            let noun = if n == 1 { "paso" } else { "pasos" };
-            let place = if arrow == "↑" { "arriba" } else { "abajo" };
-            Line::from(Span::styled(
-                format!("{arrow} {n} {noun} más {place}"),
-                theme::muted(),
-            ))
-            .render(
+            let text = match (arrow == "↑", n == 1) {
+                (true, true) => tr!("↑ {n} paso más arriba", n = n),
+                (true, false) => tr!("↑ {n} pasos más arriba", n = n),
+                (false, true) => tr!("↓ {n} paso más abajo", n = n),
+                (false, false) => tr!("↓ {n} pasos más abajo", n = n),
+            };
+            Line::from(Span::styled(text, theme::muted())).render(
                 Rect::new(list.x + 2, y, list.width.saturating_sub(2), 1),
                 buf,
             );
@@ -825,7 +829,11 @@ impl PreviewState {
         let w = area.width.saturating_sub(2) as usize;
         let mut lines: Vec<Line<'static>> = vec![
             Line::from(Span::styled(
-                format!("paso {} de {}", self.cursor + 1, self.steps.len()),
+                tr!(
+                    "paso {n} de {total}",
+                    n = self.cursor + 1,
+                    total = self.steps.len()
+                ),
                 theme::muted(),
             )),
             Line::from(Span::styled(truncate(&step.name, w), theme::bold())),
@@ -844,7 +852,7 @@ impl PreviewState {
             }
             for (n, chunk) in chunks.into_iter().enumerate() {
                 let label = if n == 0 {
-                    format!("{key:<KEY_W$}")
+                    format!("{:<KEY_W$}", tr_dyn(key))
                 } else {
                     " ".repeat(KEY_W)
                 };
@@ -857,7 +865,7 @@ impl PreviewState {
         if !step.enabled {
             lines.push(Line::raw(""));
             lines.push(Line::from(Span::styled(
-                "desactivado: no se ejecuta",
+                tr!("desactivado: no se ejecuta"),
                 Style::new().fg(theme::WARN),
             )));
         }
@@ -879,11 +887,12 @@ impl PreviewState {
             return;
         }
         let cursor = if self.filtering { "▌" } else { "" };
-        let text = format!(
-            "/ {}{cursor} · {} de {}",
-            self.filter,
-            self.visible().len(),
-            self.steps.len()
+        let text = tr!(
+            "/ {filter}{cursor} · {shown} de {total}",
+            filter = self.filter,
+            cursor = cursor,
+            shown = self.visible().len(),
+            total = self.steps.len()
         );
         let w = (text.chars().count() as u16 + 2).min(area.width);
         let x = area.right().saturating_sub(w + 1);
@@ -907,9 +916,9 @@ impl PreviewState {
         };
         let mut spans = Vec::new();
         for (n, (on, text)) in [
-            (self.backup, "Backup antes de ejecutar"),
-            (self.rollback, "Rollback automático"),
-            (self.dry_run, "Dry-run"),
+            (self.backup, tr!("Backup antes de ejecutar")),
+            (self.rollback, tr!("Rollback automático")),
+            (self.dry_run, tr!("Dry-run")),
         ]
         .into_iter()
         .enumerate()
@@ -917,7 +926,7 @@ impl PreviewState {
             if n > 0 {
                 spans.push(Span::raw("   "));
             }
-            spans.extend(item(on, text));
+            spans.extend(item(on, &text));
         }
         Line::from(spans).render(pad(area), buf);
     }

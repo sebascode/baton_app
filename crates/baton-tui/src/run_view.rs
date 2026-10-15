@@ -1,6 +1,7 @@
 //! Pantalla 3: ejecución. Cabecera con badges, progreso segmentado, log en vivo y pipeline.
 
 use baton_core::events::{CheckState, LogKind, LogLine, StepStatus};
+use baton_core::{tk, tr};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -36,7 +37,7 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
             Span::styled("▶ ", Style::new().fg(theme::INFO)),
             Span::styled("baton", theme::bold()),
             Span::styled(
-                format!("  plan: {} · {}", s.plan, s.root),
+                tr!("  plan: {plan} · {root}", plan = s.plan, root = s.root),
                 theme::secondary(),
             ),
         ],
@@ -66,12 +67,17 @@ pub fn render(s: &RunState, buf: &mut Buffer, area: Rect) {
             .current
             .and_then(|c| s.rows.get(c))
             .map_or("", |r| r.info.name.as_str());
-        let mut left = vec![Span::raw(format!(
-            "Paso {n} de {} · {name}",
-            s.total_steps()
+        let mut left = vec![Span::raw(tr!(
+            "Paso {n} de {total} · {name}",
+            n = n,
+            total = s.total_steps(),
+            name = name
         ))];
         if s.paused {
-            left.push(Span::styled(" · en pausa", Style::new().fg(theme::WARN)));
+            left.push(Span::styled(
+                tr!(" · en pausa"),
+                Style::new().fg(theme::WARN),
+            ));
         }
         justify(
             left,
@@ -180,15 +186,20 @@ fn render_rail(s: &RunState, buf: &mut Buffer, area: Rect, statuses: &[StepStatu
             .filter(|st| **st == StepStatus::Skipped)
             .count();
         let gates = s.rows.iter().filter(|r| r.info.gate.is_some()).count();
-        let mut parts = vec![format!("{} se ejecutan", statuses.len() - skipped)];
+        let mut parts = vec![tr!("{n} se ejecutan", n = statuses.len() - skipped)];
         if skipped > 0 {
-            parts.push(format!(
-                "{skipped} omitido{}",
-                if skipped == 1 { "" } else { "s" }
-            ));
+            parts.push(if skipped == 1 {
+                tr!("{n} omitido", n = skipped)
+            } else {
+                tr!("{n} omitidos", n = skipped)
+            });
         }
         if gates > 0 {
-            parts.push(format!("{gates} gate{}", if gates == 1 { "" } else { "s" }));
+            parts.push(if gates == 1 {
+                tr!("{n} gate", n = gates)
+            } else {
+                tr!("{n} gates", n = gates)
+            });
         }
         vec![Span::styled(parts.join(" · "), theme::secondary())]
     };
@@ -229,10 +240,10 @@ fn gate_block(s: &RunState, width: usize) -> Vec<Line<'static>> {
             Span::styled("◆ ", warn),
             Span::styled(
                 truncate(
-                    &format!(
-                        "Esperando tu confirmación · paso {} de {}",
-                        i + 1,
-                        s.total_steps()
+                    &tr!(
+                        "Esperando tu confirmación · paso {n} de {total}",
+                        n = i + 1,
+                        total = s.total_steps()
                     ),
                     width.saturating_sub(2),
                 ),
@@ -248,7 +259,12 @@ fn gate_block(s: &RunState, width: usize) -> Vec<Line<'static>> {
             Span::styled("◆ ", warn),
             Span::styled(
                 truncate(
-                    &format!("Gate · intento {attempt} de {of} · {}", row.info.name),
+                    &tr!(
+                        "Gate · intento {attempt} de {of} · {name}",
+                        attempt = attempt,
+                        of = of,
+                        name = row.info.name
+                    ),
                     width.saturating_sub(2),
                 ),
                 warn,
@@ -279,7 +295,7 @@ fn gate_block(s: &RunState, width: usize) -> Vec<Line<'static>> {
 
 pub(crate) fn prompt_text(s: &RunState) -> Option<String> {
     if s.quit_confirm {
-        Some("¿Abortar la ejecución y salir?".to_string())
+        Some(tr!("¿Abortar la ejecución y salir?"))
     } else {
         s.ask.as_ref().map(|(_, msg)| msg.clone())
     }
@@ -293,34 +309,49 @@ pub(crate) fn prompt_width(prompt: &Option<String>) -> u16 {
 
 fn shortcut_items(s: &RunState) -> Vec<(&'static str, &'static str)> {
     if s.quit_confirm {
-        return vec![("s", "sí"), ("n", "no")];
+        return vec![("s", tk!("sí")), ("n", tk!("no"))];
     }
     if s.ask.is_some() {
-        return vec![("enter", "continuar"), ("n", "detener")];
+        return vec![("enter", tk!("continuar")), ("n", tk!("detener"))];
     }
     // el visor de log tras un fallo o al terminar: se sale con esc (el `l` alterna el log completo)
     if s.log_view && !matches!(s.phase, Phase::Running) {
         return if s.full_log {
-            vec![("↑↓", "desplazar"), ("l", "ver pasos"), ("esc", "volver")]
+            vec![
+                ("↑↓", tk!("desplazar")),
+                ("l", tk!("ver pasos")),
+                ("esc", tk!("volver")),
+            ]
         } else {
             vec![
-                ("↑↓", "paso"),
-                ("l", "log completo"),
-                ("PgUp PgDn", "desplazar"),
-                ("esc", "volver"),
+                ("↑↓", tk!("paso")),
+                ("l", tk!("log completo")),
+                ("PgUp PgDn", tk!("desplazar")),
+                ("esc", tk!("volver")),
             ]
         };
     }
     if s.full_log {
-        return vec![("l", "volver"), ("↑↓", "desplazar"), ("f", "seguir")];
+        return vec![
+            ("l", tk!("volver")),
+            ("↑↓", tk!("desplazar")),
+            ("f", tk!("seguir")),
+        ];
     }
     vec![
-        ("↑↓", "paso"),
-        ("l", "log completo"),
-        ("p", if s.paused { "reanudar" } else { "pausar" }),
-        ("r", "rollback"),
-        ("s", "saltar gate"),
-        ("q", "salir"),
+        ("↑↓", tk!("paso")),
+        ("l", tk!("log completo")),
+        (
+            "p",
+            if s.paused {
+                tk!("reanudar")
+            } else {
+                tk!("pausar")
+            },
+        ),
+        ("r", tk!("rollback")),
+        ("s", tk!("saltar gate")),
+        ("q", tk!("salir")),
     ]
 }
 
@@ -437,18 +468,18 @@ fn render_log(s: &RunState, buf: &mut Buffer, area: Rect, full: bool) {
     let viewed = s.viewed_step().and_then(|i| s.rows.get(i));
 
     let live = matches!(s.phase, Phase::Running);
-    let word = if live { "log en vivo" } else { "log" };
+    let word = if live { tr!("log en vivo") } else { tr!("log") };
     let head = match (viewed, full) {
-        (Some(r), true) => format!("log completo · {}", r.info.name),
-        (Some(r), false) => format!("{word} · {}", r.info.detail),
-        (None, _) => word.to_string(),
+        (Some(r), true) => tr!("log completo · {name}", name = r.info.name),
+        (Some(r), false) => tr!("{word} · {detail}", word = word, detail = r.info.detail),
+        (None, _) => word.clone(),
     };
     let scrolled = s.log_scroll > 0;
     let right = if scrolled {
         let hint = if live {
-            "autoscroll en pausa [f] seguir"
+            tr!("autoscroll en pausa [f] seguir")
         } else {
-            "[f] ir al final"
+            tr!("[f] ir al final")
         };
         vec![Span::styled(hint, Style::new().fg(theme::WARN))]
     } else {
@@ -486,7 +517,7 @@ fn render_pipeline(s: &RunState, buf: &mut Buffer, area: Rect, compact: bool) {
     if area.height < 2 {
         return;
     }
-    Line::from(Span::styled("pipeline", theme::secondary())).render(
+    Line::from(Span::styled(tr!("pipeline"), theme::secondary())).render(
         Rect::new(area.x + 1, area.y, area.width.saturating_sub(1), 1),
         buf,
     );

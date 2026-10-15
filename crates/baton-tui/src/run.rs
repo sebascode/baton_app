@@ -9,6 +9,8 @@ use baton_core::events::{
     RunSummary, StepInfo, StepStatus,
 };
 
+use baton_core::tr;
+
 use crate::pipeline_view::PipeUi;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
@@ -48,12 +50,12 @@ pub enum FailureOption {
 impl FailureOption {
     pub fn label(self) -> String {
         match self {
-            FailureOption::UpdateCredentialAndRetry => "Actualizar credencial y reintentar".into(),
-            FailureOption::Retry => "Reintentar sin cambios".into(),
-            FailureOption::Rollback(to) => format!("Rollback a antes del paso {}", to + 1),
-            FailureOption::ViewLog => "Ver el log completo".into(),
-            FailureOption::OpenShell => "Abrir shell para investigar".into(),
-            FailureOption::Abort => "Abortar y guardar estado".into(),
+            FailureOption::UpdateCredentialAndRetry => tr!("Actualizar credencial y reintentar"),
+            FailureOption::Retry => tr!("Reintentar sin cambios"),
+            FailureOption::Rollback(to) => tr!("Rollback a antes del paso {n}", n = to + 1),
+            FailureOption::ViewLog => tr!("Ver el log completo"),
+            FailureOption::OpenShell => tr!("Abrir shell para investigar"),
+            FailureOption::Abort => tr!("Abortar y guardar estado"),
         }
     }
 
@@ -61,21 +63,22 @@ impl FailureOption {
     pub fn consequence(self, step: usize) -> String {
         match self {
             FailureOption::UpdateCredentialAndRetry => {
-                format!("abre la credencial y repite el paso {step}")
+                tr!("abre la credencial y repite el paso {step}", step = step)
             }
-            FailureOption::Retry => format!("repite el paso {step} tal cual"),
+            FailureOption::Retry => tr!("repite el paso {step} tal cual", step = step),
             FailureOption::Rollback(to) if to + 1 < step => {
-                format!(
-                    "deshace los pasos {} a {step}, del último al primero",
-                    to + 1
+                tr!(
+                    "deshace los pasos {from} a {step}, del último al primero",
+                    from = to + 1,
+                    step = step
                 )
             }
-            FailureOption::Rollback(_) => format!("deshace el paso {step}"),
-            FailureOption::ViewLog => format!("abre el log, parado en el paso {step}"),
+            FailureOption::Rollback(_) => tr!("deshace el paso {step}", step = step),
+            FailureOption::ViewLog => tr!("abre el log, parado en el paso {step}", step = step),
             FailureOption::OpenShell => {
-                "abre una sesión para investigar; al salir vuelves aquí".into()
+                tr!("abre una sesión para investigar; al salir vuelves aquí")
             }
-            FailureOption::Abort => "guarda el estado; podrás reanudar con u desde el plan".into(),
+            FailureOption::Abort => tr!("guarda el estado; podrás reanudar con u desde el plan"),
         }
     }
 }
@@ -372,12 +375,12 @@ impl RunState {
             });
         let name = stopped.map(|r| r.info.name.as_str());
         let detail = match (outcome, name) {
-            (RunOutcome::Completed, _) => "completada".to_string(),
-            (RunOutcome::CompletedWithWarnings, _) => "completada con advertencias".to_string(),
-            (RunOutcome::Failed, Some(n)) => format!("falló en «{n}»"),
-            (RunOutcome::Failed, None) => "falló".to_string(),
-            (RunOutcome::Aborted, Some(n)) => format!("abortada en «{n}»"),
-            (RunOutcome::Aborted, None) => "abortada".to_string(),
+            (RunOutcome::Completed, _) => tr!("completada"),
+            (RunOutcome::CompletedWithWarnings, _) => tr!("completada con advertencias"),
+            (RunOutcome::Failed, Some(n)) => tr!("falló en «{name}»", name = n),
+            (RunOutcome::Failed, None) => tr!("falló"),
+            (RunOutcome::Aborted, Some(n)) => tr!("abortada en «{name}»", name = n),
+            (RunOutcome::Aborted, None) => tr!("abortada"),
         };
         let done = self
             .rows
@@ -392,7 +395,7 @@ impl RunState {
         Some(LastRunBanner {
             outcome: *outcome,
             detail,
-            ago: "ahora".to_string(),
+            ago: tr!("ahora"),
             failed_step: stopped.map(|r| r.info.id.clone()),
             can_resume: done > 0 && left > 0,
         })

@@ -11,16 +11,18 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use baton_core::{tk, tr};
+
 use crate::run_view::log_lines;
 use crate::theme;
 use crate::widgets::{self, fmt_clock, fmt_duration, frame, hsep, justify, pad, truncate};
 
-fn outcome_style(o: RunOutcome) -> (&'static str, &'static str, ratatui::style::Color) {
+fn outcome_style(o: RunOutcome) -> (&'static str, String, ratatui::style::Color) {
     match o {
-        RunOutcome::Completed => ("✓", "completada", theme::OK),
-        RunOutcome::CompletedWithWarnings => ("!", "con advertencias", theme::WARN),
-        RunOutcome::Failed => ("✗", "falló", theme::ERR),
-        RunOutcome::Aborted => ("!", "abortada", theme::WARN),
+        RunOutcome::Completed => ("✓", tr!("completada"), theme::OK),
+        RunOutcome::CompletedWithWarnings => ("!", tr!("con advertencias"), theme::WARN),
+        RunOutcome::Failed => ("✗", tr!("falló"), theme::ERR),
+        RunOutcome::Aborted => ("!", tr!("abortada"), theme::WARN),
     }
 }
 
@@ -65,7 +67,7 @@ impl HistoryState {
                 if entry.has_log {
                     return Some(HistoryAction::OpenLog(self.cursor));
                 }
-                self.notice = Some("esa ejecución no guardó log (¿fue un dry-run?)".into());
+                self.notice = Some(tr!("esa ejecución no guardó log (¿fue un dry-run?)"));
             }
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => {
                 return Some(HistoryAction::Back);
@@ -80,18 +82,21 @@ impl HistoryState {
             buf,
             area,
             vec![Span::styled(
-                format!("Historial · plan {}", self.plan),
+                tr!("Historial · plan {plan}", plan = self.plan),
                 theme::bold(),
             )],
             vec![Span::styled(
-                format!("{} ejecuciones", self.entries.len()),
+                tr!("{n} ejecuciones", n = self.entries.len()),
                 theme::secondary(),
             )],
             theme::border(),
         );
         let content_w = inner.width.saturating_sub(2);
-        let shortcuts: &[(&str, &str)] =
-            &[("↑↓", "elegir"), ("enter", "ver log"), ("esc", "volver")];
+        let shortcuts: &[(&str, &str)] = &[
+            ("↑↓", tk!("elegir")),
+            ("enter", tk!("ver log")),
+            ("esc", tk!("volver")),
+        ];
         let sc_h = widgets::shortcuts_height(shortcuts, content_w).max(1);
         let sc_y = inner.bottom().saturating_sub(sc_h);
         let sep_low = sc_y.saturating_sub(1);
@@ -104,7 +109,7 @@ impl HistoryState {
 
         if self.entries.is_empty() {
             Line::from(Span::styled(
-                "este plan todavía no se ejecutó",
+                tr!("este plan todavía no se ejecutó"),
                 theme::muted(),
             ))
             .render(
@@ -197,9 +202,9 @@ impl HistoryState {
         let (_, label, color) = outcome_style(e.outcome);
         let content = pad(area);
         Line::from(vec![
-            Span::styled(format!("Ejecución {}", e.id), theme::bold()),
+            Span::styled(tr!("Ejecución {id}", id = e.id), theme::bold()),
             Span::styled(" · ", theme::secondary()),
-            Span::styled(label, Style::new().fg(color)),
+            Span::styled(label.clone(), Style::new().fg(color)),
         ])
         .render(Rect::new(content.x, content.y, content.width, 1), buf);
         for (n, step) in e.steps.iter().enumerate() {
@@ -224,7 +229,7 @@ impl HistoryState {
             }
             let dur = step.duration.map_or_else(|| "-".to_string(), fmt_duration);
             let retries = if step.retries > 0 {
-                format!("  {} reintento(s)", step.retries)
+                tr!("  {n} reintento(s)", n = step.retries)
             } else {
                 String::new()
             };
@@ -306,19 +311,22 @@ impl LogFileState {
         let inner = frame(
             buf,
             area,
-            vec![Span::styled(format!("Log · {}", self.title), theme::bold())],
             vec![Span::styled(
-                format!("{} líneas", self.lines.len()),
+                tr!("Log · {title}", title = self.title),
+                theme::bold(),
+            )],
+            vec![Span::styled(
+                tr!("{n} líneas", n = self.lines.len()),
                 theme::secondary(),
             )],
             theme::border(),
         );
         let content_w = inner.width.saturating_sub(2);
         let shortcuts: &[(&str, &str)] = &[
-            ("↑↓", "mover"),
-            ("PgUp PgDn", "página"),
-            ("g G", "inicio y final"),
-            ("esc", "volver"),
+            ("↑↓", tk!("mover")),
+            ("PgUp PgDn", tk!("página")),
+            ("g G", tk!("inicio y final")),
+            ("esc", tk!("volver")),
         ];
         let sc_h = widgets::shortcuts_height(shortcuts, content_w).max(1);
         let sc_y = inner.bottom().saturating_sub(sc_h);
@@ -343,7 +351,7 @@ impl LogFileState {
         let view_h = body.height as usize;
         self.view_height.set(view_h);
         if self.lines.is_empty() {
-            Line::from(Span::styled("el log está vacío", theme::muted()))
+            Line::from(Span::styled(tr!("el log está vacío"), theme::muted()))
                 .render(Rect::new(body.x, body.y, body.width, 1), buf);
             return;
         }
@@ -355,10 +363,10 @@ impl LogFileState {
             line.render(Rect::new(body.x, body.y + i as u16, body.width, 1), buf);
         }
         if scroll > 0 {
-            let hint = "[G] ir al final";
+            let hint = tr!("[G] ir al final");
             let w = hint.chars().count() as u16;
             if body.width > w + 2 {
-                Line::from(Span::styled(hint, Style::new().fg(theme::WARN))).render(
+                Line::from(Span::styled(hint.clone(), Style::new().fg(theme::WARN))).render(
                     Rect::new(body.right() - w, sep_low.saturating_sub(1), w, 1),
                     buf,
                 );

@@ -7,6 +7,8 @@
 //! baja el manifiesto de ese SHA exacto, no de un tag que puede moverse. Lo instalado queda
 //! registrado con su sha256 en `plugins.lock`, y un manifiesto que cambia después ya no se carga.
 
+use baton_core::i18n::tr_dyn;
+use baton_core::tr;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -98,14 +100,20 @@ pub fn curl_args(url: &str, max_bytes: u64, github_api: bool) -> Vec<String> {
 pub fn explain_curl_failure(stderr: &str) -> String {
     let why = stderr.trim();
     if why.contains("404") {
-        "no se encontró el repositorio, la versión o el manifiesto en GitHub (¿es privado o el nombre está mal escrito?)".to_string()
+        tr!(
+            "no se encontró el repositorio, la versión o el manifiesto en GitHub (¿es privado o el nombre está mal escrito?)"
+        )
     } else if why.contains("422") {
         // la API contesta 422 cuando el tag, la rama o el commit no existen en un repositorio que sí existe
-        "GitHub no encontró esa versión (tag, rama o commit) en el repositorio: revisa cómo está escrita".to_string()
+        tr!(
+            "GitHub no encontró esa versión (tag, rama o commit) en el repositorio: revisa cómo está escrita"
+        )
     } else if why.contains("403") || why.contains("429") {
-        "GitHub rechazó la consulta (suele ser el límite de uso sin autenticar): espera unos minutos y vuelve a intentarlo".to_string()
+        tr!(
+            "GitHub rechazó la consulta (suele ser el límite de uso sin autenticar): espera unos minutos y vuelve a intentarlo"
+        )
     } else {
-        format!("no se pudo consultar GitHub: {why}")
+        tr!("no se pudo consultar GitHub: {why}", why = why)
     }
 }
 
@@ -116,20 +124,21 @@ impl Http for Curl {
             .output()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "no se encontró `curl`: instálalo para descargar plugins".to_string()
+                    tr!("no se encontró `curl`: instálalo para descargar plugins")
                 } else {
-                    format!("no se pudo ejecutar curl: {e}")
+                    tr!("no se pudo ejecutar curl: {e}", e = e)
                 }
             })?;
         if !out.status.success() {
             return Err(explain_curl_failure(&String::from_utf8_lossy(&out.stderr)));
         }
         if out.stdout.len() as u64 > max_bytes {
-            return Err(format!(
-                "la respuesta es demasiado grande (máximo {max_bytes} bytes)"
+            return Err(tr!(
+                "la respuesta es demasiado grande (máximo {max_bytes} bytes)",
+                max_bytes = max_bytes
             ));
         }
-        String::from_utf8(out.stdout).map_err(|_| "la respuesta no es texto UTF-8".to_string())
+        String::from_utf8(out.stdout).map_err(|_| tr!("la respuesta no es texto UTF-8"))
     }
 }
 
@@ -146,11 +155,12 @@ pub fn fetch_with(http: &dyn Http, source: &Source) -> Result<Fetched, String> {
             let json = http.get(&url, 1024 * 1024, true)?;
             let commit = parse_commit(&json)?;
             if !commit.verified {
-                return Err(format!(
-                    "el commit {} de {}@{git_ref} no tiene una firma verificada por GitHub ({}): baton no instala plugins de commits sin firma verificada",
-                    &commit.sha[..12],
-                    source.label(),
-                    commit.reason
+                return Err(tr!(
+                    "el commit {sha} de {source}@{git_ref} no tiene una firma verificada por GitHub ({reason}): baton no instala plugins de commits sin firma verificada",
+                    sha = &commit.sha[..12],
+                    source = source.label(),
+                    git_ref = git_ref,
+                    reason = commit.reason
                 ));
             }
             // el manifiesto del commit verificado, no del tag (que puede moverse)
@@ -172,9 +182,10 @@ pub fn fetch_with(http: &dyn Http, source: &Source) -> Result<Fetched, String> {
     };
 
     if text.len() > MAX_MANIFEST_BYTES {
-        return Err(format!(
-            "el manifiesto pesa {} bytes (máximo {MAX_MANIFEST_BYTES})",
-            text.len()
+        return Err(tr!(
+            "el manifiesto pesa {n} bytes (máximo {max})",
+            n = text.len(),
+            max = MAX_MANIFEST_BYTES
         ));
     }
     let shown = PathBuf::from(source.label()).join(MANIFEST_FILE);
@@ -186,9 +197,9 @@ pub fn fetch_with(http: &dyn Http, source: &Source) -> Result<Fetched, String> {
             .filter(|d| d.is_error())
             .map(ToString::to_string)
             .collect();
-        return Err(format!(
-            "el manifiesto no es válido:\n  {}",
-            problems.join("\n  ")
+        return Err(tr!(
+            "el manifiesto no es válido:\n  {list}",
+            list = problems.join("\n  ")
         ));
     }
     let manifest = checked.value.expect("revisado arriba");
@@ -218,15 +229,17 @@ pub fn plan_install(dir: &Path, f: &Fetched) -> Result<Change, String> {
     }
     let lock = read_lock(dir)?;
     let Some(entry) = lock.plugins.get(name) else {
-        return Err(format!(
-            "ya existe un plugin '{name}' que no instaló baton plugin add (¿lo enlazaste para desarrollarlo?): quítalo antes con baton plugin remove {name}"
+        return Err(tr!(
+            "ya existe un plugin '{name}' que no instaló baton plugin add (¿lo enlazaste para desarrollarlo?): quítalo antes con baton plugin remove {name}",
+            name = name
         ));
     };
     if entry.source != f.source.label() {
-        return Err(format!(
-            "ya hay un plugin '{name}' instalado desde {}, y este viene de {}: quita el actual antes con baton plugin remove {name}",
-            entry.source,
-            f.source.label()
+        return Err(tr!(
+            "ya hay un plugin '{name}' instalado desde {current}, y este viene de {new}: quita el actual antes con baton plugin remove {name}",
+            name = name,
+            current = entry.source,
+            new = f.source.label()
         ));
     }
     let current = read_manifest_text(&folder.join(MANIFEST_FILE)).map_err(|d| d.to_string())?;
@@ -240,7 +253,7 @@ pub fn plan_install(dir: &Path, f: &Fetched) -> Result<Change, String> {
 /// Deja el plugin instalado y registrado.
 pub fn apply_install(dir: &Path, f: &Fetched) -> Result<(), String> {
     let name = &f.manifest.name;
-    install_manifest(dir, name, &f.text).map_err(|e| format!("no se pudo instalar: {e}"))?;
+    install_manifest(dir, name, &f.text).map_err(|e| tr!("no se pudo instalar: {e}", e = e))?;
     let mut lock = read_lock(dir)?;
     lock.plugins.insert(
         name.clone(),
@@ -259,42 +272,59 @@ pub fn apply_install(dir: &Path, f: &Fetched) -> Result<(), String> {
             installed_at: baton_store::clock::iso(),
         },
     );
-    write_lock(dir, &lock).map_err(|e| format!("se instaló pero no se pudo registrar: {e}"))
+    write_lock(dir, &lock).map_err(|e| tr!("se instaló pero no se pudo registrar: {e}", e = e))
 }
 
 // -------------------------------------------------------------------------- mostrar
 
 fn show_review(f: &Fetched, change: &Change, out: &mut dyn Write) {
     let m = &f.manifest;
-    let _ = writeln!(out, "plugin {} {}", m.name, m.version);
+    let _ = writeln!(
+        out,
+        "{}",
+        tr!(
+            "plugin {name} {version}",
+            name = m.name,
+            version = m.version
+        )
+    );
     let origin = match &f.source {
         Source::Github { git_ref, .. } => format!("{}@{git_ref}", f.source.label()),
         Source::Local(_) => f.source.label(),
     };
-    let _ = writeln!(out, "  origen: {origin}");
+    let _ = writeln!(out, "{}", tr!("  origen: {origin}", origin = origin));
     match &f.commit {
         Some(c) => {
             let _ = writeln!(
                 out,
-                "  commit: {} (firma verificada por GitHub: {})",
-                c.sha, c.reason
+                "{}",
+                tr!(
+                    "  commit: {sha} (firma verificada por GitHub: {reason})",
+                    sha = c.sha,
+                    reason = c.reason
+                )
             );
         }
         None => {
             let _ = writeln!(
                 out,
-                "  origen local: no hay commit ni firma que verificar; solo lo que ves abajo"
+                "{}",
+                tr!("  origen local: no hay commit ni firma que verificar; solo lo que ves abajo")
             );
         }
     }
-    let _ = writeln!(out, "  sha256: {}", f.sha256);
+    let _ = writeln!(out, "{}", tr!("  sha256: {hash}", hash = f.sha256));
     match change {
         Change::Update(old_text) => {
-            let _ = writeln!(out, "  reemplaza a la versión instalada; cambia:");
+            let _ = writeln!(
+                out,
+                "{}",
+                tr!("  reemplaza a la versión instalada; cambia:")
+            );
             match Manifest::parse(old_text) {
                 Ok(old) => show_diff(&old, m, out),
                 Err(_) => {
-                    let _ = writeln!(out, "    (la versión instalada no se pudo leer)");
+                    let _ = writeln!(out, "{}", tr!("    (la versión instalada no se pudo leer)"));
                     show_fields(m, out);
                 }
             }
@@ -305,7 +335,7 @@ fn show_review(f: &Fetched, change: &Change, out: &mut dyn Write) {
 
 fn show_fields(m: &Manifest, out: &mut dyn Write) {
     for (label, value) in describe(m) {
-        let _ = writeln!(out, "  {label}: {value}");
+        let _ = writeln!(out, "  {}: {value}", tr_dyn(label));
     }
 }
 
@@ -317,26 +347,38 @@ fn show_diff(old: &Manifest, new: &Manifest, out: &mut dyn Write) {
             Some((_, before)) if before == value => {}
             Some((_, before)) => {
                 same = false;
-                let _ = writeln!(out, "    {label}:\n      - {before}\n      + {value}");
+                let _ = writeln!(
+                    out,
+                    "    {}:\n      - {before}\n      + {value}",
+                    tr_dyn(label)
+                );
             }
             None => {
                 same = false;
-                let _ = writeln!(out, "    {label}:\n      + {value}");
+                let _ = writeln!(out, "    {}:\n      + {value}", tr_dyn(label));
             }
         }
     }
     for (label, before) in &a {
         if !b.iter().any(|(l, _)| l == label) {
             same = false;
-            let _ = writeln!(out, "    {label}:\n      - {before}");
+            let _ = writeln!(out, "    {}:\n      - {before}", tr_dyn(label));
         }
     }
     if old.version != new.version {
         same = false;
-        let _ = writeln!(out, "    versión: {} -> {}", old.version, new.version);
+        let _ = writeln!(
+            out,
+            "{}",
+            tr!(
+                "    versión: {old} -> {new}",
+                old = old.version,
+                new = new.version
+            )
+        );
     }
     if same {
-        let _ = writeln!(out, "    (los comandos son los mismos)");
+        let _ = writeln!(out, "{}", tr!("    (los comandos son los mismos)"));
     }
 }
 
@@ -358,7 +400,7 @@ impl Ask for Terminal {
     }
 
     fn confirm(&mut self, question: &str) -> bool {
-        eprint!("{question} (s/N) ");
+        eprint!("{question}{}", tr!(" (s/N) "));
         let _ = std::io::stderr().flush();
         let mut line = String::new();
         if std::io::stdin().lock().read_line(&mut line).is_err() {
@@ -397,28 +439,31 @@ pub fn add_in(
     // sin nadie que lea los comandos no se instala nada, y se dice antes de tocar la red
     if !ask.interactive() {
         eprintln!(
-            "error: baton plugin add necesita una terminal: baton no instala un plugin sin que alguien lea antes qué comandos va a ejecutar. Instálalo desde una terminal; en CI, usa un plugin ya instalado"
+            "{}",
+            tr!(
+                "error: baton plugin add necesita una terminal: baton no instala un plugin sin que alguien lea antes qué comandos va a ejecutar. Instálalo desde una terminal; en CI, usa un plugin ya instalado"
+            )
         );
         return EXIT_USAGE;
     }
     let source = match Source::parse(source_text) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return EXIT_USAGE;
         }
     };
     let fetched = match fetcher(&source) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return EXIT_INVALID;
         }
     };
     let change = match plan_install(dir, &fetched) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return EXIT_INVALID;
         }
     };
@@ -426,37 +471,49 @@ pub fn add_in(
     if change == Change::Unchanged {
         let _ = writeln!(
             out,
-            "el plugin {name} ya está instalado y es idéntico: no hay nada que hacer"
+            "{}",
+            tr!(
+                "el plugin {name} ya está instalado y es idéntico: no hay nada que hacer",
+                name = name
+            )
         );
         return 0;
     }
 
     show_review(&fetched, &change, out);
-    let verb = if matches!(change, Change::Update(_)) {
-        "Actualizar"
+    let question = if matches!(change, Change::Update(_)) {
+        tr!(
+            "¿Actualizar el plugin '{name}' {version}? Ejecutará los comandos de arriba en esta máquina",
+            name = name,
+            version = fetched.manifest.version
+        )
     } else {
-        "Instalar"
+        tr!(
+            "¿Instalar el plugin '{name}' {version}? Ejecutará los comandos de arriba en esta máquina",
+            name = name,
+            version = fetched.manifest.version
+        )
     };
-    let question = format!(
-        "¿{verb} el plugin '{name}' {}? Ejecutará los comandos de arriba en esta máquina",
-        fetched.manifest.version
-    );
     if !ask.confirm(&question) {
-        eprintln!("no se instaló nada");
+        eprintln!("{}", tr!("no se instaló nada"));
         return EXIT_INVALID;
     }
     match apply_install(dir, &fetched) {
         Ok(()) => {
             let _ = writeln!(
                 out,
-                "✓ plugin {name} {} instalado en {}",
-                fetched.manifest.version,
-                dir.join(&name).display()
+                "{}",
+                tr!(
+                    "✓ plugin {name} {version} instalado en {path}",
+                    name = name,
+                    version = fetched.manifest.version,
+                    path = dir.join(&name).display()
+                )
             );
             0
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             EXIT_INVALID
         }
     }
@@ -479,28 +536,38 @@ pub fn remove(name: &str, yes: bool, start: &Path, global: bool) -> ExitCode {
 
 pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut dyn Write) -> u8 {
     if !baton_core::kind::is_valid_name(name) {
-        eprintln!("error: '{name}' no es el nombre de un plugin");
+        eprintln!(
+            "{}",
+            tr!("error: '{name}' no es el nombre de un plugin", name = name)
+        );
         return EXIT_USAGE;
     }
     if std::fs::symlink_metadata(dir.join(name)).is_err() {
         eprintln!(
-            "error: no hay un plugin '{name}' instalado en {}",
-            dir.display()
+            "{}",
+            tr!(
+                "error: no hay un plugin '{name}' instalado en {path}",
+                name = name,
+                path = dir.display()
+            )
         );
         return EXIT_USAGE;
     }
     if !yes {
         if !ask.interactive() {
-            eprintln!("error: sin terminal, quitar un plugin necesita --yes");
+            eprintln!(
+                "{}",
+                tr!("error: sin terminal, quitar un plugin necesita --yes")
+            );
             return EXIT_USAGE;
         }
-        if !ask.confirm(&format!("¿Quitar el plugin '{name}'?")) {
-            eprintln!("no se quitó nada");
+        if !ask.confirm(&tr!("¿Quitar el plugin '{name}'?", name = name)) {
+            eprintln!("{}", tr!("no se quitó nada"));
             return EXIT_INVALID;
         }
     }
     if let Err(e) = remove_plugin(dir, name) {
-        eprintln!("error: {e}");
+        eprintln!("{}", tr!("error: {e}", e = e));
         return EXIT_INVALID;
     }
     // el registro: si no se puede actualizar, el plugin ya se quitó y se dice
@@ -510,15 +577,25 @@ pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut
                 && let Err(e) = write_lock(dir, &lock)
             {
                 eprintln!(
-                    "advertencia: se quitó el plugin pero no se pudo actualizar el registro: {e}"
+                    "{}",
+                    tr!(
+                        "advertencia: se quitó el plugin pero no se pudo actualizar el registro: {e}",
+                        e = e
+                    )
                 );
             }
         }
         Err(e) => {
-            eprintln!("advertencia: se quitó el plugin pero el registro no se pudo leer: {e}")
+            eprintln!(
+                "{}",
+                tr!(
+                    "advertencia: se quitó el plugin pero el registro no se pudo leer: {e}",
+                    e = e
+                )
+            )
         }
     }
-    let _ = writeln!(out, "✓ plugin {name} quitado");
+    let _ = writeln!(out, "{}", tr!("✓ plugin {name} quitado", name = name));
     0
 }
 
@@ -574,44 +651,76 @@ pub fn new(name: &str) -> ExitCode {
 
 pub fn new_in(base: &Path, name: &str, out: &mut dyn Write) -> u8 {
     if !baton_core::kind::is_valid_name(name) {
-        eprintln!("error: '{name}' no es un nombre válido: solo minúsculas, números y guiones");
+        eprintln!(
+            "{}",
+            tr!(
+                "error: '{name}' no es un nombre válido: solo minúsculas, números y guiones",
+                name = name
+            )
+        );
         return EXIT_USAGE;
     }
     if baton_core::kind::StepKind::from_name(name).is_some_and(|k| k.is_builtin()) {
-        eprintln!("error: '{name}' ya es un tipo de baton y no se puede redefinir");
+        eprintln!(
+            "{}",
+            tr!(
+                "error: '{name}' ya es un tipo de baton y no se puede redefinir",
+                name = name
+            )
+        );
         return EXIT_USAGE;
     }
     let folder = base.join(name);
     if std::fs::symlink_metadata(&folder).is_ok() {
-        eprintln!("error: ya existe {}", folder.display());
+        eprintln!(
+            "{}",
+            tr!("error: ya existe {path}", path = folder.display())
+        );
         return EXIT_USAGE;
     }
     let file = folder.join(MANIFEST_FILE);
     if let Err(e) =
         std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&file, template(name)))
     {
-        eprintln!("error: no se pudo crear {}: {e}", file.display());
+        eprintln!(
+            "{}",
+            tr!(
+                "error: no se pudo crear {path}: {e}",
+                path = file.display(),
+                e = e
+            )
+        );
         return EXIT_INVALID;
     }
-    let _ = writeln!(out, "✓ creado {}", file.display());
-    let _ = writeln!(out, "siguientes pasos:");
+    let _ = writeln!(out, "{}", tr!("✓ creado {path}", path = file.display()));
+    let _ = writeln!(out, "{}", tr!("siguientes pasos:"));
     let _ = writeln!(
         out,
-        "  1. edítalo: el comando, el dry_run (de solo lectura) y los programas que pide"
+        "{}",
+        tr!("  1. edítalo: el comando, el dry_run (de solo lectura) y los programas que pide")
     );
     let _ = writeln!(
         out,
-        "  2. revísalo:  baton plugin validate {}",
-        folder.display()
+        "{}",
+        tr!(
+            "  2. revísalo:  baton plugin validate {path}",
+            path = folder.display()
+        )
     );
     let _ = writeln!(
         out,
-        "  3. pruébalo en tu máquina:  baton plugin add {}",
-        folder.display()
+        "{}",
+        tr!(
+            "  3. pruébalo en tu máquina:  baton plugin add {path}",
+            path = folder.display()
+        )
     );
     let _ = writeln!(
         out,
-        "guía para escribir un plugin: https://github.com/sebascode/baton_app/blob/HEAD/docs/plugins.md"
+        "{}",
+        tr!(
+            "guía para escribir un plugin: https://github.com/sebascode/baton_app/blob/HEAD/docs/plugins.md"
+        )
     );
     0
 }

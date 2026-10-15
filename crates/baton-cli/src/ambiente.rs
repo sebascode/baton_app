@@ -7,6 +7,7 @@
 
 use baton_core::Config;
 use baton_core::secrets::is_safe_ambiente;
+use baton_core::tr;
 
 /// De dónde salió el ambiente.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,14 +39,24 @@ pub fn resolve(flag: Option<&str>, config: &Config) -> Result<Option<String>, St
         return Ok(None);
     };
     if !is_safe_ambiente(&name) {
-        return Err(format!(
-            "el ambiente '{name}' no es válido (solo letras, números, . - _)"
+        return Err(tr!(
+            "el ambiente '{name}' no es válido (solo letras, números, . - _)",
+            name = name
         ));
     }
     match source {
         Source::Flag => {}
-        Source::Env => eprintln!("ambiente: {name} (de BATON_AMBIENTE)"),
-        Source::Config => eprintln!("ambiente: {name} (por defecto, de .baton/config.toml)"),
+        Source::Env => eprintln!(
+            "{}",
+            tr!("ambiente: {name} (de BATON_AMBIENTE)", name = name)
+        ),
+        Source::Config => eprintln!(
+            "{}",
+            tr!(
+                "ambiente: {name} (por defecto, de .baton/config.toml)",
+                name = name
+            )
+        ),
     }
     Ok(Some(name))
 }
