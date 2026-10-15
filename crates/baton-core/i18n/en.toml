@@ -1,0 +1,3 @@
+# English catalog. The key is the Spanish text exactly as it appears in the code (`tr!("...")`),
+# the value its English translation. Placeholders `{name}` must be the same on both sides: a test
+# checks it. A missing key falls back to Spanish.

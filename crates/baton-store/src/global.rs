@@ -59,6 +59,28 @@ impl Layers {
         })
     }
 
+    /// Solo el archivo global (fuera de un proyecto).
+    pub fn global_only() -> Layers {
+        let global_path = global_path();
+        let global = global_path
+            .as_deref()
+            .and_then(|p| read_optional(p).ok().flatten());
+        Layers {
+            global_path,
+            global,
+            project_path: PathBuf::new(),
+            project: None,
+        }
+    }
+
+    /// El valor de `name` en el proyecto o, si no, en la global (sin mirar el entorno).
+    pub fn setting(&self, name: &str) -> Option<String> {
+        let (g, p) = self.tables();
+        settings::lookup(&p, name)
+            .or_else(|| settings::lookup(&g, name))
+            .map(settings::show)
+    }
+
     fn tables(&self) -> (toml::Table, toml::Table) {
         let parse = |t: &Option<String>| {
             t.as_deref()
@@ -115,6 +137,19 @@ fn defined_in(table: &toml::Table, path: &[Seg]) -> bool {
         }
     }
     true
+}
+
+/// El idioma elegido: `BATON_LANG`, o `ui.language` del proyecto o de la global, o español.
+pub fn language(start: &Path) -> baton_core::i18n::Lang {
+    let layers = match Project::discover(start) {
+        Some(p) => Layers::read(&p).unwrap_or_else(|_| Layers::global_only()),
+        None => Layers::global_only(),
+    };
+    baton_core::i18n::resolve(
+        std::env::var("BATON_LANG").ok().as_deref(),
+        layers.setting("ui.language").as_deref(),
+        |k| std::env::var(k).ok(),
+    )
 }
 
 /// La configuración efectiva: la del proyecto con la global rellenando lo que falta. Cada

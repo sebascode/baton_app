@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use baton_core::settings::{self, KEYS, Key, Origin};
 use baton_store::Project;
-use baton_store::global::{Layers, Scope, SetError, global_path, set_key};
+use baton_store::global::{Layers, Scope, SetError, set_key};
 
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
@@ -54,18 +54,7 @@ fn layers(project: Option<&Project>) -> Result<Layers, ExitCode> {
             eprintln!("error: {d}");
             ExitCode::from(EXIT_INVALID)
         }),
-        None => {
-            let path = global_path();
-            let text = path
-                .as_deref()
-                .and_then(|p| std::fs::read_to_string(p).ok());
-            Ok(Layers {
-                global_path: path,
-                global: text,
-                project_path: Default::default(),
-                project: None,
-            })
-        }
+        None => Ok(Layers::global_only()),
     }
 }
 

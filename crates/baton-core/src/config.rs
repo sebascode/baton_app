@@ -46,6 +46,9 @@ pub struct Ui {
     /// Preguntar antes de cerrar baton con `esc` o `enter` (por defecto sí). `q` y `ctrl+c`
     /// siguen saliendo directo.
     pub confirm_exit: Option<bool>,
+    /// Idioma de la interfaz y de los mensajes: `es` (por defecto), `en` o `auto` (el del
+    /// sistema). `BATON_LANG` manda sobre esto.
+    pub language: Option<String>,
 }
 
 impl Ui {

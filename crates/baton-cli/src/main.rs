@@ -536,6 +536,13 @@ fn main() -> ExitCode {
         return askpass(&keys.to_string_lossy());
     }
     let cli = Cli::parse();
+    // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
+    baton_core::i18n::set(baton_store::global::language(
+        &cli.dir
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default(),
+    ));
 
     if let Some(Command::Version) = cli.command {
         println!("baton {VERSION}");

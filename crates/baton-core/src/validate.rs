@@ -47,6 +47,18 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         out.push(Issue::error(path!["defaults", "engine"], msg));
     }
 
+    if let Some(l) = &config.ui.language
+        && !crate::i18n::SETTING_VALUES.contains(&l.as_str())
+    {
+        out.push(Issue::error(
+            path!["ui", "language"],
+            format!(
+                "el idioma '{l}' no existe (opciones: {})",
+                crate::i18n::SETTING_VALUES.join(", ")
+            ),
+        ));
+    }
+
     if let Some(a) = &config.defaults.ambiente
         && !crate::secrets::is_safe_ambiente(a)
     {

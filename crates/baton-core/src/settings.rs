@@ -55,7 +55,7 @@ pub enum Kind {
     Choice(&'static [&'static str]),
 }
 
-pub const KEYS: [Key; 9] = [
+pub const KEYS: [Key; 10] = [
     Key {
         name: "defaults.engine",
         kind: Kind::Choice(&["auto", "docker", "podman"]),
@@ -111,6 +111,13 @@ pub const KEYS: [Key; 9] = [
         env: None,
         default: "(sin límite)",
         help: "tamaño máximo de la carpeta de logs (500MB)",
+    },
+    Key {
+        name: "ui.language",
+        kind: Kind::Choice(&["es", "en", "auto"]),
+        env: Some("BATON_LANG"),
+        default: "es",
+        help: "idioma de la interfaz (auto sigue al sistema)",
     },
     Key {
         name: "ui.confirm_exit",

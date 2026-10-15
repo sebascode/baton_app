@@ -14,6 +14,7 @@ pub mod engine;
 pub mod events;
 pub mod export;
 pub mod hash;
+pub mod i18n;
 pub mod import;
 pub mod issue;
 pub mod kind;
