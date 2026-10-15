@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use baton_core::config::Target;
 use baton_core::{Config, Issue};
 use baton_store::config_edit::{SaveError, save_config};
-use baton_store::{Project, check_config};
+use baton_store::{Project, check_project_config};
 use baton_tui::App;
 use baton_tui::app::Mode;
 use baton_tui::config_view::{TargetStatus, name_of, target_of};
@@ -58,7 +58,9 @@ impl ConfigDriver {
                 }
             }
             Ok(Target::Ssh(ssh)) => {
-                let config = check_config(&self.project).value.unwrap_or_default();
+                let config = check_project_config(&self.project)
+                    .value
+                    .unwrap_or_default();
                 // el bastion es el de la pantalla (puede no estar guardado todavía)
                 let bastion = ssh.bastion.as_ref().and_then(|name| {
                     c.targets.iter().find(|t| &t.name == name).and_then(|t| {
@@ -93,7 +95,7 @@ impl ConfigDriver {
     fn save(&self, app: &mut App, config: Config) {
         match save_config(&self.project, &config) {
             Ok(saved) => {
-                let checked = check_config(&self.project);
+                let checked = check_project_config(&self.project);
                 let Some(fresh) = checked.value else {
                     app.notify("se guardó, pero la configuración no se pudo volver a leer");
                     return;

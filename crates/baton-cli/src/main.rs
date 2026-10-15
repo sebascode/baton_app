@@ -16,6 +16,7 @@ mod plugin_add;
 mod plugin_cmd;
 mod proc;
 mod run;
+mod settings_cmd;
 mod shell_init;
 mod start;
 mod style;
@@ -70,6 +71,11 @@ enum Command {
         /// Vuelve a la versión que había antes de la última actualización
         #[arg(long)]
         rollback: bool,
+    },
+    /// Configuración global de la app y de dónde sale cada valor (no necesita proyecto)
+    Settings {
+        #[command(subcommand)]
+        action: Option<SettingsAction>,
     },
     /// Plugins: tipos de paso que no vienen con baton (no necesita proyecto)
     Plugin {
@@ -331,6 +337,31 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum SettingsAction {
+    /// Muestra cada clave con su valor y de dónde sale (es lo que hace sin subcomando)
+    List,
+    /// Imprime el valor efectivo de una clave (el origen va a stderr)
+    Get {
+        /// Por ejemplo defaults.engine, logs.format, ui.confirm_exit
+        clave: String,
+    },
+    /// Cambia una clave en la configuración global (o en la del proyecto con --proyecto)
+    Set {
+        clave: String,
+        valor: String,
+        /// Escribe en .baton/config.toml en vez de en el archivo global
+        #[arg(long)]
+        proyecto: bool,
+    },
+    /// Quita una clave de la configuración global (o de la del proyecto con --proyecto)
+    Unset {
+        clave: String,
+        #[arg(long)]
+        proyecto: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum PluginAction {
     /// Lista los plugins instalados y si se pueden cargar
     List,
@@ -554,6 +585,33 @@ fn main() -> ExitCode {
             return ask::input(&c, default.clone(), *secret);
         }
         _ => {}
+    }
+
+    if let Some(Command::Settings { action }) = &cli.command {
+        let start = match &cli.dir {
+            Some(d) => d.clone(),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        let action = match action {
+            None | Some(SettingsAction::List) => settings_cmd::Action::List,
+            Some(SettingsAction::Get { clave }) => settings_cmd::Action::Get {
+                clave: clave.clone(),
+            },
+            Some(SettingsAction::Set {
+                clave,
+                valor,
+                proyecto,
+            }) => settings_cmd::Action::Set {
+                clave: clave.clone(),
+                valor: valor.clone(),
+                proyecto: *proyecto,
+            },
+            Some(SettingsAction::Unset { clave, proyecto }) => settings_cmd::Action::Unset {
+                clave: clave.clone(),
+                proyecto: *proyecto,
+            },
+        };
+        return settings_cmd::run(&action, &start);
     }
 
     // `plugin` informa por su cuenta de lo que no se pudo cargar: no se registra antes.
@@ -784,6 +842,7 @@ fn main() -> ExitCode {
         | Command::Import { .. }
         | Command::Update { .. }
         | Command::Version
+        | Command::Settings { .. }
         | Command::Plugin { .. } => unreachable!("se atiende antes de buscar el proyecto"),
     }
 }
@@ -816,7 +875,7 @@ fn config(project: &Project) -> ExitCode {
     if !require_terminal("config") {
         return ExitCode::from(EXIT_USAGE);
     }
-    let checked = baton_store::check_config(project);
+    let checked = baton_store::check_project_config(project);
     for d in &checked.diagnostics {
         eprintln!("{d}");
     }
@@ -829,7 +888,8 @@ fn config(project: &Project) -> ExitCode {
         || "proyecto".to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let state = ConfigState::from_config(&config, &name, project.list_plans());
+    let state = ConfigState::from_config(&config, &name, project.list_plans())
+        .with_global_notes(settings_cmd::global_notes(project));
     let mut driver = config_run::ConfigDriver::new(project.clone(), name);
     match baton_tui::demo::run_app(baton_tui::App::config_only(state), &mut driver) {
         // `enter` en la pestaña Planes: se cierra esta pantalla y se abre el editor de ese plan

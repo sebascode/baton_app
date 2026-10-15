@@ -23,6 +23,7 @@ pub mod plan;
 pub mod plugin;
 pub mod plugin_source;
 pub mod secrets;
+pub mod settings;
 pub mod shell;
 pub mod slug;
 pub mod sql;

@@ -90,8 +90,10 @@ fn io_error(project: &Project, file: &Path, e: &std::io::Error) -> Diagnostic {
     }
 }
 
-/// Carga `.baton/config.toml`. Si no existe se usa la configuración por defecto (solo `local`).
-pub fn check_config(project: &Project) -> Checked<Config> {
+/// Carga solo `.baton/config.toml` (sin la configuración global). Si no existe se usa la
+/// configuración por defecto (solo `local`). Es lo que edita `baton config`, para no copiar a un
+/// proyecto lo que viene de la global.
+pub fn check_project_config(project: &Project) -> Checked<Config> {
     let path = project.config_path();
     let text = match fs::read_to_string(&path) {
         Ok(t) => t,
@@ -229,7 +231,7 @@ target = \"prod\"
     #[test]
     fn missing_config_means_defaults() {
         let (_t, p) = project_with(&[]);
-        let c = check_config(&p);
+        let c = check_project_config(&p);
         assert!(c.is_valid());
         assert!(c.value.unwrap().has_target("local"));
     }
@@ -237,7 +239,7 @@ target = \"prod\"
     #[test]
     fn config_parse_error_has_line() {
         let (_t, p) = project_with(&[(".baton/config.toml", "[logs]\nformat = \"xml\"\n")]);
-        let c = check_config(&p);
+        let c = check_project_config(&p);
         assert!(!c.is_valid());
         let d = &c.diagnostics[0];
         assert_eq!(d.file, ".baton/config.toml");
@@ -251,7 +253,7 @@ target = \"prod\"
             ("baton/plans/instalar.toml", PLAN),
             ("db/docker-compose.yml", ""),
         ]);
-        let cfg = check_config(&p).value.unwrap();
+        let cfg = check_project_config(&p).value.unwrap();
         let c = check_plan(&p, "instalar", Some(&cfg));
         assert!(!c.is_valid());
         let d = c

@@ -34,6 +34,24 @@ pub struct Config {
     /// ambientes con significado especial. Es de esta máquina, como todo `config.toml`.
     #[serde(default)]
     pub ambientes: IndexMap<String, AmbienteConfig>,
+    /// Preferencias de interfaz (`[ui]`), normalmente en la configuración global.
+    #[serde(default)]
+    pub ui: Ui,
+}
+
+/// Preferencias de interfaz.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ui {
+    /// Preguntar antes de cerrar baton con `esc` o `enter` (por defecto sí). `q` y `ctrl+c`
+    /// siguen saliendo directo.
+    pub confirm_exit: Option<bool>,
+}
+
+impl Ui {
+    pub fn confirms_exit(&self) -> bool {
+        self.confirm_exit.unwrap_or(true)
+    }
 }
 
 /// Ajustes de un ambiente.
@@ -66,6 +84,7 @@ impl Default for Config {
             logs: LogsConfig::default(),
             secrets: IndexMap::new(),
             ambientes: IndexMap::new(),
+            ui: Ui::default(),
         }
     }
 }
