@@ -1090,3 +1090,26 @@ impl Scenario {
         self.finish(RunOutcome::Completed)
     }
 }
+
+/// La mantención de la demo: dos servicios y una tarea de mentira.
+pub fn maintenance() -> crate::maint_view::MaintState {
+    use crate::maint_view::{MaintService, MaintState, MaintTask};
+    let svc = |name: &str, file: &str| MaintService {
+        name: name.into(),
+        file: file.into(),
+        target: "local".into(),
+    };
+    MaintState::new(
+        "instalar",
+        vec![
+            svc("api", "services/api/docker-compose.yml"),
+            svc("db", "db/docker-compose.yml"),
+        ],
+        vec![MaintTask {
+            id: "limpiar".into(),
+            name: "Limpiar temporales".into(),
+            description: "borra /tmp/build".into(),
+            confirm: true,
+        }],
+    )
+}

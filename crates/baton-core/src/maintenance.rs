@@ -2,6 +2,7 @@
 //! volver a descargar la imagen... Puro: arma el comando de shell y dice si conviene confirmar;
 //! quien ejecuta decide dónde y con qué credenciales.
 
+use crate::engine::Engine;
 use crate::step_run::sh_quote;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +78,16 @@ impl Action {
     /// El comando para `file` (nombre del compose, se ejecuta en su carpeta) y, si se da, un
     /// servicio; sin servicio actúa sobre todos los del archivo.
     pub fn command(self, file: &str, service: Option<&str>) -> String {
+        self.command_for(Engine::Docker, file, service)
+    }
+
+    /// Como [`Action::command`] para un motor. `podman compose` delega en `podman-compose` o en
+    /// `docker-compose` y el primero no tiene `rm`, ni `ps -a`, ni servicios en `images`, así
+    /// que con podman se usan solo las formas que existen en ambos.
+    pub fn command_for(self, engine: Engine, file: &str, service: Option<&str>) -> String {
+        if engine == Engine::Podman {
+            return self.podman_command(file, service);
+        }
         let dc = format!("docker compose -f {}", sh_quote(file));
         let svc = service
             .map(|s| format!(" {}", sh_quote(s)))
@@ -101,9 +112,54 @@ impl Action {
     }
 }
 
+impl Action {
+    fn podman_command(self, file: &str, service: Option<&str>) -> String {
+        let dc = format!("docker compose -f {}", sh_quote(file));
+        let svc = service
+            .map(|s| format!(" {}", sh_quote(s)))
+            .unwrap_or_default();
+        match self {
+            Action::Logs { follow, tail } => {
+                let f = if follow { " -f" } else { "" };
+                format!("{dc} logs --no-color --tail {tail}{f}{svc}")
+            }
+            Action::Status => format!("{dc} ps -a{svc} 2>/dev/null || {dc} ps"),
+            Action::Restart => format!("{dc} restart{svc}"),
+            Action::Update => format!("{dc} pull{svc} && {dc} up -d{svc}"),
+            // `down --rmi all` existe en los dos proveedores y borra contenedores e imágenes,
+            // pero solo del compose entero (no admite servicios).
+            Action::Reimage => match service {
+                None => format!("{dc} down --rmi all && {dc} pull && {dc} up -d"),
+                Some(_) => "echo 'con podman la reimagen actúa sobre el compose entero (sin -s)' >&2; exit 2"
+                    .to_string(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn podman_uses_only_forms_both_providers_have() {
+        let a = Action::Reimage;
+        let whole = a.command_for(Engine::Podman, "c.yml", None);
+        assert!(whole.contains("down --rmi all") && !whole.contains(" rm "));
+        assert!(
+            a.command_for(Engine::Podman, "c.yml", Some("web"))
+                .contains("exit 2")
+        );
+        assert_eq!(
+            Action::Restart.command_for(Engine::Podman, "c.yml", Some("web")),
+            Action::Restart.command("c.yml", Some("web"))
+        );
+        assert!(
+            Action::Status
+                .command_for(Engine::Podman, "c.yml", None)
+                .contains("|| docker compose -f 'c.yml' ps")
+        );
+    }
 
     #[test]
     fn every_catalog_name_parses_and_round_trips() {

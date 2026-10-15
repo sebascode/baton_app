@@ -11,6 +11,7 @@ use crate::app::{App, Effect, Screen};
 use crate::config_view::TargetStatus;
 use crate::fake;
 use crate::history_view::{HistoryState, LogFileState};
+use crate::maint_view::MaintResult;
 
 const BLINK: Duration = Duration::from_millis(500);
 const FRAME: Duration = Duration::from_millis(50);
@@ -193,7 +194,18 @@ impl Driver for DemoDriver {
             }
             Effect::TestStep(_) => app.step_test_result(true, "dry-run ok · 1.4s (demo)"),
             Effect::Rescan => app.gate_scan_result(&fake::scan(), "ahora"),
-            Effect::Maintenance => app.notify("demo: la mantención necesita un proyecto real"),
+            Effect::Maintenance => app.show_maintenance(fake::maintenance()),
+            Effect::MaintRun(req) => {
+                let what = req
+                    .task
+                    .clone()
+                    .or(req.service.clone())
+                    .unwrap_or_else(|| "todos los servicios".into());
+                app.maint_note(&format!("demo · {what}"));
+                app.maint_line("(salida de mentira: en la demo no se ejecuta nada)", false);
+                app.maint_finished(MaintResult::Ok);
+            }
+            Effect::MaintCancel => {}
             Effect::SavePlan(_) | Effect::SaveConfig(_) => {
                 app.notify("demo: los datos son de mentira, no se guarda nada");
             }

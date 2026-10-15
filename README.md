@@ -101,7 +101,7 @@ baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
-baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (también con `m` en la vista del plan)
+baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
 baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
 baton db -c "select * from clientes"   # consulta una base del plan (PostgreSQL, MySQL o SQLite), solo lectura
 baton db local                # o abre una sesión interactiva con historial (\? ayuda)
@@ -180,6 +180,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-08 | **0.6.0.** Plugins: un tipo de paso nuevo (`terraform`, `make`, el que uses) descrito con un manifiesto TOML, sin código y para cualquier herramienta. `baton plugin new`, `validate`, `add`, `list` y `remove`. `add` solo instala un commit con firma verificada por GitHub, fija su hash y no carga un plugin que cambió después de instalarlo. `--dry-run` ejecuta de verdad el comando de solo lectura del tipo, y antes de aplicar se pide confirmar si el plan destruye algo. Campo `dry_run` por paso, credenciales que declara el plugin con los nombres de variable de su herramienta, y una guía para quien escribe uno ([docs/plugins.md](docs/plugins.md)). |
 | 2026-10-08 | **0.6.1.** El selector de tipo del editor de pasos ya no se corta: si los tipos no caben (los nativos más los de plugins), muestra una ventana que sigue a la opción elegida, con `‹N` y `N›` para lo que queda oculto. |
 | 2026-10-14 | **0.7.0.** `baton ops`: mantención de lo desplegado (logs, estado, reinicios, actualizar y reimagen de los servicios del plan, más tareas propias con `[[tasks]]`; tecla `m` en la vista del plan). `ctrl+z` suspende baton y `fg` lo recupera. |
+| 2026-10-14 | **0.8.0.** Soporte de podman (motor `auto`, `BATON_ENGINE` o `engine` en `[defaults]`; docker y podman conviven). La mantención (`m`) se abre dentro de la misma TUI. Baton ya no se cierra solo: pregunta antes de salir. |
 
 ## Desarrollo
 

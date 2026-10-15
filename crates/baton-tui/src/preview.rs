@@ -75,6 +75,8 @@ pub enum PreviewAction {
     /// Copiar, renombrar o eliminar un plan (ya confirmado en la caja).
     PlanOp(PlanRequest),
     Quit,
+    /// `esc` en la vista del plan: salir, pero preguntando antes.
+    AskQuit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -519,7 +521,9 @@ impl PreviewState {
                 req.resume = true;
                 return Some(PreviewAction::Run(req));
             }
-            KeyCode::Char('q') | KeyCode::Esc => return Some(PreviewAction::Quit),
+            KeyCode::Char('q') => return Some(PreviewAction::Quit),
+            // esc suele ser "volver": no cierra baton sin preguntar
+            KeyCode::Esc => return Some(PreviewAction::AskQuit),
             _ => {}
         }
         None
