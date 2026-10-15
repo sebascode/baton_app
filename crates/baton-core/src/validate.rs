@@ -429,6 +429,22 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
                     ));
                 }
             }
+            SecretProvider::Bitwarden(b) => {
+                if let Some(i) = &b.item {
+                    required(i, "item", "item no puede estar vacío", out);
+                }
+                if let Some(part) = &b.read
+                    && !crate::config::BITWARDEN_PARTS.contains(&part.as_str())
+                {
+                    out.push(Issue::error(
+                        at("read"),
+                        format!(
+                            "read '{part}' no es válido (opciones: {})",
+                            crate::config::BITWARDEN_PARTS.join(", ")
+                        ),
+                    ));
+                }
+            }
             SecretProvider::AzureKeyvault(a) => {
                 if a.vault.is_empty()
                     || !a
@@ -1708,6 +1724,29 @@ mod tests {
             "{all}"
         );
         assert!(all.contains("placeholder desconocido {raro}"), "{all}");
+    }
+
+    #[test]
+    fn the_bitwarden_preset_is_validated() {
+        let ok = config(
+            "[secrets.b]\ntype = \"bitwarden\"\nitem = \"{prefijo}-{campo}\"\nread = \"notes\"\n",
+        );
+        assert!(
+            validate_config(&ok).is_empty(),
+            "{:?}",
+            validate_config(&ok)
+        );
+        let bad = config(
+            "[secrets.b]\ntype = \"bitwarden\"\nitem = \" \"\nread = \"todo\"\ntimeout = \"0s\"\n",
+        );
+        let all: Vec<String> = validate_config(&bad)
+            .iter()
+            .map(|i| i.message.clone())
+            .collect();
+        let all = all.join("\n");
+        assert!(all.contains("item no puede estar vacío"), "{all}");
+        assert!(all.contains("read 'todo' no es válido"), "{all}");
+        assert!(all.contains("timeout debe ser mayor"), "{all}");
     }
 
     #[test]

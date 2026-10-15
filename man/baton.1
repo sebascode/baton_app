@@ -573,6 +573,12 @@ vault = "kv\-empresa"
 name = "{ambiente}\-{prefijo}\-{campo}"
 # opcionales: subscription, timeout
 
+[secrets.bw]
+type = "bitwarden"
+item = "{ambiente}\-{prefijo}\-{campo}"   # por defecto "{prefijo}\-{campo}"
+read = "password"                       # o username, notes, uri, totp
+# opcional: timeout
+
 [secrets.otro]
 type = "command"
 get = "op read op://infra/{prefijo}/{campo}"
@@ -580,7 +586,7 @@ timeout = "15s"
 .RE
 .fi
 .PP
-\fBvault\fR corre \fBvault kv get\fR y \fBazure\-keyvault\fR corre \fBaz keyvault secret show\fR, con el inicio de sesión que ya tenga la máquina (\fBvault login\fR, \fBaz login\fR). \fBcommand\fR corre cualquier comando que imprima el valor. Los marcadores son \fB{ambiente}\fR, \fB{prefijo}\fR, \fB{campo}\fR (en minúsculas), \fB{variable}\fR y \fB{archivo}\fR.
+\fBvault\fR corre \fBvault kv get\fR y \fBazure\-keyvault\fR corre \fBaz keyvault secret show\fR y \fBbitwarden\fR corre \fBbw get\fR con \fB\-\-nointeraction\fR (el ítem tiene que tener un nombre único; si la bóveda está bloqueada falla en vez de preguntar, y se usa el respaldo del \fI.env\fR), con el inicio de sesión que ya tenga la máquina (\fBvault login\fR, \fBaz login\fR, \fBexport BW_SESSION=$(bw unlock \-\-raw)\fR). Bitwarden Secrets Manager (\fBbws\fR) se usa con \fBcommand\fR. \fBcommand\fR corre cualquier comando que imprima el valor. Los marcadores son \fB{ambiente}\fR, \fB{prefijo}\fR, \fB{campo}\fR (en minúsculas), \fB{variable}\fR y \fB{archivo}\fR.
 .PP
 El orden de resolución de cada campo es: variable de entorno, proveedor y, por último, el \fI.env\fR. Si el proveedor falla, se usa el \fI.env\fR como respaldo, de modo que sin red todo sigue funcionando con lo que haya en disco; si tampoco hay valor, el error dice por qué falló el proveedor. Un valor que viene de un proveedor \fBnunca se escribe en disco\fR. Son de solo lectura: \fBbaton\fR no escribe en el gestor.
 .
@@ -750,7 +756,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). Los proveedores de Vault, Azure Key Vault y Bitwarden solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),
