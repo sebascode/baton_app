@@ -188,6 +188,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-14 | **0.8.0.** Soporte de podman (motor `auto`, `BATON_ENGINE` o `engine` en `[defaults]`; docker y podman conviven). La mantención (`m`) se abre dentro de la misma TUI. Baton ya no se cierra solo: pregunta antes de salir. |
 | 2026-10-15 | **0.9.0.** Configuración global (`~/.config/baton/config.toml`, o `BATON_CONFIG`) que se combina con la de cada proyecto, y `baton settings` para ver y cambiar cada valor con su origen (entorno, proyecto, global o por defecto). Nueva preferencia `[ui] confirm_exit`. |
 | 2026-10-15 | **0.10.0.** Plugins por proyecto o globales, como npm: `baton plugin add` instala en el proyecto (`baton/plugins/`, versionado con él) y `--global` en la máquina; el del proyecto gana si hay uno del mismo tipo. **Cambio:** antes `add` instalaba siempre en la máquina, ahora usa `-g` para eso. |
+| 2026-10-15 | **0.10.2.** Idiomas: baton habla español (por defecto) e inglés, con `BATON_LANG` o `ui.language` (`baton settings set ui.language en`). `baton docs [plan]` genera la documentación de un plan en markdown con diagramas mermaid. Preset `bitwarden` para los proveedores de secretos. El CI no repite las pruebas de un contenido que ya pasó. |
 
 ## Desarrollo
 
