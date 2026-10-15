@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  # para buscar si este mismo contenido ya pasó (ver el paso "Árbol ya probado")
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,38 +30,83 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Si este mismo contenido (el árbol de git, no el commit) ya pasó en una ejecución de este
+      # repositorio, no se vuelve a probar: lo normal en un back-merge, en la fusión de una rama ya
+      # probada o al empujar de nuevo sin cambios. El job igual termina en verde, así que el check
+      # obligatorio se cumple. Se vuelve a probar siempre si: es un "Re-run" (para detectar pruebas
+      # inestables), cambió la semana (una versión nueva de `stable` puede traer avisos nuevos) o el
+      # contenido es distinto. Solo cuentan ejecuciones del propio repositorio, no de forks.
+      - name: Árbol ya probado
+        id: seen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ matrix.name }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          slug=$(printf '%s' "$NAME" | tr -c 'a-zA-Z0-9' '-')
+          artifact="ci-ok-${slug}-$(date -u +%G-W%V)-${tree}"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          hit=false
+          if [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then
+            found=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact&per_page=20" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id == .workflow_run.head_repository_id)] | first | .workflow_run.id // empty' || true)
+            if [ -n "$found" ]; then
+              hit=true
+              echo "::notice title=Árbol ya probado::El contenido $tree ya pasó en https://github.com/$GITHUB_REPOSITORY/actions/runs/$found; se omiten las pruebas."
+            fi
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.seen.outputs.hit != 'true'
         with:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.seen.outputs.hit != 'true'
 
       # Las pruebas de prompt ejecutan fish y zsh de verdad si están instalados.
       - name: Instalar shells (linux)
-        if: runner.os == 'Linux'
+        if: steps.seen.outputs.hit != 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fish zsh
 
       - name: Instalar shells (macos)
-        if: runner.os == 'macOS'
+        if: steps.seen.outputs.hit != 'true' && runner.os == 'macOS'
         run: brew install bash fish
 
       - name: Verificar arquitectura
-        if: runner.os == 'macOS'
+        if: steps.seen.outputs.hit != 'true' && runner.os == 'macOS'
         run: test "$(uname -m)" = arm64
 
       - name: fmt
+        if: steps.seen.outputs.hit != 'true'
         run: cargo fmt --all -- --check
 
       - name: clippy
+        if: steps.seen.outputs.hit != 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: test
+        if: steps.seen.outputs.hit != 'true'
         run: cargo test --workspace
 
       - name: install.sh
+        if: steps.seen.outputs.hit != 'true'
         run: |
           BATON_MAN_DIR="$RUNNER_TEMP/man" scripts/install.sh --dir "$RUNNER_TEMP/bin"
           "$RUNNER_TEMP/bin/baton" version
           # segunda instalación: deja baton.prev, que es lo que restaura --rollback
           scripts/install.sh --dir "$RUNNER_TEMP/bin"
           scripts/install.sh --dir "$RUNNER_TEMP/bin" --rollback
+
+      # La marca solo se deja si todo lo anterior pasó (un paso fallido corta el job antes).
+      - name: Marcar el árbol como probado
+        if: steps.seen.outputs.hit != 'true'
+        run: echo "${{ github.sha }}" > "$RUNNER_TEMP/ci-ok"
+
+      - uses: actions/upload-artifact@v6
+        if: steps.seen.outputs.hit != 'true'
+        with:
+          name: ${{ steps.seen.outputs.artifact }}
+          path: ${{ runner.temp }}/ci-ok
+          retention-days: 30
