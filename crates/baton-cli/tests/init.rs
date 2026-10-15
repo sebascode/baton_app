@@ -184,7 +184,7 @@ fn works_from_a_subdirectory_of_an_existing_project() {
 }
 
 #[test]
-fn scripts_become_one_step_each_ordered_by_name_with_destructive_ones_off() {
+fn scripts_are_not_plan_steps_they_are_left_to_maintenance() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     for f in [
@@ -192,24 +192,17 @@ fn scripts_become_one_step_each_ordered_by_name_with_destructive_ones_off() {
         "api/Dockerfile",
         "scripts/01-requisitos.sh",
         "scripts/02-preparar.sh",
-        "scripts/03-smoke.sh",
         "scripts/limpiar.sh",
+        "api/entrypoint.sh",
     ] {
         touch(root, f);
     }
     let o = baton(root, &["init", "demo"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     let stdout = out(&o);
+    // el del entrypoint de la imagen no cuenta
     assert!(
-        stdout.contains("paso '01-requisitos': 1 archivo(s)"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("paso 'limpiar': 1 archivo(s) (desactivado)"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("los scripts se ordenaron por su nombre"),
+        stdout.contains("encontré 3 script(s) .sh: no son pasos del plan"),
         "{stdout}"
     );
 
@@ -219,37 +212,62 @@ fn scripts_become_one_step_each_ordered_by_name_with_destructive_ones_off() {
         .filter_map(|l| l.strip_prefix("id = \""))
         .map(|l| l.trim_end_matches('"'))
         .collect();
-    assert_eq!(
-        order,
-        [
-            "01-requisitos",
-            "02-preparar",
-            "build",
-            "servicios",
-            "03-smoke",
-            "limpiar"
-        ]
-    );
-    assert!(text.contains("type = \"script\""), "{text}");
-    assert!(text.contains("enabled = false"), "{text}");
+    assert_eq!(order, ["build", "servicios"]);
+    assert!(!text.contains("type = \"script\""), "{text}");
 
-    // y el plan que arma valida
     let v = baton(root, &["validate", "demo"]);
     assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
 }
 
 #[test]
-fn a_folder_with_only_scripts_is_no_longer_an_empty_plan() {
+fn a_folder_with_only_scripts_gives_an_empty_plan_and_points_to_maintenance() {
     let tmp = tempfile::tempdir().unwrap();
     touch(tmp.path(), "deploy.sh");
     let o = baton(tmp.path(), &["init", "solo"]);
     assert_eq!(o.status.code(), Some(0));
+    assert!(out(&o).contains("quedó vacío"), "{}", out(&o));
+    assert!(out(&o).contains("baton ops"), "{}", out(&o));
+}
+
+#[test]
+fn init_always_keeps_baton_out_of_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = baton(tmp.path(), &["init", "x"]);
     assert!(
-        out(&o).contains("paso 'deploy': 1 archivo(s)"),
+        out(&o).contains(".baton/ agregado al .gitignore"),
         "{}",
         out(&o)
     );
-    assert!(!out(&o).contains("quedó vacío"), "{}", out(&o));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join(".gitignore")).unwrap(),
+        ".baton/\n"
+    );
+    // un segundo plan no repite la línea ni lo anuncia
+    let o = baton(tmp.path(), &["init", "y"]);
+    assert!(!out(&o).contains("agregado al .gitignore"), "{}", out(&o));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join(".gitignore")).unwrap(),
+        ".baton/\n"
+    );
+}
+
+#[test]
+fn init_appends_to_an_existing_gitignore() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join(".gitignore"), "target\n").unwrap();
+    baton(tmp.path(), &["init", "x"]);
+    assert_eq!(
+        fs::read_to_string(tmp.path().join(".gitignore")).unwrap(),
+        "target\n.baton/\n"
+    );
+}
+
+#[test]
+fn without_a_terminal_init_never_asks_about_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = baton(tmp.path(), &["init", "x"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(!tmp.path().join(".git").exists());
 }
 
 #[test]
