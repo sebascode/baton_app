@@ -1759,8 +1759,13 @@ async fn run(
     let export = (!opts.dry_run)
         .then(|| baton_store::logs::export_target(&config.logs.export))
         .flatten();
-    let (transports, ssh_conns) =
-        build_transports(&project, &config, opts.ambiente.as_deref(), &steps);
+    let (transports, ssh_conns) = build_transports(
+        &project,
+        &config,
+        opts.ambiente.as_deref(),
+        &steps,
+        &opts.env,
+    );
     // Un dry-run no resuelve credenciales, salvo que algún paso ejecute el dry_run de su tipo
     // (`terraform plan` las necesita para consultar la nube).
     let (secrets, mut redacted) = if opts.dry_run && !has_dry_run_probe(&steps) {

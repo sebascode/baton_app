@@ -15,6 +15,7 @@ pub mod forms;
 pub mod gate_view;
 pub mod help;
 pub mod history_view;
+pub mod maint_view;
 pub mod pipeline_view;
 pub mod plan_prompt;
 pub mod preview;
@@ -35,6 +36,8 @@ mod tests_delete;
 mod tests_edit;
 #[cfg(test)]
 mod tests_history;
+#[cfg(test)]
+mod tests_maint;
 #[cfg(test)]
 mod tests_pipeline;
 #[cfg(test)]

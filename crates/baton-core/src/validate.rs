@@ -41,6 +41,12 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         ));
     }
 
+    if let Some(e) = &config.defaults.engine
+        && let Err(msg) = crate::engine::parse(e)
+    {
+        out.push(Issue::error(path!["defaults", "engine"], msg));
+    }
+
     if let Some(a) = &config.defaults.ambiente
         && !crate::secrets::is_safe_ambiente(a)
     {

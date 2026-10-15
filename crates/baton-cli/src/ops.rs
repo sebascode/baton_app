@@ -43,15 +43,15 @@ pub(crate) struct Unit {
 }
 
 /// Una orden lista para confirmar y ejecutar.
-struct Order {
-    label: String,
-    target: String,
-    cwd: PathBuf,
-    line: String,
-    timeout: Option<Duration>,
-    all_credentials: bool,
-    confirm: bool,
-    follow: bool,
+pub(crate) struct Order {
+    pub label: String,
+    pub target: String,
+    pub cwd: PathBuf,
+    pub line: String,
+    pub timeout: Option<Duration>,
+    pub all_credentials: bool,
+    pub confirm: bool,
+    pub follow: bool,
 }
 
 pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
@@ -261,7 +261,11 @@ impl Ctx<'_> {
             ),
             target: u.target.clone(),
             cwd: self.project.root.join(dir),
-            line: action.command(&name, u.service.as_deref()),
+            line: action.command_for(
+                baton_exec::target_engine(self.config, &u.target),
+                &name,
+                u.service.as_deref(),
+            ),
             timeout: (!action.is_follow()).then(|| Duration::from_secs(30 * 60)),
             all_credentials: true,
             confirm: action.needs_confirm(),
@@ -549,4 +553,57 @@ fn ask_yes_no(question: &str) -> bool {
         return false;
     }
     baton_core::ask::parse_yes_no(line.trim()) == Some(true)
+}
+
+/// Lo que muestra la pantalla de mantención de la TUI: los servicios y las tareas del plan.
+pub(crate) fn maintenance_state(
+    project: &Project,
+    config: &Config,
+    plan: &Plan,
+) -> baton_tui::maint_view::MaintState {
+    use baton_tui::maint_view::{MaintService, MaintState, MaintTask};
+    let (services, _) = inventory(project, config, plan);
+    let services = services
+        .into_iter()
+        .map(|(u, _)| MaintService {
+            name: u.service.unwrap_or_default(),
+            file: u.file.display().to_string(),
+            target: u.target,
+        })
+        .collect();
+    let tasks = plan
+        .tasks
+        .iter()
+        .map(|t| MaintTask {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            description: t.description.clone().unwrap_or_default(),
+            confirm: t.confirm,
+        })
+        .collect();
+    MaintState::new(&plan.name, services, tasks)
+}
+
+/// Las órdenes de lo que pidió la pantalla de mantención (la confirmación ya la hizo ella).
+pub(crate) fn build_orders(
+    project: &Project,
+    config: &Config,
+    plan: &Plan,
+    ambiente: Option<&str>,
+    req: &baton_tui::maint_view::MaintRequest,
+) -> Result<Vec<Order>, String> {
+    let (services, _) = inventory(project, config, plan);
+    let ctx = Ctx {
+        project,
+        config,
+        plan,
+        ambiente,
+        services: &services,
+        assume_yes: true,
+    };
+    match (&req.task, req.action) {
+        (Some(id), _) => ctx.task_order(id).map(|o| vec![o]),
+        (None, Some(action)) => ctx.orders_for(action, req.service.as_deref()),
+        (None, None) => Err("no se indicó qué ejecutar".to_string()),
+    }
 }

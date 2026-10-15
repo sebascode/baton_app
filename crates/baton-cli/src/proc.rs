@@ -6,6 +6,22 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+static ENGINE: std::sync::OnceLock<baton_core::engine::Engine> = std::sync::OnceLock::new();
+
+/// Fija el motor de contenedores de esta ejecución (lo hace `open_project` con la configuración).
+pub fn set_engine(engine: baton_core::engine::Engine) {
+    let _ = ENGINE.set(engine);
+}
+
+/// `docker` o `podman`, según el motor elegido (docker si no se fijó ninguno).
+pub fn container_program() -> &'static str {
+    ENGINE
+        .get()
+        .copied()
+        .unwrap_or(baton_core::engine::Engine::Docker)
+        .program()
+}
+
 /// Lo más que se guarda de la salida de un programa; lo que pasa de ahí se descarta (se sigue
 /// leyendo para que el programa no se quede bloqueado escribiendo).
 pub const MAX_OUTPUT: usize = 64 * 1024 * 1024;
@@ -54,6 +70,13 @@ pub fn run_capture(
     stdin: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Finished, Unfinished> {
+    let mapped;
+    let program = if program == "docker" {
+        mapped = OsStr::new(container_program());
+        mapped
+    } else {
+        program
+    };
     let mut child = Command::new(program)
         .args(args)
         .envs(env.iter().cloned())

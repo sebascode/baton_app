@@ -112,6 +112,9 @@ pub struct Defaults {
     /// Ambiente que se usa si no se pide otro (`--ambiente`, `BATON_AMBIENTE`): decide la carpeta
     /// de credenciales y el valor de `{ambiente}`. Es de esta máquina, como todo `config.toml`.
     pub ambiente: Option<String>,
+    /// Motor de contenedores: `auto` (docker y, si no existe, podman), `docker` o `podman`
+    /// (`BATON_ENGINE` manda sobre esto).
+    pub engine: Option<String>,
 }
 
 /// Un proveedor de secretos. `vault` y `azure-keyvault` son atajos: arman el comando del

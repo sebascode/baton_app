@@ -69,7 +69,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
             ],
         }),
         Mode::Run(r) => run_help(r),
-        Mode::Credentials(_) | Mode::Config(_) | Mode::Editor(_) => None,
+        Mode::Credentials(_) | Mode::Config(_) | Mode::Editor(_) | Mode::Maintenance(_) => None,
     }
 }
 
