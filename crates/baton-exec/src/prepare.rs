@@ -7,9 +7,11 @@ use std::time::Duration;
 
 use baton_core::compose::{Service, parse_services};
 use baton_core::config::{Config, Target};
+use baton_core::i18n::tr_dyn;
 use baton_core::plan::{GateMode, Plan, Step, StepKind};
 use baton_core::sql::{Risk, destructive_statements};
 use baton_core::template;
+use baton_core::tr;
 use baton_store::Project;
 use baton_store::secrets::Resolver;
 use baton_store::sources::expand_sources;
@@ -93,7 +95,8 @@ pub fn scan_compose(project: &Project, files: &[PathBuf]) -> Scan {
         let text = match std::fs::read_to_string(project.root.join(f)) {
             Ok(t) => t,
             Err(e) => {
-                scan.errors.push(format!("no se pudo leer {shown}: {e}"));
+                scan.errors
+                    .push(tr!("no se pudo leer {shown}: {e}", shown = shown, e = e));
                 continue;
             }
         };
@@ -104,9 +107,11 @@ pub fn scan_compose(project: &Project, files: &[PathBuf]) -> Scan {
                     file: f.clone(),
                     service,
                 })),
-            Err(e) => scan
-                .errors
-                .push(format!("no se pudo entender {shown}: {e}")),
+            Err(e) => scan.errors.push(tr!(
+                "no se pudo entender {shown}: {e}",
+                shown = shown,
+                e = e
+            )),
         }
     }
     scan
@@ -175,7 +180,7 @@ fn uses_ambiente(step: &Step) -> Vec<String> {
     if let Some(g) = &step.gate {
         for c in g.checks.iter().filter(|c| c.enabled) {
             if uses(&c.url) || uses(&c.run) {
-                out.push(format!("el gate (check '{}')", c.display_name()));
+                out.push(tr!("el gate (check '{name}')", name = c.display_name()));
             }
         }
     }
@@ -183,7 +188,7 @@ fn uses_ambiente(step: &Step) -> Vec<String> {
 }
 
 fn label(step: &Step) -> String {
-    format!("paso '{}' ({})", step.id, step.name)
+    tr!("paso '{id}' ({name})", id = step.id, name = step.name)
 }
 
 pub fn prepare_run(
@@ -201,7 +206,11 @@ pub fn prepare_run(
             for id in ids {
                 match plan.step(id) {
                     Some(s) => out.push(s),
-                    None => errors.push(format!("el plan '{}' no tiene un paso '{id}'", plan.name)),
+                    None => errors.push(tr!(
+                        "el plan '{plan}' no tiene un paso '{id}'",
+                        plan = plan.name,
+                        id = id
+                    )),
                 }
             }
             out
@@ -209,7 +218,7 @@ pub fn prepare_run(
         None => plan.active_steps().collect(),
     };
     if chosen.is_empty() && errors.is_empty() {
-        errors.push("no hay pasos activos que ejecutar".to_string());
+        errors.push(tr!("no hay pasos activos que ejecutar"));
     }
 
     // Sin quién responda no se pregunta nada: las credenciales que falten deben venir ya
@@ -228,9 +237,12 @@ pub fn prepare_run(
                 if resolved.value.as_deref().is_none_or(str::is_empty) {
                     if let Some(why) = &resolved.error {
                         // el proveedor falló y no hay respaldo en el .env: se dice por qué
-                        errors.push(format!(
-                            "credencial '{}' ({}): falta {}; {why}",
-                            req.label, req.reference, field.label
+                        errors.push(tr!(
+                            "credencial '{label}' ({reference}): falta {field}; {why}",
+                            label = req.label,
+                            reference = req.reference,
+                            field = tr_dyn(field.label),
+                            why = why
                         ));
                         continue;
                     }
@@ -239,13 +251,13 @@ pub fn prepare_run(
                         opts.ambiente.as_deref(),
                         &req.reference.file,
                     );
-                    errors.push(format!(
-                        "credencial '{}' ({}): falta {} (se esperaba {} o la variable {})",
-                        req.label,
-                        req.reference,
-                        field.label,
-                        project.display_path(&path),
-                        req.reference.variable(field.key)
+                    errors.push(tr!(
+                        "credencial '{label}' ({reference}): falta {field} (se esperaba {path} o la variable {variable})",
+                        label = req.label,
+                        reference = req.reference,
+                        field = tr_dyn(field.label),
+                        path = project.display_path(&path),
+                        variable = req.reference.variable(field.key)
                     ));
                 }
             }
@@ -265,10 +277,10 @@ pub fn prepare_run(
                 .resolve(&cred.reference, "DATABASE", cred.provider.as_deref())
                 .value;
             if database.as_deref().is_none_or(str::is_empty) {
-                errors.push(format!(
-                    "base '{}': respaldar MySQL necesita el campo base ({}); sin él mysqldump no sabe qué volcar",
-                    cred.id,
-                    cred.reference.variable("DATABASE")
+                errors.push(tr!(
+                    "base '{id}': respaldar MySQL necesita el campo base ({variable}); sin él mysqldump no sabe qué volcar",
+                    id = cred.id,
+                    variable = cred.reference.variable("DATABASE")
                 ));
             }
         }
@@ -278,17 +290,18 @@ pub fn prepare_run(
     // un paso que usa `{ambiente}` sin que haya uno elegido no puede correr (quedaría el texto
     // literal `{ambiente}` en el comando).
     match opts.ambiente.as_deref() {
-        Some(a) if !baton_core::secrets::is_safe_ambiente(a) => errors.push(format!(
-            "el ambiente '{a}' no es válido (solo letras, números, . - _)"
+        Some(a) if !baton_core::secrets::is_safe_ambiente(a) => errors.push(tr!(
+            "el ambiente '{a}' no es válido (solo letras, números, . - _)",
+            a = a
         )),
         Some(_) => {}
         None => {
             for s in &chosen {
                 for field in uses_ambiente(s) {
-                    errors.push(format!(
-                        "{} usa {{ambiente}} en {field}, pero no hay ambiente: \
-                         pásalo con --ambiente, la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml",
-                        label(s)
+                    errors.push(tr!(
+                        "{step} usa {ambiente} en {field}, pero no hay ambiente: pásalo con --ambiente, la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml",
+                        step = label(s),
+                        field = field
                     ));
                 }
             }
@@ -301,9 +314,10 @@ pub fn prepare_run(
             if let Some(dpos) = chosen.iter().position(|c| &c.id == dep)
                 && dpos > pos
             {
-                errors.push(format!(
-                    "{} depende de '{dep}', que quedó después: reordena los pasos",
-                    label(s)
+                errors.push(tr!(
+                    "{step} depende de '{dep}', que quedó después: reordena los pasos",
+                    step = label(s),
+                    dep = dep
                 ));
             }
         }
@@ -318,23 +332,31 @@ pub fn prepare_run(
         match config.targets.get(&target) {
             None if target == "local" => {}
             Some(Target::Local(_) | Target::Context(_)) => {}
-            None => errors.push(format!("{}: el destino '{target}' no existe", label(s))),
+            None => errors.push(tr!(
+                "{step}: el destino '{target}' no existe",
+                step = label(s),
+                target = target
+            )),
             Some(Target::Ssh(ssh)) => {
                 if ssh.sync && ssh.remote_dir.is_none() {
-                    errors.push(format!(
-                        "destino '{target}': sincroniza (`sync = true`) pero no tiene `remote_dir`: \
-                         no hay a dónde copiar las carpetas del plan"
+                    errors.push(tr!(
+                        "destino '{target}': sincroniza (`sync = true`) pero no tiene `remote_dir`: no hay a dónde copiar las carpetas del plan",
+                        target = target
                     ));
                 }
                 if let Some(bastion) = &ssh.bastion {
                     match config.targets.get(bastion) {
                         Some(Target::Ssh(_)) => {}
-                        Some(other) => errors.push(format!(
-                            "destino '{target}': el bastion '{bastion}' es de tipo {}, no ssh",
-                            other.kind_label()
+                        Some(other) => errors.push(tr!(
+                            "destino '{target}': el bastion '{bastion}' es de tipo {kind}, no ssh",
+                            target = target,
+                            bastion = bastion,
+                            kind = other.kind_label()
                         )),
-                        None => errors.push(format!(
-                            "destino '{target}': el bastion '{bastion}' no existe"
+                        None => errors.push(tr!(
+                            "destino '{target}': el bastion '{bastion}' no existe",
+                            target = target,
+                            bastion = bastion
                         )),
                     }
                 }
@@ -349,10 +371,11 @@ pub fn prepare_run(
             let path = search_path(opts);
             for bin in s.kind.binaries() {
                 if !on_path(bin, &path) {
-                    errors.push(format!(
-                        "{}: falta el programa '{bin}' en el PATH (lo necesita el tipo '{}')",
-                        label(s),
-                        s.kind.label()
+                    errors.push(tr!(
+                        "{step}: falta el programa '{bin}' en el PATH (lo necesita el tipo '{kind}')",
+                        step = label(s),
+                        bin = bin,
+                        kind = s.kind.label()
                     ));
                 }
             }
@@ -362,10 +385,9 @@ pub fn prepare_run(
             match g.mode {
                 GateMode::Auto => {}
                 GateMode::Manual if !opts.interactive && !opts.assume_yes && !opts.dry_run => {
-                    errors.push(format!(
-                        "{} tiene un gate manual y no hay terminal para responder: \
-                         ejecuta en una terminal o usa --assume-yes",
-                        label(s)
+                    errors.push(tr!(
+                        "{step} tiene un gate manual y no hay terminal para responder: ejecuta en una terminal o usa --assume-yes",
+                        step = label(s)
                     ));
                 }
                 GateMode::Manual => {}
@@ -375,10 +397,10 @@ pub fn prepare_run(
         let files = if s.kind.is_scanned() {
             let files = expand_sources(&project.root, s.source.iter());
             if files.is_empty() {
-                errors.push(format!(
-                    "{}: el origen ({}) no coincide con ningún archivo",
-                    label(s),
-                    s.source.iter().collect::<Vec<_>>().join(", ")
+                errors.push(tr!(
+                    "{step}: el origen ({source}) no coincide con ningún archivo",
+                    step = label(s),
+                    source = s.source.iter().collect::<Vec<_>>().join(", ")
                 ));
             }
             files
@@ -392,7 +414,11 @@ pub fn prepare_run(
             && !files.is_empty()
         {
             let scan = scan_compose(project, &files);
-            errors.extend(scan.errors.iter().map(|e| format!("{}: {e}", label(s))));
+            errors.extend(
+                scan.errors
+                    .iter()
+                    .map(|e| tr!("{step}: {e}", step = label(s), e = e)),
+            );
             scan.services
         } else {
             Vec::new()
@@ -402,27 +428,26 @@ pub fn prepare_run(
         // pasa con --assume-yes (en dry-run no se ejecuta nada, así que no hace falta).
         if s.kind == StepKind::Sql && !opts.interactive && !opts.assume_yes && !opts.dry_run {
             for (file, risks) in sql_risks(&project.root, &files) {
-                errors.push(format!(
-                    "{} tiene sentencias destructivas en {}: {}. No hay terminal para confirmar: \
-                     ejecuta en una terminal o usa --assume-yes",
-                    label(s),
-                    file.display(),
-                    describe_risks(&risks)
+                errors.push(tr!(
+                    "{step} tiene sentencias destructivas en {file}: {risks}. No hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
+                    step = label(s),
+                    file = file.display(),
+                    risks = describe_risks(&risks)
                 ));
             }
         }
 
         if s.kind.runs_command() && !s.kind.has_own_interpreter() && s.command_template().is_none()
         {
-            errors.push(format!("{}: no tiene comando", label(s)));
+            errors.push(tr!("{step}: no tiene comando", step = label(s)));
         }
         if opts.backup
             && (s.kind == StepKind::Backup || s.backup_before)
             && plan.backup.as_ref().is_none_or(|b| b.is_empty())
         {
-            errors.push(format!(
-                "{}: pide backup pero el plan no define [backup] volumes ni database",
-                label(s)
+            errors.push(tr!(
+                "{step}: pide backup pero el plan no define [backup] volumes ni database",
+                step = label(s)
             ));
         }
 
@@ -460,9 +485,9 @@ pub fn prepare_rollback(
     last: Option<&LastRun>,
 ) -> Result<Vec<PStep>, PrepareError> {
     let Some(last) = last else {
-        return Err(PrepareError(vec![format!(
-            "no hay una ejecución previa de '{}' que deshacer",
-            plan.name
+        return Err(PrepareError(vec![tr!(
+            "no hay una ejecución previa de '{plan}' que deshacer",
+            plan = plan.name
         )]));
     };
     let mut out: Vec<PStep> = plan
@@ -505,10 +530,17 @@ pub(crate) fn describe_risks(risks: &[Risk]) -> String {
     let mut parts: Vec<String> = risks
         .iter()
         .take(SHOWN)
-        .map(|r| format!("línea {} {} ({})", r.line, r.what, r.text))
+        .map(|r| {
+            tr!(
+                "línea {line} {what} ({text})",
+                line = r.line,
+                what = r.what,
+                text = r.text
+            )
+        })
         .collect();
     if risks.len() > SHOWN {
-        parts.push(format!("y {} más", risks.len() - SHOWN));
+        parts.push(tr!("y {n} más", n = risks.len() - SHOWN));
     }
     parts.join("; ")
 }

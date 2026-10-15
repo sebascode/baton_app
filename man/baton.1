@@ -221,10 +221,21 @@ Lista las ejecuciones anteriores de un plan que baton recuerda (la última y has
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
 .SS baton settings [list|get|set|unset]
-La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR, que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
+La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR, que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
 .TP
 .B \-\-proyecto
 En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
+.SS baton docs [plan]
+Escribe la documentación de un plan en markdown: resumen, un diagrama \fBmermaid\fR con el orden de los pasos (los gates como rombos, las dependencias como líneas punteadas y los pasos desactivados con el borde cortado), una tabla de pasos con el detalle de cada uno (comando, timeout, reintentos, gate, rollback), las credenciales, los destinos y las tareas de mantención. Sale por la salida estándar y se puede guardar con \fB\-\-salida\fR. Está pensada para versionarse: \fBnunca incluye valores de credenciales\fR (solo su referencia \fIarchivo.env#PREFIJO\fR y el nombre del proveedor), ni rutas de \fI.baton/\fR, ni el host, el usuario o el directorio de un destino (solo su nombre y tipo, porque esos datos son de cada máquina). Lo que dice el plan, comandos incluidos, se muestra tal cual. Un nombre, una descripción o un comando con símbolos de markdown o de mermaid no rompe el documento. Un plan con errores de validación se documenta igual y sus problemas van a stderr. Sale con 2 si el plan no existe.
+.TP
+.BI \-o " archivo" ", \-\-salida " archivo
+Escribe en un archivo en vez de la salida estándar.
+.TP
+.B \-\-estado
+Agrega cómo terminó la última ejecución (por paso). Cambia con cada ejecución, por eso no va por defecto.
+.TP
+.B \-\-sin\-mermaid
+Sin el diagrama, para visores de markdown que no lo dibujan.
 .SS baton plugin list
 Lista los plugins de los dos ámbitos, el \fBproyecto\fR (\fIbaton/plugins/\fR) y el \fBglobal\fR (esta máquina), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. Si un plugin del proyecto tapa a uno global del mismo tipo, lo dice. Fuera de un proyecto solo muestra el global.
 .SS baton plugin validate ruta
@@ -557,6 +568,13 @@ Campos por tipo: \fBgit\fR (USER, TOKEN), \fBdocker\fR (REGISTRY, USER, TOKEN), 
 .PP
 Sin terminal no se pregunta nada: cada campo debe resolverse desde el \fI.env\fR, la variable de entorno o el proveedor, o la ejecución falla antes de empezar diciendo qué credencial, qué campo y dónde se esperaba.
 .
+.SH IDIOMA
+baton habla español por defecto y también inglés. Se elige con \fBBATON_LANG\fR (\fBes\fR, \fBen\fR o \fBauto\fR) o con \fBui.language\fR en la configuración global o del proyecto (\fBbaton settings set ui.language en\fR). Manda la variable, después el proyecto, después la global; sin nada se usa español, \fBincluso si el sistema está en inglés\fR: el idioma del sistema solo cuenta con \fBauto\fR. Un valor que no existe se ignora (queda español) y \fBvalidate\fR lo avisa.
+.PP
+Se traducen las pantallas de la interfaz, la salida de \fBrun\fR y de \fBops\fR, \fBsettings\fR, \fBplugin\fR, \fBinit\fR y \fBdocs\fR (la documentación se genera en el idioma activo, con los comandos y nombres del plan tal como están escritos), y los mensajes del runner (el log de cada ejecución se escribe en el idioma activo). Siguen en español la ayuda (\fB\-\-help\fR), este manual, los diagnósticos de \fBvalidate\fR, el resto de los comandos y los errores de la exportación de logs; un texto sin traducción se muestra en español, nunca vacío. Los nombres de comandos, opciones, claves y archivos no se traducen.
+.PP
+Las traducciones van dentro del binario, en \fIcrates/baton\-core/i18n/<código>.toml\fR (la clave es el texto en español y el valor su traducción); agregar un idioma es agregar ese archivo y una prueba lo mantiene completo.
+.
 .SH PROVEEDORES DE SECRETOS
 Además del \fI.env\fR, un valor puede venir de un gestor de secretos. Se declaran en \fI.baton/config.toml\fR (nunca viajan con el plan) y una credencial elige uno con \fBprovider\fR (\fBfile\fR fuerza solo el \fI.env\fR). Sin \fBprovider\fR se usa \fB[defaults].secrets\fR.
 .nf
@@ -573,6 +591,12 @@ vault = "kv\-empresa"
 name = "{ambiente}\-{prefijo}\-{campo}"
 # opcionales: subscription, timeout
 
+[secrets.bw]
+type = "bitwarden"
+item = "{ambiente}\-{prefijo}\-{campo}"   # por defecto "{prefijo}\-{campo}"
+read = "password"                       # o username, notes, uri, totp
+# opcional: timeout
+
 [secrets.otro]
 type = "command"
 get = "op read op://infra/{prefijo}/{campo}"
@@ -580,7 +604,7 @@ timeout = "15s"
 .RE
 .fi
 .PP
-\fBvault\fR corre \fBvault kv get\fR y \fBazure\-keyvault\fR corre \fBaz keyvault secret show\fR, con el inicio de sesión que ya tenga la máquina (\fBvault login\fR, \fBaz login\fR). \fBcommand\fR corre cualquier comando que imprima el valor. Los marcadores son \fB{ambiente}\fR, \fB{prefijo}\fR, \fB{campo}\fR (en minúsculas), \fB{variable}\fR y \fB{archivo}\fR.
+\fBvault\fR corre \fBvault kv get\fR y \fBazure\-keyvault\fR corre \fBaz keyvault secret show\fR y \fBbitwarden\fR corre \fBbw get\fR con \fB\-\-nointeraction\fR (el ítem tiene que tener un nombre único; si la bóveda está bloqueada falla en vez de preguntar, y se usa el respaldo del \fI.env\fR), con el inicio de sesión que ya tenga la máquina (\fBvault login\fR, \fBaz login\fR, \fBexport BW_SESSION=$(bw unlock \-\-raw)\fR). Bitwarden Secrets Manager (\fBbws\fR) se usa con \fBcommand\fR. \fBcommand\fR corre cualquier comando que imprima el valor. Los marcadores son \fB{ambiente}\fR, \fB{prefijo}\fR, \fB{campo}\fR (en minúsculas), \fB{variable}\fR y \fB{archivo}\fR.
 .PP
 El orden de resolución de cada campo es: variable de entorno, proveedor y, por último, el \fI.env\fR. Si el proveedor falla, se usa el \fI.env\fR como respaldo, de modo que sin red todo sigue funcionando con lo que haya en disco; si tampoco hay valor, el error dice por qué falló el proveedor. Un valor que viene de un proveedor \fBnunca se escribe en disco\fR. Son de solo lectura: \fBbaton\fR no escribe en el gestor.
 .
@@ -661,6 +685,9 @@ Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer
 .TP
 .B BATON_ENGINE
 Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: usa docker salvo que el motor se haya fijado a mano, y un docker context siempre es docker.
+.TP
+.B BATON_LANG
+Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
 .TP
 .B BATON_CONFIG
 Archivo de configuración global en vez de \fI~/.config/baton/config.toml\fR (ver \fBbaton settings\fR).
@@ -750,7 +777,7 @@ BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
 .fi
 .
 .SH LIMITACIONES
-Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). Los proveedores de Vault y Azure Key Vault solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
+Un bastion no puede saltar a su vez por otro bastion, y ssh solo entra con llaves (no con contraseña). Los proveedores de Vault, Azure Key Vault y Bitwarden solo se han probado con binarios de prueba. La integración con el prompt de zsh no se ha probado en una terminal real. Con proyectos anidados, el prompt y la búsqueda usan solo el más cercano.
 .
 .SH VER TAMBIÉN
 .BR docker (1),

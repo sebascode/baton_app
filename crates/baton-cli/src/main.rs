@@ -5,6 +5,7 @@ mod ask;
 mod config_run;
 mod db_cmd;
 mod db_session;
+mod docs_cmd;
 mod history_cmd;
 mod import;
 mod last;
@@ -247,6 +248,20 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+    },
+    /// Documenta un plan en markdown con diagramas mermaid (sin valores de credenciales)
+    Docs {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+        /// Escribe la documentación en este archivo en vez de la salida estándar
+        #[arg(short = 'o', long = "salida", value_name = "ARCHIVO")]
+        salida: Option<PathBuf>,
+        /// Agrega cómo terminó la última ejecución (cambia con cada ejecución)
+        #[arg(long)]
+        estado: bool,
+        /// Sin el diagrama mermaid
+        #[arg(long = "sin-mermaid")]
+        sin_mermaid: bool,
     },
     /// Consulta una base de datos del plan (credenciales db y sqlite) y muestra el resultado
     Db {
@@ -521,6 +536,13 @@ fn main() -> ExitCode {
         return askpass(&keys.to_string_lossy());
     }
     let cli = Cli::parse();
+    // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
+    baton_core::i18n::set(baton_store::global::language(
+        &cli.dir
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default(),
+    ));
 
     if let Some(Command::Version) = cli.command {
         println!("baton {VERSION}");
@@ -822,6 +844,23 @@ fn main() -> ExitCode {
         }
         Command::Last { plan, lines } => match pick::resolve(&project, plan, "last", "consultar") {
             Ok(plan) => last::run(&project, &plan, lines),
+            Err(code) => code,
+        },
+        Command::Docs {
+            plan,
+            salida,
+            estado,
+            sin_mermaid,
+        } => match pick::resolve(&project, plan, "docs", "documentar") {
+            Ok(plan) => docs_cmd::run(
+                &project,
+                &plan,
+                &docs_cmd::Flags {
+                    output: salida.as_deref(),
+                    with_state: estado,
+                    no_mermaid: sin_mermaid,
+                },
+            ),
             Err(code) => code,
         },
         Command::Copy { plan, nuevo } => plans_cmd::copy(&project, &plan, &nuevo),

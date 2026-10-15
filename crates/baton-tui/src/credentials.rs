@@ -8,6 +8,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
 
+use baton_core::{tk, tr};
+
 use crate::forms::{TextField, render_scrolled};
 use crate::theme;
 use crate::widgets::{
@@ -106,7 +108,7 @@ impl CredItem {
             title: title.into(),
             status,
             file: file.into(),
-            when: "hoy".into(),
+            when: tr!("hoy"),
             fields,
             revealed: false,
             test: None,
@@ -115,19 +117,19 @@ impl CredItem {
 
     pub fn subtitle(&self) -> String {
         match self.status {
-            CredStatus::Confirmed => format!("confirmada {}", self.when),
-            CredStatus::Silenced => "no preguntar · hasta que falle".into(),
-            CredStatus::Pending => "esperando confirmación".into(),
-            CredStatus::FromFile => format!("desde {}", self.file),
-            CredStatus::NotFound => "no encontrada · se pedirá".into(),
+            CredStatus::Confirmed => tr!("confirmada {when}", when = self.when),
+            CredStatus::Silenced => tr!("no preguntar · hasta que falle"),
+            CredStatus::Pending => tr!("esperando confirmación"),
+            CredStatus::FromFile => tr!("desde {file}", file = self.file),
+            CredStatus::NotFound => tr!("no encontrada · se pedirá"),
         }
     }
 
-    fn missing(&self) -> Vec<&str> {
+    fn missing(&self) -> Vec<String> {
         self.fields
             .iter()
             .filter(|f| !f.optional && f.value.is_empty())
-            .map(|f| f.label.as_str())
+            .map(|f| baton_core::i18n::tr_dyn(&f.label).into_owned())
             .collect()
     }
 }
@@ -189,7 +191,7 @@ impl CredentialsState {
         };
         let missing = item.missing();
         if !missing.is_empty() {
-            self.notice = Some(format!("falta completar: {}", missing.join(", ")));
+            self.notice = Some(tr!("falta completar: {list}", list = missing.join(", ")));
             self.editing = item
                 .fields
                 .iter()
@@ -197,7 +199,7 @@ impl CredentialsState {
             return false;
         }
         item.status = CredStatus::Confirmed;
-        item.when = "hoy".into();
+        item.when = tr!("hoy");
         true
     }
 
@@ -225,12 +227,17 @@ impl CredentialsState {
             }
         }
         if left > 0 {
-            let noun = if left == 1 {
-                "credencial sin datos"
+            self.notice = Some(if left == 1 {
+                tr!(
+                    "quedan {n} credencial sin datos: complétalas con [e]",
+                    n = left
+                )
             } else {
-                "credenciales sin datos"
-            };
-            self.notice = Some(format!("quedan {left} {noun}: complétalas con [e]"));
+                tr!(
+                    "quedan {n} credenciales sin datos: complétalas con [e]",
+                    n = left
+                )
+            });
             if let Some(next) = self.items.iter().position(|i| !i.status.is_done()) {
                 self.cursor = next;
             }
@@ -327,14 +334,14 @@ impl CredentialsState {
             buf,
             area,
             vec![Span::styled(
-                "Credenciales requeridas por el plan",
+                tr!("Credenciales requeridas por el plan"),
                 theme::bold(),
             )],
             vec![Span::styled(
-                format!(
-                    "{} de {} confirmadas",
-                    self.confirmed_count(),
-                    self.items.len()
+                tr!(
+                    "{done} de {total} confirmadas",
+                    done = self.confirmed_count(),
+                    total = self.items.len()
                 ),
                 theme::secondary(),
             )],
@@ -380,25 +387,25 @@ impl CredentialsState {
     fn shortcut_items(&self) -> Vec<(&'static str, &'static str)> {
         if self.editing.is_some() {
             return vec![
-                ("tab", "siguiente campo"),
-                ("enter", "listo"),
-                ("esc", "salir de la edición"),
+                ("tab", tk!("siguiente campo")),
+                ("enter", tk!("listo")),
+                ("esc", tk!("salir de la edición")),
             ];
         }
         if self.all_done() {
             return vec![
-                ("enter", "ejecutar plan"),
-                ("↑↓", "credencial"),
-                ("m", "mostrar"),
-                ("esc", "volver"),
+                ("enter", tk!("ejecutar plan")),
+                ("↑↓", tk!("credencial")),
+                ("m", tk!("mostrar")),
+                ("esc", tk!("volver")),
             ];
         }
         vec![
-            ("↑↓", "credencial"),
-            ("enter", "confirmar"),
-            ("m", "mostrar"),
-            ("n", "no preguntar"),
-            ("a", "confirmar todas"),
+            ("↑↓", tk!("credencial")),
+            ("enter", tk!("confirmar")),
+            ("m", tk!("mostrar")),
+            ("n", tk!("no preguntar")),
+            ("a", tk!("confirmar todas")),
         ]
     }
 
@@ -413,7 +420,7 @@ impl CredentialsState {
         put(
             buf,
             0,
-            Line::from(Span::styled("estructura", theme::secondary())),
+            Line::from(Span::styled(tr!("estructura"), theme::secondary())),
         );
         for (i, l) in self.tree.iter().enumerate() {
             let style = if i == 0 { theme::bold() } else { Style::new() };
@@ -427,12 +434,12 @@ impl CredentialsState {
         put(
             buf,
             foot_y,
-            Line::from(Span::styled("permisos 600", theme::muted())),
+            Line::from(Span::styled(tr!("permisos 600"), theme::muted())),
         );
         put(
             buf,
             foot_y + 1,
-            Line::from(Span::styled("en .gitignore", theme::muted())),
+            Line::from(Span::styled(tr!("en .gitignore"), theme::muted())),
         );
     }
 
@@ -514,7 +521,7 @@ impl CredentialsState {
         let label_w = item
             .fields
             .iter()
-            .map(|f| unicode_width::UnicodeWidthStr::width(f.label.as_str()))
+            .map(|f| unicode_width::UnicodeWidthStr::width(&*baton_core::i18n::tr_dyn(&f.label)))
             .max()
             .unwrap_or(0)
             + 2;
@@ -530,7 +537,10 @@ impl CredentialsState {
             // un secreto vacío se ve vacío: enmascararlo haría creer que ya tiene valor
             let shown = (f.secret && !item.revealed && !editing && !raw.is_empty())
                 .then(|| mask_secret(&raw));
-            let mut spans = vec![Span::styled(format!("{:<label_w$}", f.label), label_style)];
+            let mut spans = vec![Span::styled(
+                format!("{:<label_w$}", baton_core::i18n::tr_dyn(&f.label)),
+                label_style,
+            )];
             let control_w = inner.width.saturating_sub(label_w as u16);
             spans.extend(f.value.spans(control_w, editing, shown.as_deref()));
             Line::from(spans).render(Rect::new(inner.x, inner.y + n as u16, inner.width, 1), buf);
@@ -561,29 +571,29 @@ impl CredentialsState {
 /// Botones `<Confirmar> <Editar> ...`, repartidos en las líneas que hagan falta.
 fn button_lines(item: &CredItem, width: u16) -> Vec<Line<'static>> {
     let silence = if item.status == CredStatus::Silenced {
-        "<Volver a preguntar>"
+        tr!("<Volver a preguntar>")
     } else {
-        "<No volver a preguntar>"
+        tr!("<No volver a preguntar>")
     };
     let buttons = [
         (
-            "<Confirmar>",
+            tr!("<Confirmar>"),
             Style::new().fg(theme::OK).add_modifier(Modifier::BOLD),
         ),
-        ("<Editar>", theme::secondary()),
-        ("<Probar conexión>", theme::secondary()),
+        (tr!("<Editar>"), theme::secondary()),
+        (tr!("<Probar conexión>"), theme::secondary()),
         (silence, theme::secondary()),
     ];
     let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     for (text, style) in buttons {
         let cur = lines.last_mut().expect("siempre hay una línea");
         if !cur.is_empty() && spans_width(cur) + 1 + text.chars().count() > width as usize {
-            lines.push(vec![Span::styled(text, style)]);
+            lines.push(vec![Span::styled(text.clone(), style)]);
         } else {
             if !cur.is_empty() {
                 cur.push(Span::raw(" "));
             }
-            cur.push(Span::styled(text, style));
+            cur.push(Span::styled(text.clone(), style));
         }
     }
     lines.into_iter().map(Line::from).collect()

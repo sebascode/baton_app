@@ -7,6 +7,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use baton_core::{i18n::tr_dyn, tk, tr};
+
 use crate::app::Mode;
 use crate::run::{Phase, RunState};
 use crate::theme;
@@ -22,50 +24,50 @@ pub struct Help {
 }
 
 const EVERYWHERE: [(&str, &str); 5] = [
-    ("?", "esta ayuda"),
-    ("esc", "volver o cancelar"),
-    ("↑↓ j k", "moverse"),
-    ("ctrl+c", "interrumpir (pregunta antes)"),
-    ("ctrl+z", "suspender (fg para volver)"),
+    ("?", tk!("esta ayuda")),
+    ("esc", tk!("volver o cancelar")),
+    ("↑↓ j k", tk!("moverse")),
+    ("ctrl+c", tk!("interrumpir (pregunta antes)")),
+    ("ctrl+z", tk!("suspender (fg para volver)")),
 ];
 
 /// La ayuda de la pantalla abierta, o `None` si ahí `?` no es un atajo (formularios, preguntas).
 pub fn for_mode(mode: &Mode) -> Option<Help> {
     match mode {
         Mode::Preview(p) if p.accepts_help() => Some(Help {
-            screen: "vista del plan",
+            screen: tk!("vista del plan"),
             here: vec![
-                ("enter", "ejecutar los pasos activos"),
-                ("espacio", "activar o desactivar el paso"),
-                ("shift+↑↓", "mover el paso"),
-                ("/", "filtrar los pasos (esc lo quita)"),
-                ("e", "editar pasos"),
-                ("g", "añadir un gate al paso"),
-                ("b r d", "backup, rollback, dry-run"),
-                ("u", "reanudar la última ejecución"),
-                ("h l", "historial, último log"),
-                ("m", "mantención (logs, reinicios, imágenes)"),
-                ("v", "pipeline"),
-                ("p", "cambiar de plan"),
-                ("q", "salir de baton"),
+                ("enter", tk!("ejecutar los pasos activos")),
+                ("espacio", tk!("activar o desactivar el paso")),
+                ("shift+↑↓", tk!("mover el paso")),
+                ("/", tk!("filtrar los pasos (esc lo quita)")),
+                ("e", tk!("editar pasos")),
+                ("g", tk!("añadir un gate al paso")),
+                ("b r d", tk!("backup, rollback, dry-run")),
+                ("u", tk!("reanudar la última ejecución")),
+                ("h l", tk!("historial, último log")),
+                ("m", tk!("mantención (logs, reinicios, imágenes)")),
+                ("v", tk!("pipeline")),
+                ("p", tk!("cambiar de plan")),
+                ("q", tk!("salir de baton")),
             ],
         }),
         Mode::Preview(_) => None,
         Mode::Pipeline(_) => Some(pipeline()),
         Mode::History(_) => Some(Help {
-            screen: "historial",
+            screen: tk!("historial"),
             here: vec![
-                ("enter l", "abrir el log de la ejecución"),
-                ("esc q h", "volver al plan"),
+                ("enter l", tk!("abrir el log de la ejecución")),
+                ("esc q h", tk!("volver al plan")),
             ],
         }),
         Mode::LogFile(_) => Some(Help {
-            screen: "log",
+            screen: tk!("log"),
             here: vec![
-                ("PgUp PgDn", "avanzar una página"),
-                ("g", "ir al inicio"),
-                ("G f", "ir al final"),
-                ("esc q l", "volver"),
+                ("PgUp PgDn", tk!("avanzar una página")),
+                ("g", tk!("ir al inicio")),
+                ("G f", tk!("ir al final")),
+                ("esc q l", tk!("volver")),
             ],
         }),
         Mode::Run(r) => run_help(r),
@@ -75,12 +77,12 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
 
 fn pipeline() -> Help {
     Help {
-        screen: "pipeline",
+        screen: tk!("pipeline"),
         here: vec![
-            ("espacio enter", "abrir o cerrar los checks de un gate"),
-            ("f", "seguir el paso en curso"),
-            ("l", "ver el log"),
-            ("v esc q", "volver a la pantalla anterior"),
+            ("espacio enter", tk!("abrir o cerrar los checks de un gate")),
+            ("f", tk!("seguir el paso en curso")),
+            ("l", tk!("ver el log")),
+            ("v esc q", tk!("volver a la pantalla anterior")),
         ],
     }
 }
@@ -95,47 +97,47 @@ fn run_help(r: &RunState) -> Option<Help> {
     }
     if r.log_view {
         return Some(Help {
-            screen: "log de la ejecución",
+            screen: tk!("log de la ejecución"),
             here: vec![
-                ("↑↓", "ver el log de otro paso"),
-                ("PgUp PgDn", "avanzar una página"),
-                ("l", "alternar log completo"),
-                ("f", "ir al final"),
-                ("esc q", "cerrar el visor"),
+                ("↑↓", tk!("ver el log de otro paso")),
+                ("PgUp PgDn", tk!("avanzar una página")),
+                ("l", tk!("alternar log completo")),
+                ("f", tk!("ir al final")),
+                ("esc q", tk!("cerrar el visor")),
             ],
         });
     }
     Some(match r.phase {
         Phase::Running => Help {
-            screen: "ejecución",
+            screen: tk!("ejecución"),
             here: vec![
-                ("↑↓", "ver el log de otro paso"),
-                ("f", "volver a seguir el log en vivo"),
-                ("l", "alternar log completo"),
-                ("v", "pipeline"),
-                ("p", "pausar tras el paso (de nuevo, seguir)"),
-                ("s", "saltar el gate que espera"),
-                ("r", "rollback"),
-                ("q esc", "abortar (pregunta antes)"),
+                ("↑↓", tk!("ver el log de otro paso")),
+                ("f", tk!("volver a seguir el log en vivo")),
+                ("l", tk!("alternar log completo")),
+                ("v", tk!("pipeline")),
+                ("p", tk!("pausar tras el paso (de nuevo, seguir)")),
+                ("s", tk!("saltar el gate que espera")),
+                ("r", tk!("rollback")),
+                ("q esc", tk!("abortar (pregunta antes)")),
             ],
         },
         Phase::Failed(_) => Help {
-            screen: "fallo de un paso",
+            screen: tk!("fallo de un paso"),
             here: vec![
-                ("↑↓ enter", "elegir y confirmar una opción"),
-                ("1-9", "elegir y confirmar por número"),
-                ("l", "ver el log"),
-                ("v", "pipeline"),
-                ("q esc", "abortar y guardar el estado"),
+                ("↑↓ enter", tk!("elegir y confirmar una opción")),
+                ("1-9", tk!("elegir y confirmar por número")),
+                ("l", tk!("ver el log")),
+                ("v", tk!("pipeline")),
+                ("q esc", tk!("abortar y guardar el estado")),
             ],
         },
         Phase::Finished { .. } => Help {
-            screen: "resumen",
+            screen: tk!("resumen"),
             here: vec![
-                ("enter esc", "volver al plan"),
-                ("l", "ver el log"),
-                ("v", "pipeline"),
-                ("q", "cerrar baton"),
+                ("enter esc", tk!("volver al plan")),
+                ("l", tk!("ver el log")),
+                ("v", tk!("pipeline")),
+                ("q", tk!("cerrar baton")),
             ],
         },
     })
@@ -149,11 +151,11 @@ fn section(
     out: &mut Vec<Line<'static>>,
 ) {
     out.push(Line::from(Span::styled(
-        title.to_string(),
+        tr_dyn(title).into_owned(),
         theme::secondary(),
     )));
     for (key, what) in items {
-        let desc = truncate(what, w.saturating_sub(key_w + 2));
+        let desc = truncate(&tr_dyn(what), w.saturating_sub(key_w + 2));
         out.push(Line::from(vec![
             Span::styled(format!("{key:<key_w$}"), Style::new().fg(theme::INFO)),
             Span::raw("  "),
@@ -176,14 +178,20 @@ pub fn render(help: &Help, buf: &mut Buffer, area: Rect) {
 
     let mut lines = Vec::new();
     section(
-        "en todas las pantallas",
+        tk!("en todas las pantallas"),
         &EVERYWHERE,
         key_w,
         inner_w,
         &mut lines,
     );
     lines.push(Line::raw(""));
-    section("en esta pantalla", &help.here, key_w, inner_w, &mut lines);
+    section(
+        tk!("en esta pantalla"),
+        &help.here,
+        key_w,
+        inner_w,
+        &mut lines,
+    );
 
     let max_inner = area.height.saturating_sub(4) as usize;
     if lines.len() > max_inner {
@@ -202,10 +210,10 @@ pub fn render(help: &Help, buf: &mut Buffer, area: Rect) {
         .borders(Borders::ALL)
         .border_style(theme::border())
         .title(Line::from(Span::styled(
-            format!(" Atajos · {} ", help.screen),
+            tr!(" Atajos · {screen} ", screen = tr_dyn(help.screen)),
             theme::bold(),
         )))
-        .title_top(Line::from(Span::styled(" esc cierra ", theme::muted())).right_aligned())
+        .title_top(Line::from(Span::styled(tr!(" esc cierra "), theme::muted())).right_aligned())
         .style(Style::new().bg(theme::PANEL_BG))
         .render(boxed, buf);
     for (i, line) in lines.into_iter().enumerate() {

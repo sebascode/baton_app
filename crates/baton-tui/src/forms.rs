@@ -1,6 +1,7 @@
 //! Controles de formulario compartidos por las pantallas 2, 6, 7 y 8: campo de texto, desplegable,
 //! selector horizontal, interruptor y selección múltiple, más el dibujo de sus filas.
 
+use baton_core::i18n::tr_dyn;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -416,7 +417,10 @@ impl Field {
         let mut spans = match &self.kind {
             Kind::Text { tf, .. } => tf.spans(width, focused, None),
             Kind::Drop { options, idx } => {
-                let value = options.get(*idx).cloned().unwrap_or_default();
+                let value = options
+                    .get(*idx)
+                    .map(|o| tr_dyn(o).into_owned())
+                    .unwrap_or_default();
                 let inner = (width as usize).saturating_sub(6).max(1);
                 let t = truncate(&value, inner);
                 let pad = inner.saturating_sub(unicode_width::UnicodeWidthStr::width(t.as_str()));
@@ -432,7 +436,12 @@ impl Field {
                 ]
             }
             Kind::Choice { options, idx } => {
-                choice_spans_fit(options, *idx, focused, usize::from(width))
+                // las opciones son identificadores (`compose`) o textos con traducción
+                let shown: Vec<(String, bool)> = options
+                    .iter()
+                    .map(|(o, d)| (tr_dyn(o).into_owned(), *d))
+                    .collect();
+                choice_spans_fit(&shown, *idx, focused, usize::from(width))
             }
             Kind::Radio { options, idx } => {
                 let mut out = Vec::new();
@@ -446,7 +455,7 @@ impl Field {
                         ("( )", theme::MUTED)
                     };
                     out.push(Span::styled(mark, Style::new().fg(color)));
-                    out.push(Span::raw(format!(" {o}")));
+                    out.push(Span::raw(format!(" {}", tr_dyn(o))));
                 }
                 out
             }
@@ -463,13 +472,16 @@ impl Field {
                 };
                 vec![
                     Span::styled(mark, Style::new().fg(color)),
-                    Span::styled(format!(" {text}"), label),
+                    Span::styled(format!(" {}", tr_dyn(text)), label),
                 ]
             }
             Kind::Card | Kind::Deps => Vec::new(),
         };
         if !hint.is_empty() {
-            spans.push(Span::styled(format!(" {hint}"), theme::secondary()));
+            spans.push(Span::styled(
+                format!(" {}", tr_dyn(hint)),
+                theme::secondary(),
+            ));
         }
         spans
     }
@@ -481,7 +493,7 @@ impl Field {
         } else {
             theme::secondary()
         };
-        Span::styled(format!("{:<label_w$}", self.label), style)
+        Span::styled(format!("{:<label_w$}", tr_dyn(&self.label)), style)
     }
 }
 
@@ -660,7 +672,7 @@ pub fn label_width(fields: &[Field]) -> usize {
     fields
         .iter()
         .filter(|f| !f.inline && !matches!(f.kind, Kind::Card))
-        .map(|f| unicode_width::UnicodeWidthStr::width(f.label.as_str()))
+        .map(|f| unicode_width::UnicodeWidthStr::width(&*tr_dyn(&f.label)))
         .max()
         .unwrap_or(0)
         + 2

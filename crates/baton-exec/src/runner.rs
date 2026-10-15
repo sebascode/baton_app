@@ -25,6 +25,7 @@ use baton_core::sql::{
     sqlite_label, sqlite_restore_command, sqlite_run_command,
 };
 use baton_core::step_run::{StepVars, step_info};
+use baton_core::tr;
 use baton_store::Project;
 use baton_store::clock;
 use baton_store::init::ensure_baton_dir;
@@ -87,7 +88,7 @@ pub fn spawn(input: RunInput) -> Result<RunHandle, PrepareError> {
                 .expect("no se pudo crear el runtime del runner");
             rt.block_on(run(input, steps, state, etx, crx));
         })
-        .map_err(|e| PrepareError(vec![format!("no se pudo lanzar el runner: {e}")]))?;
+        .map_err(|e| PrepareError(vec![tr!("no se pudo lanzar el runner: {e}", e = e)]))?;
 
     Ok(RunHandle {
         events: erx,
@@ -491,7 +492,7 @@ impl Ctx {
             self.log(
                 step,
                 LogKind::Output,
-                "dry-run: no se sincroniza (se usan los archivos que ya hay en el destino)",
+                tr!("dry-run: no se sincroniza (se usan los archivos que ya hay en el destino)"),
             );
             return Ok(());
         }
@@ -500,7 +501,11 @@ impl Ctx {
             conn.access.destination(),
             conn.remote_dir.display()
         );
-        self.log(step, LogKind::Output, format!("sincronizando con {dest}"));
+        self.log(
+            step,
+            LogKind::Output,
+            tr!("sincronizando con {dest}", dest = dest),
+        );
         let ssh_opts = conn.access.rsync_shell();
         let status = tokio::process::Command::new("rsync")
             .envs(self.opts.env.iter().cloned())
@@ -516,17 +521,17 @@ impl Ctx {
             .await;
         match status {
             Ok(s) if s.success() => {
-                self.log(step, LogKind::Success, "sincronizado");
+                self.log(step, LogKind::Success, tr!("sincronizado"));
                 Ok(())
             }
             Ok(s) => Err(failure(
                 self,
-                format!("rsync con {dest} terminó con {s}"),
+                tr!("rsync con {dest} terminó con {s}", dest = dest, s = s),
                 "rsync".into(),
             )),
             Err(e) => Err(failure(
                 self,
-                format!("no se pudo ejecutar rsync: {e}"),
+                tr!("no se pudo ejecutar rsync: {e}", e = e),
                 "rsync".into(),
             )),
         }
@@ -551,7 +556,10 @@ impl Ctx {
                 unix_nanos: records.last().map_or(0, |r| r.unix_nanos),
                 step: String::new(),
                 kind: LogKind::Error,
-                text: format!("se omitieron {dropped} líneas más (tope de la exportación)"),
+                text: tr!(
+                    "se omitieron {n} líneas más (tope de la exportación)",
+                    n = dropped
+                ),
             });
         }
         let res = baton_core::export::Resource {
@@ -566,16 +574,20 @@ impl Ctx {
             Ok(()) => self.log(
                 0,
                 LogKind::Success,
-                format!(
-                    "log exportado a {} ({} líneas)",
-                    target.label(),
-                    records.len()
+                tr!(
+                    "log exportado a {target} ({n} líneas)",
+                    target = target.label(),
+                    n = records.len()
                 ),
             ),
             Err(e) => self.log(
                 0,
                 LogKind::Error,
-                format!("no se pudo exportar el log a {}: {e}", target.label()),
+                tr!(
+                    "no se pudo exportar el log a {target}: {e}",
+                    target = target.label(),
+                    e = e
+                ),
             ),
         }
     }
@@ -597,7 +609,7 @@ impl Ctx {
                 self.log(
                     0,
                     LogKind::Error,
-                    format!("no se pudo aplicar la retención de logs: {e}"),
+                    tr!("no se pudo aplicar la retención de logs: {e}", e = e),
                 );
             }
         }
@@ -625,18 +637,22 @@ impl Ctx {
                     self.log(
                         0,
                         LogKind::Success,
-                        format!("log copiado a {name} ({dest})"),
+                        tr!("log copiado a {name} ({dest})", name = name, dest = dest),
                     );
                 }
                 Ok(s) => self.log(
                     0,
                     LogKind::Error,
-                    format!("no se pudo copiar el log a {name}: rsync terminó con {s}"),
+                    tr!(
+                        "no se pudo copiar el log a {name}: rsync terminó con {s}",
+                        name = name,
+                        s = s
+                    ),
                 ),
                 Err(e) => self.log(
                     0,
                     LogKind::Error,
-                    format!("no se pudo copiar el log a {name}: {e}"),
+                    tr!("no se pudo copiar el log a {name}: {e}", name = name, e = e),
                 ),
             }
         }
@@ -649,14 +665,14 @@ static LOCAL_FALLBACK: crate::transport::LocalTransport = crate::transport::Loca
 
 fn describe(exit: Exit, timeout: Option<Duration>) -> String {
     match exit {
-        Exit::Code(c) => format!("El comando terminó con código {c}"),
-        Exit::Signal => "El comando terminó por una señal".to_string(),
+        Exit::Code(c) => tr!("El comando terminó con código {c}", c = c),
+        Exit::Signal => tr!("El comando terminó por una señal"),
         Exit::TimedOut => match timeout {
-            Some(t) => format!(
-                "El paso superó el timeout de {}",
-                humantime::format_duration(t)
+            Some(t) => tr!(
+                "El paso superó el timeout de {time}",
+                time = humantime::format_duration(t)
             ),
-            None => "El paso superó el timeout".to_string(),
+            None => tr!("El paso superó el timeout"),
         },
     }
 }
@@ -707,12 +723,12 @@ async fn confirm_destructive(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> 
             ctx.log(
                 i,
                 LogKind::Output,
-                format!(
-                    "atención: {} línea {}: {} ({})",
-                    file.display(),
-                    r.line,
-                    r.what,
-                    r.text
+                tr!(
+                    "atención: {file} línea {line}: {what} ({text})",
+                    file = file.display(),
+                    line = r.line,
+                    what = r.what,
+                    text = r.text
                 ),
             );
         }
@@ -727,10 +743,11 @@ async fn confirm_destructive(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> 
             }
         }
     }
-    let message = format!(
-        "«{}» tiene {total} sentencia(s) destructiva(s): {}. ¿Continuar?",
-        ps.step.name,
-        kinds.join(", ")
+    let message = tr!(
+        "«{name}» tiene {total} sentencia(s) destructiva(s): {kinds}. ¿Continuar?",
+        name = ps.step.name,
+        total = total,
+        kinds = kinds.join(", ")
     );
     ask_gate(ctx, cmds, i, &message).await
 }
@@ -860,7 +877,7 @@ async fn run_command(
 ) -> Result<u32, StepEnd> {
     if ctx.opts.dry_run {
         ctx.log(step, LogKind::Command, cmd.line.clone());
-        ctx.log(step, LogKind::Success, "dry-run: no se ejecutó");
+        ctx.log(step, LogKind::Success, tr!("dry-run: no se ejecutó"));
         return Ok(0);
     }
     execute_command(ctx, cmds, step, cmd, retries).await
@@ -883,9 +900,11 @@ async fn execute_command(
             ctx.log(
                 step,
                 LogKind::Retry,
-                format!(
-                    "reintento {attempt}/{retries} en {}",
-                    humantime::format_duration(delay)
+                tr!(
+                    "reintento {attempt}/{retries} en {time}",
+                    attempt = attempt,
+                    retries = retries,
+                    time = humantime::format_duration(delay)
                 ),
             );
             if let Some(int) = sleep_or_interrupt(ctx, cmds, delay).await {
@@ -903,11 +922,11 @@ async fn execute_command(
         match exec(ctx, cmds, step, &cmd).await {
             Err(int) => return Err(StepEnd::Interrupted(int)),
             Ok(Ok(exit)) if exit.success() => {
-                ctx.log(step, LogKind::Success, "ok");
+                ctx.log(step, LogKind::Success, tr!("ok"));
                 return Ok(attempt);
             }
             Ok(Ok(exit)) => last = describe(exit, cmd.timeout),
-            Ok(Err(e)) => last = format!("No se pudo ejecutar el comando: {e}"),
+            Ok(Err(e)) => last = tr!("No se pudo ejecutar el comando: {e}", e = e),
         }
         if attempt < retries {
             ctx.log(step, LogKind::Error, last.clone());
@@ -949,7 +968,7 @@ async fn backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(),
     {
         return Err(failure(
             ctx,
-            format!("No se pudo crear {}: {e}", dir.display()),
+            tr!("No se pudo crear {path}: {e}", path = dir.display(), e = e),
             "backup".into(),
         ));
     }
@@ -1003,7 +1022,10 @@ async fn backup_database(
             ctx.log(
                 step,
                 LogKind::Output,
-                format!("respaldo de la base '{id}' ya hecho en esta ejecución"),
+                tr!(
+                    "respaldo de la base '{id}' ya hecho en esta ejecución",
+                    id = id
+                ),
             );
             continue;
         }
@@ -1084,7 +1106,7 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
         ctx.log(
             step,
             LogKind::Success,
-            "dry-run: gate manual confirmado sin preguntar",
+            tr!("dry-run: gate manual confirmado sin preguntar"),
         );
         return Answer::Yes;
     }
@@ -1092,7 +1114,7 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
         ctx.log(
             step,
             LogKind::Success,
-            "gate manual confirmado con --assume-yes",
+            tr!("gate manual confirmado con --assume-yes"),
         );
         return Answer::Yes;
     }
@@ -1103,11 +1125,11 @@ async fn ask_gate(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize, message: &s
     loop {
         match cmds.recv().await {
             Some(RunCommand::ConfirmGate(true)) => {
-                ctx.log(step, LogKind::Success, "gate manual confirmado");
+                ctx.log(step, LogKind::Success, tr!("gate manual confirmado"));
                 return Answer::Yes;
             }
             Some(RunCommand::ConfirmGate(false)) => {
-                ctx.log(step, LogKind::Error, "gate manual rechazado");
+                ctx.log(step, LogKind::Error, tr!("gate manual rechazado"));
                 return Answer::No;
             }
             None | Some(RunCommand::Abort) => return Answer::Interrupted(Interrupt::Abort),
@@ -1151,13 +1173,17 @@ fn log_destructive(ctx: &Ctx, step: usize, hits: &[(String, String)]) {
         } else {
             format!("{file}: ")
         };
-        ctx.log(step, LogKind::Output, format!("atención: {at}{line}"));
+        ctx.log(
+            step,
+            LogKind::Output,
+            tr!("atención: {at}{line}", at = at, line = line),
+        );
     }
     if hits.len() > MAX_HITS_SHOWN {
         ctx.log(
             step,
             LogKind::Output,
-            format!("atención: y {} más", hits.len() - MAX_HITS_SHOWN),
+            tr!("atención: y {n} más", n = hits.len() - MAX_HITS_SHOWN),
         );
     }
 }
@@ -1184,9 +1210,9 @@ async fn confirm_plan(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Result<
         return Err(destructive_failure(
             ctx,
             ps,
-            format!(
-                "«{}» no tiene un dry_run con el que revisar lo destructivo",
-                ps.step.name
+            tr!(
+                "«{name}» no tiene un dry_run con el que revisar lo destructivo",
+                name = ps.step.name
             ),
             String::new(),
             Vec::new(),
@@ -1210,7 +1236,7 @@ async fn confirm_plan(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Result<
         ctx.log(
             i,
             LogKind::Success,
-            "plan revisado: no destruye ni reemplaza nada",
+            tr!("plan revisado: no destruye ni reemplaza nada"),
         );
         return Ok(());
     }
@@ -1221,17 +1247,19 @@ async fn confirm_plan(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Result<
         return Err(destructive_failure(
             ctx,
             ps,
-            format!(
-                "«{}» destruye o reemplaza {total} recurso(s) según su plan y no hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
-                ps.step.name
+            tr!(
+                "«{name}» destruye o reemplaza {total} recurso(s) según su plan y no hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
+                name = ps.step.name,
+                total = total
             ),
             last_command,
             tail,
         ));
     }
-    let message = format!(
-        "«{}» destruye o reemplaza {total} recurso(s) según su plan. ¿Continuar?",
-        ps.step.name
+    let message = tr!(
+        "«{name}» destruye o reemplaza {total} recurso(s) según su plan. ¿Continuar?",
+        name = ps.step.name,
+        total = total
     );
     match ask_gate(ctx, cmds, i, &message).await {
         Answer::Yes => Ok(()),
@@ -1299,9 +1327,9 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
 
     if !skip_action && (ps.step.kind == StepKind::Backup || ps.step.backup_before) {
         if !ctx.opts.backup {
-            ctx.log(i, LogKind::Output, "backup desactivado");
+            ctx.log(i, LogKind::Output, tr!("backup desactivado"));
             if ps.step.kind == StepKind::Backup {
-                return StepEnd::Skipped("backup desactivado".into());
+                return StepEnd::Skipped(tr!("backup desactivado"));
             }
         } else if let Err(end) = backup(ctx, cmds, i).await {
             return end;
@@ -1341,7 +1369,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         ctx.log(
             i,
             LogKind::Output,
-            "dry-run: el paso declara su propio command, así que no se ejecuta el dry_run de su tipo (declara dry_run en el paso para planificarlo)",
+            tr!("dry-run: el paso declara su propio command, así que no se ejecuta el dry_run de su tipo (declara dry_run en el paso para planificarlo)"),
         );
     }
     if !skip_action
@@ -1391,10 +1419,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
     if let Some(gate) = ps.step.gate.as_ref() {
         match gate.mode {
             GateMode::Manual => {
-                let message = gate
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "¿Continuar?".to_string());
+                let message = gate.message.clone().unwrap_or_else(|| tr!("¿Continuar?"));
                 match ask_gate(ctx, cmds, i, &message).await {
                     Answer::Yes => {}
                     Answer::No => return StepEnd::Declined,
@@ -1438,14 +1463,18 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
         let file = file.map(PathBuf::as_path);
         let line = ctx.vars(ps, file).render(template);
         let cmd = ctx.command(ps, line, file);
-        ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
+        ctx.log(
+            i,
+            LogKind::Command,
+            tr!("rollback: {line}", line = cmd.line),
+        );
         if ctx.opts.dry_run {
-            ctx.log(i, LogKind::Success, "dry-run: no se ejecutó");
+            ctx.log(i, LogKind::Success, tr!("dry-run: no se ejecutó"));
             continue;
         }
         let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
         match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
-            Ok(exit) if exit.success() => ctx.log(i, LogKind::Success, "rollback ok"),
+            Ok(exit) if exit.success() => ctx.log(i, LogKind::Success, tr!("rollback ok")),
             Ok(exit) => {
                 ok = false;
                 ctx.log(i, LogKind::Error, describe(exit, cmd.timeout));
@@ -1455,7 +1484,7 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
                 ctx.log(
                     i,
                     LogKind::Error,
-                    format!("No se pudo ejecutar el rollback: {e}"),
+                    tr!("No se pudo ejecutar el rollback: {e}", e = e),
                 );
             }
         }
@@ -1476,9 +1505,9 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
         ctx.log(
             i,
             LogKind::Command,
-            "rollback: restaurar el último respaldo de la base",
+            tr!("rollback: restaurar el último respaldo de la base"),
         );
-        ctx.log(i, LogKind::Success, "dry-run: no se ejecutó");
+        ctx.log(i, LogKind::Success, tr!("dry-run: no se ejecutó"));
         return true;
     }
     if ctx.ensure_synced(i).await.is_err() {
@@ -1495,9 +1524,10 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
             ctx.log(
                 i,
                 LogKind::Error,
-                format!(
-                    "no hay un respaldo de la base '{id}' en {}: no se puede restaurar",
-                    ctx.project.display_path(&dir)
+                tr!(
+                    "no hay un respaldo de la base '{id}' en {path}: no se puede restaurar",
+                    id = id,
+                    path = ctx.project.display_path(&dir)
                 ),
             );
             all_ok = false;
@@ -1510,15 +1540,20 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
             DbConn::Sqlite(c) => sqlite_restore_command(c, &path),
         };
         let cmd = ctx.db_command(ps, line, conn);
-        ctx.log(i, LogKind::Command, format!("rollback: {}", cmd.line));
+        ctx.log(
+            i,
+            LogKind::Command,
+            tr!("rollback: {line}", line = cmd.line),
+        );
         let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
         match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
             Ok(exit) if exit.success() => ctx.log(
                 i,
                 LogKind::Success,
-                format!(
-                    "base '{id}' restaurada desde {}",
-                    ctx.project.display_path(&file)
+                tr!(
+                    "base '{id}' restaurada desde {path}",
+                    id = id,
+                    path = ctx.project.display_path(&file)
                 ),
             ),
             Ok(exit) => {
@@ -1529,7 +1564,7 @@ async fn restore_database(ctx: &Ctx, i: usize) -> bool {
                 ctx.log(
                     i,
                     LogKind::Error,
-                    format!("No se pudo restaurar la base '{id}': {e}"),
+                    tr!("No se pudo restaurar la base '{id}': {e}", id = id, e = e),
                 );
                 all_ok = false;
             }
@@ -1613,7 +1648,7 @@ async fn decide_after_failure(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize)
                 ctx.log(
                     step,
                     LogKind::Output,
-                    "abrir una shell desde aquí aún no está disponible",
+                    tr!("abrir una shell desde aquí aún no está disponible"),
                 );
             }
             Some(_) => {}
@@ -1652,7 +1687,7 @@ async fn run(
             let mut info = step_info(&p.step, &p.target);
             // un paso de respaldo sin rollback propio restaura el último volcado de la base
             if info.undo.is_none() && p.restore_db {
-                info.undo = Some("restaura el último respaldo de la base".into());
+                info.undo = Some(tr!("restaura el último respaldo de la base"));
             }
             info
         })
@@ -1662,19 +1697,19 @@ async fn run(
     let mut badges = Vec::new();
     if !rollback_mode && opts.backup && plan.backup.is_some() {
         badges.push(Badge {
-            label: "backup activo".into(),
+            label: tr!("backup activo"),
             tone: BadgeTone::Info,
         });
     }
     if steps.iter().any(PStep::has_rollback) {
         badges.push(Badge {
-            label: "rollback listo".into(),
+            label: tr!("rollback listo"),
             tone: BadgeTone::Info,
         });
     }
     if opts.dry_run {
         badges.push(Badge {
-            label: "dry-run".into(),
+            label: tr!("dry-run"),
             tone: BadgeTone::Warn,
         });
     }
@@ -1701,13 +1736,14 @@ async fn run(
     let mut sink = None;
     if !opts.dry_run {
         if let Err(e) = ensure_baton_dir(&project) {
-            warnings.push(format!("no se pudo preparar .baton/: {e}"));
+            warnings.push(tr!("no se pudo preparar .baton/: {e}", e = e));
         }
         match LogSink::create(&log_path, config.logs.format) {
             Ok(s) => sink = Some(s),
-            Err(e) => warnings.push(format!(
-                "no se pudo abrir el log {}: {e}",
-                log_path.display()
+            Err(e) => warnings.push(tr!(
+                "no se pudo abrir el log {path}: {e}",
+                path = log_path.display(),
+                e = e
             )),
         }
     }
@@ -1838,7 +1874,7 @@ async fn run(
         backup_bytes: (backup_bytes > 0).then_some(backup_bytes),
         log_path: (!ctx.opts.dry_run).then(|| ctx.project.display_path(&log_path)),
         undo_command: (has_rollback && !rollback_mode)
-            .then(|| format!("baton rollback {}", ctx.plan.name)),
+            .then(|| tr!("baton rollback {plan}", plan = ctx.plan.name)),
         warnings: ctx.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
     };
     ctx.finalize_log(&log_path).await;
@@ -1914,7 +1950,7 @@ async fn run_plan(
             ctx.log(
                 i,
                 LogKind::Output,
-                "ya terminó en la ejecución anterior (--resume)",
+                tr!("ya terminó en la ejecución anterior (--resume)"),
             );
             ctx.emit(RunEvent::StepFinished {
                 step: i,
@@ -1928,7 +1964,7 @@ async fn run_plan(
             ctx.log(
                 i,
                 LogKind::Output,
-                format!("omitido: depende de '{dep}', que no se ejecutó"),
+                tr!("omitido: depende de '{dep}', que no se ejecutó", dep = dep),
             );
             ctx.emit(RunEvent::StepFinished {
                 step: i,
@@ -2011,7 +2047,7 @@ async fn run_plan(
                             ctx.log(
                                 i,
                                 LogKind::Retry,
-                                format!("reintento manual {manual_retries}"),
+                                tr!("reintento manual {n}", n = manual_retries),
                             );
                             continue;
                         }
@@ -2038,7 +2074,7 @@ async fn run_plan(
         ctx.log(
             executed.last().copied().unwrap_or(0),
             LogKind::Output,
-            "deshaciendo lo ejecutado",
+            tr!("deshaciendo lo ejecutado"),
         );
         rollback_all(ctx, &executed).await;
     }

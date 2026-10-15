@@ -1,6 +1,7 @@
 //! Ejecución sin TUI (CI, `--no-tui` o sin terminal): progreso en texto plano por stdout y un
 //! resumen final equivalente a la pantalla 5. Sin colores ni caracteres de control.
 
+use baton_core::tr;
 use std::time::Duration;
 
 use baton_core::events::{LogKind, RunEvent, RunOutcome, RunSummary, StepStatus};
@@ -45,7 +46,12 @@ impl Report {
                         retries: 0,
                     })
                     .collect();
-                let mut head = format!("baton · plan {plan} · {root} · {} pasos", steps.len());
+                let mut head = tr!(
+                    "baton · plan {plan} · {root} · {n} pasos",
+                    plan = plan,
+                    root = root,
+                    n = steps.len()
+                );
                 if !badges.is_empty() {
                     let b: Vec<_> = badges.iter().map(|b| format!("[{}]", b.label)).collect();
                     head.push_str(&format!(" · {}", b.join(" ")));
@@ -87,14 +93,19 @@ impl Report {
                 r.elapsed = Some(*elapsed);
                 r.retries = *retries;
                 let line = match status {
-                    StepStatus::Skipped => format!("» {} omitido", r.name),
+                    StepStatus::Skipped => tr!("» {name} omitido", name = r.name),
                     _ => {
                         let extra = if *retries > 0 {
-                            format!(" · {retries} reintento(s)")
+                            tr!(" · {n} reintento(s)", n = retries)
                         } else {
                             String::new()
                         };
-                        format!("✓ {} ({}){extra}", r.name, fmt_duration(*elapsed))
+                        tr!(
+                            "✓ {name} ({time}){extra}",
+                            name = r.name,
+                            time = fmt_duration(*elapsed),
+                            extra = extra
+                        )
                     }
                 };
                 vec![line]
@@ -104,12 +115,13 @@ impl Report {
                     r.status = StepStatus::Failed;
                 }
                 let name = self.rows.get(*step).map_or("", |r| r.name.as_str());
-                let mut out = vec![format!(
-                    "✗ Paso {} falló · {name}: {}",
-                    step + 1,
-                    failure.message
+                let mut out = vec![tr!(
+                    "✗ Paso {n} falló · {name}: {msg}",
+                    n = step + 1,
+                    name = name,
+                    msg = failure.message
                 )];
-                out.push(format!("    comando · {}", failure.command));
+                out.push(tr!("    comando · {command}", command = failure.command));
                 out.extend(failure.output_tail.iter().map(|l| format!("    | {l}")));
                 out
             }
@@ -128,18 +140,21 @@ impl Report {
             .filter(|r| matches!(r.status, StepStatus::Done | StepStatus::Skipped))
             .count();
         let (mark, verb) = match outcome {
-            RunOutcome::Completed => ("✓", "completado"),
-            RunOutcome::CompletedWithWarnings => ("!", "completado con advertencias"),
-            RunOutcome::Failed => ("✗", "falló"),
-            RunOutcome::Aborted => ("!", "abortado"),
+            RunOutcome::Completed => ("✓", tr!("completado")),
+            RunOutcome::CompletedWithWarnings => ("!", tr!("completado con advertencias")),
+            RunOutcome::Failed => ("✗", tr!("falló")),
+            RunOutcome::Aborted => ("!", tr!("abortado")),
         };
         let mut out = vec![
             String::new(),
-            format!(
-                "{mark} Plan {} {verb} · {finished}/{} pasos · {}",
-                self.plan,
-                self.rows.len(),
-                fmt_clock(elapsed)
+            tr!(
+                "{mark} Plan {plan} {verb} · {done}/{total} pasos · {time}",
+                mark = mark,
+                plan = self.plan,
+                verb = verb,
+                done = finished,
+                total = self.rows.len(),
+                time = fmt_clock(elapsed)
             ),
         ];
         let width = self
@@ -151,12 +166,12 @@ impl Report {
         for r in &self.rows {
             let (sym, note) = match r.status {
                 StepStatus::Done if r.retries > 0 => {
-                    ("↻", format!(" · {} reintento(s)", r.retries))
+                    ("↻", tr!(" · {n} reintento(s)", n = r.retries))
                 }
                 StepStatus::Done => ("✓", String::new()),
-                StepStatus::Skipped => ("»", " · omitido".to_string()),
-                StepStatus::Failed => ("✗", " · falló".to_string()),
-                _ => ("○", " · no se ejecutó".to_string()),
+                StepStatus::Skipped => ("»", tr!(" · omitido")),
+                StepStatus::Failed => ("✗", tr!(" · falló")),
+                _ => ("○", tr!(" · no se ejecutó")),
             };
             let time = r
                 .elapsed
@@ -168,13 +183,16 @@ impl Report {
             out.push(format!("  ! {w}"));
         }
         if let Some(b) = s.backup_bytes {
-            out.push(format!("backup · {}", baton_core::units::ByteSize(b)));
+            out.push(tr!(
+                "backup · {size}",
+                size = baton_core::units::ByteSize(b)
+            ));
         }
         if let Some(l) = &s.log_path {
-            out.push(format!("log · {l}"));
+            out.push(tr!("log · {path}", path = l));
         }
         if let Some(u) = &s.undo_command {
-            out.push(format!("deshacer · {u}"));
+            out.push(tr!("deshacer · {command}", command = u));
         }
         out
     }

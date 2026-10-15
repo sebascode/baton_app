@@ -4,6 +4,8 @@
 //! Al arrancar, [`register_installed`] deja disponibles los tipos de paso de los plugins
 //! instalados, antes de leer ningún plan.
 
+use baton_core::i18n::tr_dyn;
+use baton_core::{tk, tr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,7 +20,13 @@ use crate::{EXIT_INVALID, EXIT_USAGE};
 pub fn register_at_startup(project: Option<&Project>) {
     let project_dir = project.map(Project::plugins_dir);
     for problem in register_all(project_dir.as_deref(), plugins_dir().as_deref()) {
-        eprintln!("advertencia: plugin no cargado: {problem}");
+        eprintln!(
+            "{}",
+            tr!(
+                "advertencia: plugin no cargado: {problem}",
+                problem = problem
+            )
+        );
     }
 }
 
@@ -28,7 +36,10 @@ pub fn target_dir(global: bool, start: &Path) -> Result<PathBuf, ExitCode> {
     if global {
         return plugins_dir().ok_or_else(|| {
             eprintln!(
-                "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
+                "{}",
+                tr!(
+                    "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
+                )
             );
             ExitCode::from(EXIT_USAGE)
         });
@@ -37,7 +48,10 @@ pub fn target_dir(global: bool, start: &Path) -> Result<PathBuf, ExitCode> {
         Some(p) => Ok(p.plugins_dir()),
         None => {
             eprintln!(
-                "error: no estás dentro de un proyecto de baton: usa --global para los plugins de esta máquina"
+                "{}",
+                tr!(
+                    "error: no estás dentro de un proyecto de baton: usa --global para los plugins de esta máquina"
+                )
             );
             Err(ExitCode::from(EXIT_USAGE))
         }
@@ -48,14 +62,17 @@ pub fn list(start: &Path) -> ExitCode {
     let project = Project::discover(start);
     let global = plugins_dir();
     match &project {
-        Some(p) => print_scope("proyecto", &p.plugins_dir()),
-        None => println!("proyecto: (no estás dentro de uno)"),
+        Some(p) => print_scope(&tr!("proyecto"), &p.plugins_dir()),
+        None => println!("{}", tr!("proyecto: (no estás dentro de uno)")),
     }
     match &global {
-        Some(dir) => print_scope("global", dir),
+        Some(dir) => print_scope(&tr!("global"), dir),
         None => {
             eprintln!(
-                "error: no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)"
+                "{}",
+                tr!(
+                    "error: no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)"
+                )
             );
             return ExitCode::from(EXIT_USAGE);
         }
@@ -71,9 +88,12 @@ pub fn list(start: &Path) -> ExitCode {
                 && mine.iter().any(|t| t == m.type_name())
             {
                 println!(
-                    "nota: el plugin global '{}' (tipo {}) queda tapado por el del proyecto",
-                    m.name,
-                    m.type_name()
+                    "{}",
+                    tr!(
+                        "nota: el plugin global '{name}' (tipo {kind}) queda tapado por el del proyecto",
+                        name = m.name,
+                        kind = m.type_name()
+                    )
                 );
             }
         }
@@ -84,10 +104,20 @@ pub fn list(start: &Path) -> ExitCode {
 fn print_scope(scope: &str, dir: &Path) {
     let installed = list_installed(dir);
     if installed.is_empty() {
-        println!("{scope}: sin plugins ({})", dir.display());
+        println!(
+            "{}",
+            tr!(
+                "{scope}: sin plugins ({path})",
+                scope = scope,
+                path = dir.display()
+            )
+        );
         return;
     }
-    println!("{scope}: {}", dir.display());
+    println!(
+        "{}",
+        tr!("{scope}: {path}", scope = scope, path = dir.display())
+    );
     for plugin in &installed {
         match (&plugin.manifest, plugin.is_valid()) {
             (Some(m), true) if plugin.is_loadable() => {
@@ -97,10 +127,14 @@ fn print_scope(scope: &str, dir: &Path) {
                     format!("  {}", m.description)
                 };
                 println!(
-                    "  ✓ {} {}  tipo {}{description}",
-                    m.name,
-                    m.version,
-                    m.type_name()
+                    "{}",
+                    tr!(
+                        "  ✓ {name} {version}  tipo {kind}{description}",
+                        name = m.name,
+                        version = m.version,
+                        kind = m.type_name(),
+                        description = description
+                    )
                 );
                 println!("      {}", origin_line(plugin));
             }
@@ -145,13 +179,17 @@ fn describe_credential(c: &baton_core::plugin::CredentialDecl) -> String {
 fn field_note(key: &str, secret: bool, optional: bool) -> String {
     let mut note = key.to_string();
     if secret {
-        note.push_str(" secreto");
+        note.push_str(&tr!(" secreto"));
     }
     if optional {
-        note.push_str(" opcional");
+        note.push_str(&tr!(" opcional"));
     }
     if secret || optional {
-        note = format!("{key} ({})", note[key.len() + 1..].replace(' ', ", "));
+        note = tr!(
+            "{key} ({flags})",
+            key = key,
+            flags = note[key.len() + 1..].replace(' ', ", ")
+        );
     }
     note
 }
@@ -168,11 +206,17 @@ fn origin_line(plugin: &baton_store::plugins::Installed) -> String {
             let commit = e
                 .commit
                 .as_deref()
-                .map(|c| format!(" · commit {}", &c[..c.len().min(12)]))
+                .map(|c| tr!(" · commit {sha}", sha = &c[..c.len().min(12)]))
                 .unwrap_or_default();
-            format!("{}{version}{commit} · firma: {}", e.source, e.verification)
+            tr!(
+                "{source}{version}{commit} · firma: {verification}",
+                source = e.source,
+                version = version,
+                commit = commit,
+                verification = e.verification
+            )
         }
-        None => "sin registro (no lo instaló baton plugin add)".to_string(),
+        None => tr!("sin registro (no lo instaló baton plugin add)"),
     }
 }
 
@@ -184,7 +228,7 @@ pub fn validate(path: &Path) -> ExitCode {
         path.to_path_buf()
     };
     if std::fs::symlink_metadata(&file).is_err() {
-        eprintln!("error: no existe {}", file.display());
+        eprintln!("{}", tr!("error: no existe {path}", path = file.display()));
         return ExitCode::from(EXIT_USAGE);
     }
 
@@ -195,12 +239,20 @@ pub fn validate(path: &Path) -> ExitCode {
     let shown = file.display();
     match (&checked.value, checked.is_valid()) {
         (Some(m), true) => {
-            println!("✓ {shown} (plugin {} {})", m.name, m.version);
+            println!(
+                "{}",
+                tr!(
+                    "✓ {shown} (plugin {name} {version})",
+                    shown = shown,
+                    name = m.name,
+                    version = m.version
+                )
+            );
             summary(m);
             ExitCode::SUCCESS
         }
         _ => {
-            println!("✗ {shown}");
+            println!("{}", tr!("✗ {shown}", shown = shown));
             ExitCode::from(EXIT_INVALID)
         }
     }
@@ -209,7 +261,7 @@ pub fn validate(path: &Path) -> ExitCode {
 /// Lo que el plugin va a ejecutar, tal cual: es lo que hay que leer antes de instalarlo.
 fn summary(m: &Manifest) {
     for (label, value) in describe(m) {
-        println!("  {label}: {value}");
+        println!("  {}: {value}", tr_dyn(label));
     }
 }
 
@@ -218,27 +270,31 @@ fn summary(m: &Manifest) {
 pub fn describe(m: &Manifest) -> Vec<(&'static str, String)> {
     let t = &m.step_type;
     let scanned = if t.scanned {
-        " (una vez por archivo)"
+        tr!(" (una vez por archivo)")
     } else {
-        ""
+        String::new()
     };
     let mut out = vec![
-        ("tipo", format!("{}{scanned}", m.type_name())),
-        ("comando", t.command.trim().to_string()),
         (
-            "dry-run",
+            tk!("tipo"),
+            tr!("{kind}{scanned}", kind = m.type_name(), scanned = scanned),
+        ),
+        (tk!("comando"), t.command.trim().to_string()),
+        (
+            tk!("dry-run"),
             match &t.dry_run {
                 Some(d) => d.trim().to_string(),
-                None => "no define uno (con --dry-run no se ejecuta nada de este tipo)".to_string(),
+                None => tr!("no define uno (con --dry-run no se ejecuta nada de este tipo)"),
             },
         ),
     ];
     if !t.destructive.is_empty() {
         out.push((
-            "destructivo",
-            format!(
-                "antes de ejecutar corre el dry-run y pide confirmar si dice: {}",
-                t.destructive
+            tk!("destructivo"),
+            tr!(
+                "antes de ejecutar corre el dry-run y pide confirmar si dice: {list}",
+                list = t
+                    .destructive
                     .iter()
                     .map(|p| format!("\"{p}\""))
                     .collect::<Vec<_>>()
@@ -247,13 +303,13 @@ pub fn describe(m: &Manifest) -> Vec<(&'static str, String)> {
         ));
     }
     for c in &m.credentials {
-        out.push(("credencial", describe_credential(c)));
+        out.push((tk!("credencial"), describe_credential(c)));
     }
     if !m.requires.is_empty() {
-        out.push(("requiere", m.requires.join(", ")));
+        out.push((tk!("requiere"), m.requires.join(", ")));
     }
     if !t.detect.is_empty() {
-        out.push(("detecta", t.detect.join(", ")));
+        out.push((tk!("detecta"), t.detect.join(", ")));
     }
     out
 }

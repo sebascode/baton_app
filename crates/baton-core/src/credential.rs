@@ -82,13 +82,13 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     const GIT: [FieldSpec; 2] = [
         FieldSpec {
             key: "USER",
-            label: "usuario",
+            label: crate::tk!("usuario"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "TOKEN",
-            label: "token",
+            label: crate::tk!("token"),
             secret: true,
             optional: false,
         },
@@ -96,19 +96,19 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     const DOCKER: [FieldSpec; 3] = [
         FieldSpec {
             key: "REGISTRY",
-            label: "registro",
+            label: crate::tk!("registro"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "USER",
-            label: "usuario",
+            label: crate::tk!("usuario"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "TOKEN",
-            label: "token",
+            label: crate::tk!("token"),
             secret: true,
             optional: false,
         },
@@ -116,13 +116,13 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     const SSH: [FieldSpec; 2] = [
         FieldSpec {
             key: "KEY",
-            label: "llave",
+            label: crate::tk!("llave"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "PASSPHRASE",
-            label: "frase secreta",
+            label: crate::tk!("frase secreta"),
             secret: true,
             optional: true,
         },
@@ -133,37 +133,37 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     const DB: [FieldSpec; 6] = [
         FieldSpec {
             key: "USER",
-            label: "usuario",
+            label: crate::tk!("usuario"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "PASSWORD",
-            label: "contraseña",
+            label: crate::tk!("contraseña"),
             secret: true,
             optional: false,
         },
         FieldSpec {
             key: "HOST",
-            label: "host",
+            label: crate::tk!("host"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "PORT",
-            label: "puerto",
+            label: crate::tk!("puerto"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "DATABASE",
-            label: "base",
+            label: crate::tk!("base"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "CONTAINER",
-            label: "contenedor",
+            label: crate::tk!("contenedor"),
             secret: false,
             optional: true,
         },
@@ -172,37 +172,37 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     const MYSQL: [FieldSpec; 6] = [
         FieldSpec {
             key: "USER",
-            label: "usuario",
+            label: crate::tk!("usuario"),
             secret: false,
             optional: false,
         },
         FieldSpec {
             key: "PASSWORD",
-            label: "contraseña",
+            label: crate::tk!("contraseña"),
             secret: true,
             optional: false,
         },
         FieldSpec {
             key: "HOST",
-            label: "host",
+            label: crate::tk!("host"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "PORT",
-            label: "puerto",
+            label: crate::tk!("puerto"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "DATABASE",
-            label: "base",
+            label: crate::tk!("base"),
             secret: false,
             optional: true,
         },
         FieldSpec {
             key: "CONTAINER",
-            label: "contenedor",
+            label: crate::tk!("contenedor"),
             secret: false,
             optional: true,
         },
@@ -212,13 +212,13 @@ pub fn fields_for(kind: CredentialKind) -> &'static [FieldSpec] {
     // un ambiente a otro.
     const SQLITE: [FieldSpec; 1] = [FieldSpec {
         key: "FILE",
-        label: "archivo",
+        label: crate::tk!("archivo"),
         secret: false,
         optional: false,
     }];
     const OTRO: [FieldSpec; 1] = [FieldSpec {
         key: "VALUE",
-        label: "valor",
+        label: crate::tk!("valor"),
         secret: true,
         optional: false,
     }];
@@ -290,7 +290,7 @@ pub fn required_credentials(plan: &Plan, config: &Config) -> Vec<Requirement> {
         out.push(Requirement {
             id: format!("target:{target}"),
             kind: CredentialKind::Ssh,
-            label: format!("ssh · {target}"),
+            label: crate::tr!("ssh · {target}", target = target),
             reference: reference.clone(),
             provider: None,
         });

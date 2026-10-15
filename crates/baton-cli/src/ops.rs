@@ -5,6 +5,8 @@
 //!
 //! Sin acción ni tarea y con terminal, abre un menú; sin terminal, lista lo que hay.
 
+use baton_core::i18n::tr_dyn;
+use baton_core::tr;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -79,13 +81,13 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
     let ambiente = match crate::ambiente::resolve(args.ambiente.as_deref(), &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_USAGE);
         }
     };
     let (services, errors) = inventory(project, &config, &plan);
     for e in &errors {
-        eprintln!("advertencia: {e}");
+        eprintln!("{}", tr!("advertencia: {e}", e = e));
     }
     let ctx = Ctx {
         project,
@@ -97,17 +99,17 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
     };
 
     if args.action.is_some() && args.task.is_some() {
-        eprintln!("error: --accion y --tarea no se combinan");
+        eprintln!("{}", tr!("error: --accion y --tarea no se combinan"));
         return ExitCode::from(EXIT_USAGE);
     }
     if let Some(name) = &args.action {
         let Some(action) = Action::parse(name, args.follow, args.lines) else {
-            eprintln!("error: '{name}' no es una acción");
-            eprintln!("  acciones: {}", action_names());
+            eprintln!("{}", tr!("error: '{name}' no es una acción", name = name));
+            eprintln!("{}", tr!("  acciones: {list}", list = action_names()));
             return ExitCode::from(EXIT_USAGE);
         };
         if args.follow && !matches!(action, Action::Logs { .. }) {
-            eprintln!("error: --seguir solo vale con la acción logs");
+            eprintln!("{}", tr!("error: --seguir solo vale con la acción logs"));
             return ExitCode::from(EXIT_USAGE);
         }
         return match ctx.orders_for(action, args.service.as_deref()) {
@@ -122,7 +124,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         };
     }
     if args.service.is_some() || args.follow {
-        eprintln!("error: --servicio y --seguir van con --accion");
+        eprintln!("{}", tr!("error: --servicio y --seguir van con --accion"));
         return ExitCode::from(EXIT_USAGE);
     }
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
@@ -133,7 +135,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
 }
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("error: {msg}");
+    eprintln!("{}", tr!("error: {msg}", msg = msg));
     ExitCode::from(EXIT_USAGE)
 }
 
@@ -205,11 +207,12 @@ impl Ctx<'_> {
                             .filter_map(|(u, _)| u.service.as_deref())
                             .collect();
                         return Err(if names.is_empty() {
-                            "el plan no tiene servicios de compose activos".to_string()
+                            tr!("el plan no tiene servicios de compose activos")
                         } else {
-                            format!(
-                                "el servicio '{name}' no está en el plan (servicios: {})",
-                                names.join(", ")
+                            tr!(
+                                "el servicio '{name}' no está en el plan (servicios: {list})",
+                                name = name,
+                                list = names.join(", ")
                             )
                         });
                     }
@@ -217,9 +220,10 @@ impl Ctx<'_> {
                     many => {
                         let files: Vec<String> =
                             many.iter().map(|u| u.file.display().to_string()).collect();
-                        return Err(format!(
-                            "'{name}' está en varios archivos ({}); renombra uno",
-                            files.join(", ")
+                        return Err(tr!(
+                            "'{name}' está en varios archivos ({list}); renombra uno",
+                            name = name,
+                            list = files.join(", ")
                         ));
                     }
                 }
@@ -236,7 +240,7 @@ impl Ctx<'_> {
                     }
                 }
                 if whole.is_empty() {
-                    return Err("el plan no tiene servicios de compose activos".to_string());
+                    return Err(tr!("el plan no tiene servicios de compose activos"));
                 }
                 whole
             }
@@ -251,13 +255,17 @@ impl Ctx<'_> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let what = u.service.as_deref().unwrap_or("todos los servicios");
+        let what = u
+            .service
+            .clone()
+            .unwrap_or_else(|| tr!("todos los servicios"));
         Order {
-            label: format!(
-                "{} · {what} ({}) en {}",
-                action.key(),
-                u.file.display(),
-                u.target
+            label: tr!(
+                "{action} · {what} ({file}) en {target}",
+                action = action.key(),
+                what = what,
+                file = u.file.display(),
+                target = u.target
             ),
             target: u.target.clone(),
             cwd: self.project.root.join(dir),
@@ -276,10 +284,17 @@ impl Ctx<'_> {
     fn task_order(&self, id: &str) -> Result<Order, String> {
         let Some(task) = self.plan.task(id) else {
             return Err(if self.plan.tasks.is_empty() {
-                format!("el plan no declara tareas ([[tasks]]); '{id}' no existe")
+                tr!(
+                    "el plan no declara tareas ([[tasks]]); '{id}' no existe",
+                    id = id
+                )
             } else {
                 let ids: Vec<&str> = self.plan.tasks.iter().map(|t| t.id.as_str()).collect();
-                format!("la tarea '{id}' no existe (tareas: {})", ids.join(", "))
+                tr!(
+                    "la tarea '{id}' no existe (tareas: {list})",
+                    id = id,
+                    list = ids.join(", ")
+                )
             });
         };
         Ok(self.order_for_task(task))
@@ -292,7 +307,12 @@ impl Ctx<'_> {
             .or_else(|| self.config.defaults.target.clone())
             .unwrap_or_else(|| "local".to_string());
         Order {
-            label: format!("tarea {} · {} en {target}", task.id, task.name),
+            label: tr!(
+                "tarea {id} · {name} en {target}",
+                id = task.id,
+                name = task.name,
+                target = target
+            ),
             cwd: self.project.root.join(task.dir.as_deref().unwrap_or("")),
             line: task.command.clone(),
             timeout: Some(
@@ -312,19 +332,22 @@ impl Ctx<'_> {
     fn execute(&self, orders: &[Order]) -> ExitCode {
         if orders.iter().any(|o| o.confirm) && !self.assume_yes {
             if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-                eprintln!("error: esto cambia lo que corre y no se ejecuta sin confirmar:");
+                eprintln!(
+                    "{}",
+                    tr!("error: esto cambia lo que corre y no se ejecuta sin confirmar:")
+                );
                 for o in orders.iter().filter(|o| o.confirm) {
                     eprintln!("  {}", o.label);
                 }
-                eprintln!("  repite con --assume-yes si es lo que quieres");
+                eprintln!("{}", tr!("  repite con --assume-yes si es lo que quieres"));
                 return ExitCode::from(EXIT_USAGE);
             }
-            eprintln!("Se va a ejecutar:");
+            eprintln!("{}", tr!("Se va a ejecutar:"));
             for o in orders {
                 eprintln!("  {}", o.label);
             }
-            if !ask_yes_no("¿Continuar?") {
-                eprintln!("cancelado");
+            if !ask_yes_no(&tr!("¿Continuar?")) {
+                eprintln!("{}", tr!("cancelado"));
                 return ExitCode::SUCCESS;
             }
         }
@@ -374,53 +397,55 @@ impl Ctx<'_> {
                 eprintln!(
                     "{}",
                     if o.follow {
-                        "fin del seguimiento"
+                        tr!("fin del seguimiento")
                     } else {
-                        "cancelado"
+                        tr!("cancelado")
                     }
                 );
                 Ok(Done::Cancelled)
             }
             Ok(Outcome::Exit(exit)) if exit.success() => {
-                eprintln!("✓ listo");
+                eprintln!("{}", tr!("✓ listo"));
                 Ok(Done::Ok)
             }
             Ok(Outcome::Exit(exit)) => {
                 if cancelled && o.follow {
                     return Ok(Done::Cancelled);
                 }
-                eprintln!("✗ falló ({exit:?})");
+                eprintln!("{}", tr!("✗ falló ({exit})", exit = format!("{exit:?}")));
                 Err(ExitCode::from(EXIT_RUN_FAILED))
             }
             Err(e) => {
-                eprintln!("error: no se pudo ejecutar: {e}");
+                eprintln!("{}", tr!("error: no se pudo ejecutar: {e}", e = e));
                 Err(ExitCode::from(EXIT_RUN_FAILED))
             }
         }
     }
 
     fn overview(&self, plan: &str) -> String {
-        let mut s = format!("Mantención del plan {plan}\n\n");
+        let mut s = tr!("Mantención del plan {plan}\n\n", plan = plan);
         if self.services.is_empty() {
-            s.push_str("Servicios: ninguno (el plan no tiene pasos compose activos)\n");
+            s.push_str(&tr!(
+                "Servicios: ninguno (el plan no tiene pasos compose activos)\n"
+            ));
         } else {
-            s.push_str("Servicios:\n");
+            s.push_str(&tr!("Servicios:\n"));
             for (u, step) in self.services {
-                s.push_str(&format!(
-                    "  {:<20} {}  ({} · destino {})\n",
-                    u.service.as_deref().unwrap_or(""),
-                    u.file.display(),
-                    step,
-                    u.target
+                s.push_str(&tr!(
+                    "  {name} {file}  ({step} · destino {target})\n",
+                    name = format!("{:<20}", u.service.as_deref().unwrap_or("")),
+                    file = u.file.display(),
+                    step = step,
+                    target = u.target
                 ));
             }
         }
-        s.push_str("\nAcciones:\n");
+        s.push_str(&tr!("\nAcciones:\n"));
         for (name, what) in Action::CATALOG {
-            s.push_str(&format!("  {name:<12} {what}\n"));
+            s.push_str(&format!("  {name:<12} {}\n", tr_dyn(what)));
         }
         if !self.plan.tasks.is_empty() {
-            s.push_str("\nTareas:\n");
+            s.push_str(&tr!("\nTareas:\n"));
             for t in &self.plan.tasks {
                 s.push_str(&format!(
                     "  {:<20} {}\n",
@@ -429,9 +454,9 @@ impl Ctx<'_> {
                 ));
             }
         }
-        s.push_str("\nEjemplos:\n");
-        s.push_str("  baton ops -a logs -s <servicio> --seguir\n");
-        s.push_str("  baton ops -a reimagen -s <servicio>\n");
+        s.push_str(&tr!("\nEjemplos:\n"));
+        s.push_str(&tr!("  baton ops -a logs -s <servicio> --seguir\n"));
+        s.push_str(&tr!("  baton ops -a reimagen -s <servicio>\n"));
         if let Some(t) = self.plan.tasks.first() {
             s.push_str(&format!("  baton ops -t {}\n", t.id));
         }
@@ -449,27 +474,32 @@ impl Ctx<'_> {
                         follow: true,
                         tail: lines,
                     },
-                    "logs en vivo",
+                    tr!("logs en vivo"),
                 ),
                 Item::Act(
                     Action::Logs {
                         follow: false,
                         tail: lines,
                     },
-                    "logs (últimas líneas)",
+                    tr!("logs (últimas líneas)"),
                 ),
-                Item::Act(Action::Status, "estado de los contenedores"),
-                Item::Act(Action::Restart, "reiniciar"),
-                Item::Act(Action::Update, "actualizar (descargar la imagen y recrear)"),
+                Item::Act(Action::Status, tr!("estado de los contenedores")),
+                Item::Act(Action::Restart, tr!("reiniciar")),
+                Item::Act(
+                    Action::Update,
+                    tr!("actualizar (descargar la imagen y recrear)"),
+                ),
                 Item::Act(
                     Action::Reimage,
-                    "reimagen (borrar la imagen, descargar y levantar)",
+                    tr!("reimagen (borrar la imagen, descargar y levantar)"),
                 ),
             ];
             items.extend(self.plan.tasks.iter().map(|t| Item::Task(t.clone())));
             items.push(Item::Quit);
-            let choice = match Select::new("Mantención: ¿qué hacemos?", items)
-                .with_help_message("↑↓ moverse · enter elegir · escribe para filtrar · esc salir")
+            let choice = match Select::new(&tr!("Mantención: ¿qué hacemos?"), items)
+                .with_help_message(&tr!(
+                    "↑↓ moverse · enter elegir · escribe para filtrar · esc salir"
+                ))
                 .prompt()
             {
                 Ok(c) => c,
@@ -477,7 +507,7 @@ impl Ctx<'_> {
                     return last;
                 }
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", tr!("error: {e}", e = e));
                     return ExitCode::from(EXIT_USAGE);
                 }
             };
@@ -493,7 +523,7 @@ impl Ctx<'_> {
             };
             match orders {
                 Ok(orders) => last = self.execute(&orders),
-                Err(e) => eprintln!("error: {e}"),
+                Err(e) => eprintln!("{}", tr!("error: {e}", e = e)),
             }
             eprintln!();
         }
@@ -507,15 +537,18 @@ impl Ctx<'_> {
             return Some(names[1].clone());
         }
         if names.len() == 1 {
-            eprintln!("error: el plan no tiene servicios de compose activos");
+            eprintln!(
+                "{}",
+                tr!("error: el plan no tiene servicios de compose activos")
+            );
             return None;
         }
         let labels: Vec<String> = names
             .iter()
-            .map(|n| n.clone().unwrap_or_else(|| "(todos)".to_string()))
+            .map(|n| n.clone().unwrap_or_else(|| tr!("(todos)")))
             .collect();
-        let chosen = inquire::Select::new("¿Sobre qué servicio?", labels.clone())
-            .with_help_message("↑↓ moverse · enter elegir · esc cancelar")
+        let chosen = inquire::Select::new(&tr!("¿Sobre qué servicio?"), labels.clone())
+            .with_help_message(&tr!("↑↓ moverse · enter elegir · esc cancelar"))
             .prompt()
             .ok()?;
         let i = labels.iter().position(|l| *l == chosen)?;
@@ -529,7 +562,7 @@ enum Done {
 }
 
 enum Item {
-    Act(Action, &'static str),
+    Act(Action, String),
     Task(Task),
     Quit,
 }
@@ -538,15 +571,15 @@ impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Item::Act(_, label) => f.write_str(label),
-            Item::Task(t) => write!(f, "tarea: {}", t.name),
-            Item::Quit => f.write_str("salir"),
+            Item::Task(t) => write!(f, "{}", tr!("tarea: {name}", name = t.name)),
+            Item::Quit => f.write_str(&tr!("salir")),
         }
     }
 }
 
 fn ask_yes_no(question: &str) -> bool {
     let mut err = std::io::stderr();
-    let _ = write!(err, "{question} (s/N) ");
+    let _ = write!(err, "{question}{}", tr!(" (s/N) "));
     let _ = err.flush();
     let mut line = String::new();
     if std::io::stdin().lock().read_line(&mut line).is_err() {
@@ -604,6 +637,6 @@ pub(crate) fn build_orders(
     match (&req.task, req.action) {
         (Some(id), _) => ctx.task_order(id).map(|o| vec![o]),
         (None, Some(action)) => ctx.orders_for(action, req.service.as_deref()),
-        (None, None) => Err("no se indicó qué ejecutar".to_string()),
+        (None, None) => Err(tr!("no se indicó qué ejecutar")),
     }
 }
