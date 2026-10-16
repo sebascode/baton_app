@@ -43,8 +43,8 @@ pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
         history::banner(&state, &plan, now),
         history::entries(&state, &plan, now).into_iter().next(),
     ) else {
-        println!("el plan '{plan_name}' todavía no se ejecutó");
-        println!("  ejecútalo con: baton run {plan_name}");
+        eprintln!("el plan '{plan_name}' todavía no se ejecutó");
+        eprintln!("  ejecútalo con: baton run {plan_name}");
         return ExitCode::from(EXIT_INVALID);
     };
 

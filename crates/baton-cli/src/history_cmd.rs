@@ -33,9 +33,9 @@ pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
     };
     let entries = history::entries(&state, &plan, history::now());
     if entries.is_empty() {
-        println!("el plan '{plan_name}' todavía no se ejecutó");
-        println!("  ejecútalo con: baton run {plan_name}");
-        return ExitCode::from(EXIT_INVALID);
+        eprintln!("el plan '{plan_name}' todavía no se ejecutó");
+        eprintln!("  ejecútalo con: baton run {plan_name}");
+        return ExitCode::SUCCESS;
     }
     print!(
         "{}",

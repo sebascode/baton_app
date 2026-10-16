@@ -153,7 +153,7 @@ Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso 
 .BI \-\-ambiente " ambiente"
 Ambiente de los comandos de rollback que usan \fB{ambiente}\fR y de las credenciales; se elige igual que en \fBbaton run\fR.
 .SS baton last [plan]
-Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó.
+Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó (el aviso va a stderr y stdout queda vacío).
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
@@ -219,7 +219,7 @@ Ejecuta sin pedir confirmación.
 .BI \-\-ambiente " ambiente"
 Ambiente del que se resuelven las credenciales.
 .SS baton history [plan]
-Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Sale con 1 si el plan todavía no se ejecutó.
+Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Si el plan todavía no se ejecutó, lo dice por stderr, no imprime nada por stdout y sale con 0.
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).

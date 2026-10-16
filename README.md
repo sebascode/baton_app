@@ -4,7 +4,7 @@ Herramienta de terminal para orquestar instalaciones y despliegues. Defines un p
 
 Está pensada para ser simple y amigable: pantallas con teclado, backup y rollback siempre opcionales, y nada sale de tu máquina que no deba.
 
-> Estado: proyecto personal en desarrollo (versión 0.4). Solo se ha probado en Linux y macOS con Apple Silicon.
+> Estado: proyecto personal en desarrollo (la versión instalada la dice `baton version`). Solo se ha probado en Linux y macOS con Apple Silicon.
 
 ## Qué es
 
@@ -26,7 +26,7 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 - **Validación previa**: antes de ejecutar nada revisa todo y te lista los problemas de una vez.
 - **Gates**: un paso puede esperar una confirmación manual o verificaciones automáticas (healthcheck de Docker, HTTP, comando, contenedor corriendo) antes de seguir.
 - **Fallos**: si algo falla, puedes reintentar, ver el log completo, abrir una shell, hacer rollback o abortar, y luego reanudar desde donde quedó.
-- **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. `.baton/` nunca sale de tu máquina.
+- **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. Las variables de entorno se filtran con más facilidad que un archivo (listados de procesos, `docker inspect`, logs de CI): para secretos de larga vida conviene un archivo en `.baton/` o un gestor; ver [SECURITY.md](SECURITY.md). `.baton/` nunca sale de tu máquina.
 - **Sin terminal** (CI): no pregunta nada; si falta algo, falla diciendo qué.
 
 ## Instalación
@@ -39,7 +39,7 @@ Elige una:
 curl -fsSL https://raw.githubusercontent.com/sebascode/baton_app/main/scripts/get.sh | sh
 ```
 
-Con otra versión o carpeta: `... | sh -s -- --version 0.3.0 --dir /usr/local/bin`.
+Con otra versión o carpeta: `... | sh -s -- --version X.Y.Z --dir /usr/local/bin`.
 
 **Homebrew** (macOS y Linux), compilando desde el código fuente:
 
@@ -50,7 +50,7 @@ brew install sebascode/baton/baton
 **Paquetes de Linux**: cada [release](https://github.com/sebascode/baton_app/releases/latest) trae un `.deb` (Debian, Ubuntu...) y un `.rpm` (Fedora, RHEL...) para x86_64 y arm64, con su `.sha256`:
 
 ```sh
-sudo apt install ./baton_0.3.0-1_amd64.deb      # o: sudo dnf install ./baton-0.3.0-1.x86_64.rpm
+sudo apt install ./baton_X.Y.Z-1_amd64.deb      # o: sudo dnf install ./baton-X.Y.Z-1.x86_64.rpm
 ```
 
 **A mano**, con Rust 1.88 o superior:
