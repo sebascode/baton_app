@@ -432,7 +432,7 @@
 "error: no se pudo escribir {path}: {e}" = "error: could not write {path}: {e}"
 "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)" = "error: could not tell where the plugins are (set HOME or BATON_PLUGINS_DIR)"
 "error: no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)" = "error: could not tell where the global plugins are (set HOME or BATON_PLUGINS_DIR)"
-"error: sin terminal, quitar un plugin necesita --yes" = "error: without a terminal, removing a plugin needs --yes"
+"error: sin terminal, quitar un plugin necesita --assume-yes" = "error: without a terminal, removing a plugin needs --assume-yes"
 "error: ya existe un plan '{name}' (para abrirlo: baton start {name})" = "error: a plan '{name}' already exists (to open it: baton start {name})"
 "error: ya existe {path}" = "error: {path} already exists"
 "error: {d}" = "error: {d}"

@@ -519,7 +519,7 @@ pub fn add_in(
     }
 }
 
-/// `baton plugin remove <nombre> [--yes] [--global]`.
+/// `baton plugin remove <nombre> [--assume-yes] [--global]`.
 pub fn remove(name: &str, yes: bool, start: &Path, global: bool) -> ExitCode {
     let dir = match target_dir(global, start) {
         Ok(d) => d,
@@ -557,7 +557,7 @@ pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut
         if !ask.interactive() {
             eprintln!(
                 "{}",
-                tr!("error: sin terminal, quitar un plugin necesita --yes")
+                tr!("error: sin terminal, quitar un plugin necesita --assume-yes")
             );
             return EXIT_USAGE;
         }

@@ -84,7 +84,7 @@ pub fn delete(project: &Project, plan: &str, yes: bool) -> ExitCode {
     if !yes {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             eprintln!(
-                "error: eliminar '{plan}' pide confirmación y no hay terminal: usa --yes para confirmar"
+                "error: eliminar '{plan}' pide confirmación y no hay terminal: usa --assume-yes para confirmar"
             );
             return ExitCode::from(EXIT_USAGE);
         }
