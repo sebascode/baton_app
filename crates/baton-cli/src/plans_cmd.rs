@@ -16,12 +16,11 @@ fn existing(project: &Project, name: &str) -> Result<(), ExitCode> {
     }
     let plans = project.list_plans();
     if plans.is_empty() {
-        eprintln!("error: no existe el plan '{name}' (este proyecto no tiene planes)");
+        eprintln!("error: el plan '{name}' no existe");
+        eprintln!("  este proyecto no tiene planes");
     } else {
-        eprintln!(
-            "error: no existe el plan '{name}' (planes disponibles: {})",
-            plans.join(", ")
-        );
+        eprintln!("error: el plan '{name}' no existe");
+        eprintln!("  planes disponibles: {}", plans.join(", "));
     }
     Err(ExitCode::from(EXIT_USAGE))
 }

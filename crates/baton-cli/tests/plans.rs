@@ -110,10 +110,10 @@ fn errors_are_usage_errors_that_say_what_is_wrong() {
     let cases: [(&[&str], &str); 6] = [
         (
             &["copy", "nada", "x"],
-            "no existe el plan 'nada' (planes disponibles: app, otro)",
+            "el plan 'nada' no existe\n  planes disponibles: app, otro",
         ),
-        (&["rename", "nada", "x"], "no existe el plan 'nada'"),
-        (&["delete", "nada", "--yes"], "no existe el plan 'nada'"),
+        (&["rename", "nada", "x"], "el plan 'nada' no existe"),
+        (&["delete", "nada", "--yes"], "el plan 'nada' no existe"),
         (&["copy", "app", "otro"], "ya existe un plan 'otro'"),
         (&["rename", "app", "run"], "'run' es un comando de baton"),
         (&["rename", "app", "app"], "es el mismo que el actual"),
@@ -176,4 +176,22 @@ fn a_plan_named_like_a_typo_still_runs_and_unrelated_words_keep_the_old_error() 
     let o = baton(tmp.path(), &["zzzzzz"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(!err(&o).contains("quisiste decir"), "{}", err(&o));
+}
+
+#[test]
+fn a_missing_plan_has_the_same_error_in_every_command() {
+    let tmp = project();
+    for args in [
+        &["run", "nada"][..],
+        &["validate", "nada"],
+        &["last", "nada"],
+    ] {
+        let o = baton(tmp.path(), args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(
+            err(&o).contains("error: el plan 'nada' no existe\n  planes disponibles: app"),
+            "{args:?}: {}",
+            err(&o)
+        );
+    }
 }
