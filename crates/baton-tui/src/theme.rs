@@ -76,3 +76,29 @@ pub fn tag_color(label: &str) -> Color {
         _ => Color::Gray,
     }
 }
+
+/// `NO_COLOR` definido y no vacío (https://no-color.org): la interfaz se dibuja sin colores.
+pub fn no_color() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+}
+
+/// Quita los colores de un buffer ya dibujado y los reemplaza por atributos, para `NO_COLOR`:
+/// lo atenuado sigue atenuado, el error va en negrita, la fila elegida y los fondos de estado
+/// se ven en vídeo inverso y el resto queda con el color de la terminal. Los símbolos
+/// (`✓ ✗ ◐ ◆ ○ »`) ya dicen el estado sin necesitar color.
+pub fn monochrome(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        let mut add = Modifier::empty();
+        if cell.fg == MUTED {
+            add |= Modifier::DIM;
+        } else if cell.fg == ERR {
+            add |= Modifier::BOLD;
+        }
+        if [SELECTED_BG, OK_BG, WARN_BG, ERR_BG].contains(&cell.bg) {
+            add |= Modifier::REVERSED;
+        }
+        cell.modifier |= add;
+        cell.fg = Color::Reset;
+        cell.bg = Color::Reset;
+    }
+}

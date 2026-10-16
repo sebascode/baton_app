@@ -724,3 +724,28 @@ fn the_step_panel_shows_its_own_dry_run_only_when_it_has_one() {
         rows(1)
     );
 }
+
+#[test]
+fn monochrome_replaces_colors_with_attributes() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+
+    let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+    buf[(0, 0)].set_style(Style::new().fg(crate::theme::MUTED));
+    buf[(1, 0)].set_style(Style::new().fg(crate::theme::ERR));
+    buf[(2, 0)].set_style(
+        Style::new()
+            .fg(crate::theme::OK)
+            .bg(crate::theme::SELECTED_BG),
+    );
+    crate::theme::monochrome(&mut buf);
+
+    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    assert!(buf[(1, 0)].modifier.contains(Modifier::BOLD));
+    assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    for x in 0..4 {
+        assert_eq!(buf[(x, 0)].fg, Color::Reset);
+        assert_eq!(buf[(x, 0)].bg, Color::Reset);
+    }
+}

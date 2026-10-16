@@ -78,11 +78,15 @@ fn event_loop(
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
     let mut last_blink = Instant::now();
+    let mono = crate::theme::no_color();
 
     loop {
         terminal.draw(|frame| {
             let area = frame.area();
             app.render(frame.buffer_mut(), area);
+            if mono {
+                crate::theme::monochrome(frame.buffer_mut());
+            }
         })?;
 
         if event::poll(FRAME)?
@@ -155,7 +159,7 @@ fn open_shell(terminal: &mut ratatui::DefaultTerminal, session: &ShellSession) -
         cmd.current_dir(dir);
     }
     if let Err(e) = cmd.status() {
-        eprintln!("baton: no se pudo abrir {program}: {e}");
+        eprintln!("error: no se pudo abrir {program}: {e}");
         std::thread::sleep(Duration::from_millis(1500));
     }
     *terminal = ratatui::init();

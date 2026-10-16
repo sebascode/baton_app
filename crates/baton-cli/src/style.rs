@@ -1,6 +1,7 @@
 //! Color y formas para los comandos de texto (`baton`, `baton last`). Solo hay color si la salida
 //! es una terminal y nadie pidió lo contrario (`NO_COLOR`, `TERM=dumb`); en un pipe, un archivo o
-//! CI sale texto plano, con los mismos símbolos.
+//! CI sale texto plano, con los mismos símbolos. Lo atenuado usa el atributo "dim" y no un gris fijo,
+//! para que se lea igual sobre fondos claros u oscuros.
 
 use std::io::IsTerminal;
 use std::time::Duration;
@@ -51,7 +52,7 @@ impl Style {
             Tone::Red => "31",
             Tone::Yellow => "33",
             Tone::Blue => "34",
-            Tone::Gray => "90",
+            Tone::Gray => "2",
             Tone::Bold => "1",
         };
         format!("\x1b[{code}m{text}\x1b[0m")
