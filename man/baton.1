@@ -83,7 +83,7 @@ Sin nombre usa el único plan del proyecto; si hay varios y hay terminal ofrece 
 .PP
 \fBedit\fR es un alias antiguo (no aparece en la ayuda).
 .SS baton run [plan]
-Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la ejecución en pantalla (pasando antes por la de credenciales si el plan las necesita); sin terminal, con \fB\-\-no\-tui\fR o con \fBCI\fR definido imprime texto plano y un resumen. \fBbaton <plan>\fR es un atajo de \fBbaton run <plan>\fR.
+Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la ejecución en pantalla (pasando antes por la de credenciales si el plan las necesita); sin terminal, con \fB\-\-no\-tui\fR o con \fBCI\fR definido imprime texto plano y un resumen. \fBbaton <plan>\fR es un atajo de \fBbaton run <plan>\fR. Si la palabra no es un plan del proyecto y se parece a un comando (un error de tipeo como \fBvaldiate\fR), baton sugiere el comando y sale con 2 en vez de intentar ejecutarla como plan.
 .TP
 .B \-\-no\-tui
 Texto plano en vez de la pantalla.
@@ -109,9 +109,9 @@ Copia un plan con otro nombre: el archivo se duplica y solo cambia su línea \fB
 .SS baton rename plan nuevo
 Cambia el nombre de un plan: renombra el archivo, ajusta su línea \fBname\fR y traslada su estado e historial de \fI.baton/state.json\fR al nombre nuevo. Los logs ya escritos no se renombran (el historial sigue apuntando a ellos).
 .SS baton delete plan
-Elimina el archivo de un plan y su estado en \fI.baton/state.json\fR; los logs y respaldos que dejó no se tocan. En una terminal pide confirmar; sin terminal exige \fB\-\-yes\fR.
+Elimina el archivo de un plan y su estado en \fI.baton/state.json\fR; los logs y respaldos que dejó no se tocan. En una terminal pide confirmar; sin terminal exige \fB\-\-assume\-yes\fR (\fB\-\-yes\fR sigue valiendo como alias).
 .TP
-.B \-\-yes
+.B \-\-assume\-yes
 No pregunta.
 .PP
 Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
@@ -153,7 +153,7 @@ Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso 
 .BI \-\-ambiente " ambiente"
 Ambiente de los comandos de rollback que usan \fB{ambiente}\fR y de las credenciales; se elige igual que en \fBbaton run\fR.
 .SS baton last [plan]
-Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó.
+Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó (el aviso va a stderr y stdout queda vacío).
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
@@ -219,7 +219,7 @@ Ejecuta sin pedir confirmación.
 .BI \-\-ambiente " ambiente"
 Ambiente del que se resuelven las credenciales.
 .SS baton history [plan]
-Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Sale con 1 si el plan todavía no se ejecutó.
+Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Si el plan todavía no se ejecutó, lo dice por stderr, no imprime nada por stdout y sale con 0.
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
@@ -246,9 +246,9 @@ Revisa el manifiesto de un plugin (el archivo \fIbaton\-plugin.toml\fR o la carp
 .SS baton plugin add fuente
 Instala un plugin \fBen el proyecto\fR (\fIbaton/plugins/\fR, que se versiona con él: quien clone el proyecto ya lo tiene, y el \fIplugins.lock\fR fija su commit y su sha256) o, con \fB\-\-global\fR (\fB\-g\fR), \fBen esta máquina\fR para todos los proyectos. Fuera de un proyecto hay que pasar \fB\-\-global\fR. Si un plugin del proyecto y uno global definen el mismo tipo, \fBgana el del proyecto\fR, y si el del proyecto no se puede cargar el global tampoco lo reemplaza. Instala un plugin: \fBgithub:dueño/repo@versión\fR (un tag o un commit; con una rama, baton fija el commit en que está ese día y no la sigue) o una carpeta local. De GitHub, baton pregunta por el commit al que apunta esa versión y \fBsolo lo instala si GitHub verificó su firma, sin excepción\fR; baja el manifiesto de ese SHA exacto (no del tag, que puede moverse), lo valida y \fBmuestra los comandos que ejecutará\fR antes de preguntar. Instala el manifiesto en la carpeta de plugins y deja su origen, el commit y su sha256 en \fIplugins.lock\fR. \fBNecesita una terminal\fR: sin ella no consulta la red ni instala nada, porque baton no instala un plugin sin que alguien lea antes qué va a ejecutar (en CI se usa un plugin ya instalado). Si ya está instalado y es idéntico no hace nada; si cambió, muestra qué cambió y pregunta; no reemplaza uno del mismo nombre que vino de otro origen ni uno que no instaló \fBplugin add\fR (por ejemplo, el que alguien enlazó para desarrollarlo). Una carpeta local no tiene commit ni firma que verificar: se instala igual, tras confirmar, y queda registrada como local. Sale con 1 si se rechaza (sin firma verificada, manifiesto inválido, nombre ocupado, o respuesta negativa) y con 2 si no hay terminal o la fuente no se entiende.
 .SS baton plugin remove nombre
-Quita un plugin del proyecto (o de esta máquina con \fB\-\-global\fR) y su entrada de \fIplugins.lock\fR. Pregunta antes; sin terminal necesita \fB\-\-yes\fR. Si el plugin es un enlace a otra carpeta (alguien lo desarrolla), solo se quita el enlace, nunca la carpeta de destino.
+Quita un plugin del proyecto (o de esta máquina con \fB\-\-global\fR) y su entrada de \fIplugins.lock\fR. Pregunta antes; sin terminal necesita \fB\-\-assume\-yes\fR. Si el plugin es un enlace a otra carpeta (alguien lo desarrolla), solo se quita el enlace, nunca la carpeta de destino.
 .TP
-.B \-\-yes
+.B \-\-assume\-yes
 No pregunta.
 .SS baton plugin new nombre
 Crea \fI./nombre/baton\-plugin.toml\fR con un manifiesto para empezar (que pasa \fBplugin validate\fR) y dice los siguientes pasos. No pisa uno existente. No necesita proyecto.

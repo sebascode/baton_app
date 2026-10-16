@@ -145,7 +145,8 @@ fn last_without_runs_or_with_an_unknown_plan_says_what_to_do() {
     let fx = Fx::new(&[("instalar", PLAN)]);
     let o = fx.baton(&["last", "instalar"]);
     assert_eq!(o.status.code(), Some(1));
-    has(&out(&o), &["todavía no se ejecutó", "baton run instalar"]);
+    assert!(out(&o).is_empty(), "stdout debe quedar vacío: {}", out(&o));
+    has(&err(&o), &["todavía no se ejecutó", "baton run instalar"]);
 
     let o = fx.baton(&["last", "fantasma"]);
     assert_eq!(o.status.code(), Some(2));
@@ -294,8 +295,9 @@ fn history_lists_every_remembered_run_newest_first_and_honours_the_limit() {
 fn history_without_runs_or_with_an_unknown_plan_says_what_to_do() {
     let fx = Fx::new(&[("instalar", PLAN)]);
     let o = fx.baton(&["history", "instalar"]);
-    assert_eq!(o.status.code(), Some(1));
-    has(&out(&o), &["todavía no se ejecutó", "baton run instalar"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(out(&o).is_empty(), "stdout debe quedar vacío: {}", out(&o));
+    has(&err(&o), &["todavía no se ejecutó", "baton run instalar"]);
     assert_eq!(fx.baton(&["history", "fantasma"]).status.code(), Some(2));
     assert_eq!(
         fx.baton(&["copy", "instalar", "history"]).status.code(),
