@@ -121,7 +121,7 @@ enum Command {
         #[arg(long)]
         target: Option<String>,
         /// Muestra lo que se importaría sin escribir nada
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         dry_run: bool,
     },
     /// Pregunta y elige una opción; imprime la elegida (para scripts: `env=$(baton select ...)`)
@@ -425,7 +425,7 @@ struct RunArgs {
     #[arg(long)]
     dry_run: bool,
     /// Salta los pasos que terminaron bien en la última ejecución
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     resume: bool,
     /// Responde que sí a los gates manuales cuando no hay terminal
     #[arg(long, alias = "yes")]

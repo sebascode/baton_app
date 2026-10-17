@@ -88,7 +88,7 @@ Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la 
 .B \-\-no\-tui
 Texto plano en vez de la pantalla.
 .TP
-.B \-\-dry\-run
+.BR \-n ", " \-\-dry\-run
 No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado). La única excepción son los pasos con un \fBdry_run\fR (el suyo o el de su tipo de plugin, ver \fBPLUGINS\fR): su comando de solo lectura sí se ejecuta, con las credenciales que mencione, y lo que muestra no se guarda en ningún log.
 .TP
 .B \-\-resume
@@ -145,7 +145,7 @@ Nombre del plan (por defecto, el del archivo).
 .BI \-\-target " destino"
 Destino de todos los pasos importados.
 .TP
-.B \-\-dry\-run
+.BR \-n ", " \-\-dry\-run
 Muestra el informe sin escribir nada.
 .SS baton rollback [plan]
 Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso que terminó (y del que falló, que pudo dejar cosas a medias), en orden inverso.
