@@ -8,6 +8,7 @@ baton \- orquesta instalaciones y despliegues definidos en carpetas
 .SH SINOPSIS
 .B baton
 .RI [ \-C " carpeta" ]
+.RB [ \-q ]
 .RI [ comando ]
 .RI [ opciones ]
 .br
@@ -68,6 +69,9 @@ Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAM
 .TP
 .BR \-C ", " \-\-dir " " \fIcarpeta\fR
 Carpeta del proyecto. Por defecto, la actual o la primera superior que sea un proyecto. Las rutas relativas que se den a un comando (por ejemplo el archivo de \fBimport\fR) se resuelven contra esta carpeta.
+.TP
+.BR \-q ", " \-\-quiet
+Calla los avisos de contexto que baton escribe por stderr (el proyecto, el plan o el ambiente que eligió solo). Los errores, los avisos que cambian lo que pasa y el resultado se muestran igual.
 .TP
 .BR \-h ", " \-\-help
 Muestra la ayuda de \fBbaton\fR o de un comando.

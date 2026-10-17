@@ -46,17 +46,13 @@ pub fn resolve(flag: Option<&str>, config: &Config) -> Result<Option<String>, St
     }
     match source {
         Source::Flag => {}
-        Source::Env => eprintln!(
-            "{}",
-            tr!("ambiente: {name} (de BATON_AMBIENTE)", name = name)
-        ),
-        Source::Config => eprintln!(
-            "{}",
-            tr!(
-                "ambiente: {name} (por defecto, de .baton/config.toml)",
-                name = name
-            )
-        ),
+        Source::Env => {
+            crate::style::note(&tr!("ambiente: {name} (de BATON_AMBIENTE)", name = name))
+        }
+        Source::Config => crate::style::note(&tr!(
+            "ambiente: {name} (por defecto, de .baton/config.toml)",
+            name = name
+        )),
     }
     Ok(Some(name))
 }

@@ -4,9 +4,25 @@
 //! para que se lea igual sobre fondos claros u oscuros.
 
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use baton_core::events::{RunOutcome, StepStatus};
+
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// `--quiet`: se callan los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`). Los errores,
+/// los avisos que cambian lo que pasa y el resultado se siguen mostrando.
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+/// Una línea de contexto por stderr, salvo con `--quiet`.
+pub fn note(text: &str) {
+    if !QUIET.load(Ordering::Relaxed) {
+        eprintln!("{text}");
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {

@@ -195,3 +195,27 @@ fn a_missing_plan_has_the_same_error_in_every_command() {
         );
     }
 }
+
+#[test]
+fn quiet_silences_context_notes_and_dry_run_has_a_short_flag() {
+    let tmp = project();
+    // Con un único plan, `run` dice cuál eligió (stderr); con -q no.
+    let o = baton(tmp.path(), &["run", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert!(
+        err(&o).contains("plan: app (es el único del proyecto)"),
+        "{}",
+        err(&o)
+    );
+
+    let o = baton(tmp.path(), &["-q", "run", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert!(!err(&o).contains("es el único del proyecto"), "{}", err(&o));
+
+    // También en el atajo `baton <plan>` y con los errores intactos.
+    let o = baton(tmp.path(), &["app", "-q", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let o = baton(tmp.path(), &["-q", "run", "nada"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("el plan 'nada' no existe"), "{}", err(&o));
+}

@@ -56,6 +56,10 @@ struct Cli {
     #[arg(short = 'C', long = "dir", global = true, value_name = "CARPETA")]
     dir: Option<PathBuf>,
 
+    /// Calla los avisos de contexto (proyecto, plan y ambiente elegidos); los errores se muestran
+    #[arg(short = 'q', long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -422,10 +426,10 @@ struct RunArgs {
     #[arg(long)]
     no_tui: bool,
     /// No ejecuta nada: muestra lo que haría
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     dry_run: bool,
     /// Salta los pasos que terminaron bien en la última ejecución
-    #[arg(short = 'n', long)]
+    #[arg(long)]
     resume: bool,
     /// Responde que sí a los gates manuales cuando no hay terminal
     #[arg(long, alias = "yes")]
@@ -446,6 +450,9 @@ struct RunArgs {
 #[derive(Parser)]
 #[command(name = "baton", no_binary_name = false)]
 struct ExternalRun {
+    /// Calla los avisos de contexto
+    #[arg(short = 'q', long)]
+    quiet: bool,
     #[command(flatten)]
     args: RunArgs,
 }
@@ -539,6 +546,7 @@ fn main() -> ExitCode {
         return askpass(&keys.to_string_lossy());
     }
     let cli = Cli::parse();
+    style::set_quiet(cli.quiet);
     // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
     baton_core::i18n::set(baton_store::global::language(
         &cli.dir
@@ -892,6 +900,9 @@ fn main() -> ExitCode {
             let parsed =
                 ExternalRun::try_parse_from(std::iter::once(OsString::from("baton")).chain(args))
                     .unwrap_or_else(|e| e.exit());
+            if parsed.quiet {
+                style::set_quiet(true);
+            }
             let (plan, flags) = parsed.args.into();
             match pick::resolve(&project, plan, "run", "ejecutar") {
                 Ok(plan) => run::run(&project, &plan, flags),
@@ -969,11 +980,11 @@ fn open_project(start: &Path) -> Option<Project> {
     let configured = baton_store::check_config(&project).value;
     proc::set_engine(baton_exec::local_engine(&configured.unwrap_or_default()));
     if let Some(rel) = project.subfolder_of(start) {
-        eprintln!(
+        style::note(&format!(
             "proyecto: {} (una carpeta superior; estás en {}/)",
             project.root.display(),
             rel.display()
-        );
+        ));
     }
     Some(project)
 }
