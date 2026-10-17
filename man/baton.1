@@ -8,6 +8,7 @@ baton \- orquesta instalaciones y despliegues definidos en carpetas
 .SH SINOPSIS
 .B baton
 .RI [ \-C " carpeta" ]
+.RB [ \-q ]
 .RI [ comando ]
 .RI [ opciones ]
 .br
@@ -69,6 +70,9 @@ Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAM
 .BR \-C ", " \-\-dir " " \fIcarpeta\fR
 Carpeta del proyecto. Por defecto, la actual o la primera superior que sea un proyecto. Las rutas relativas que se den a un comando (por ejemplo el archivo de \fBimport\fR) se resuelven contra esta carpeta.
 .TP
+.BR \-q ", " \-\-quiet
+Calla los avisos de contexto que baton escribe por stderr (el proyecto, el plan o el ambiente que eligió solo). Los errores, los avisos que cambian lo que pasa y el resultado se muestran igual.
+.TP
 .BR \-h ", " \-\-help
 Muestra la ayuda de \fBbaton\fR o de un comando.
 .TP
@@ -88,7 +92,7 @@ Ejecuta un plan directo, sin pasar por la vista previa. Con terminal muestra la 
 .B \-\-no\-tui
 Texto plano en vez de la pantalla.
 .TP
-.B \-\-dry\-run
+.BR \-n ", " \-\-dry\-run
 No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.baton/\fR, no toca \fI.gitignore\fR, no escribe log ni estado). La única excepción son los pasos con un \fBdry_run\fR (el suyo o el de su tipo de plugin, ver \fBPLUGINS\fR): su comando de solo lectura sí se ejecuta, con las credenciales que mencione, y lo que muestra no se guarda en ningún log.
 .TP
 .B \-\-resume
@@ -145,7 +149,7 @@ Nombre del plan (por defecto, el del archivo).
 .BI \-\-target " destino"
 Destino de todos los pasos importados.
 .TP
-.B \-\-dry\-run
+.BR \-n ", " \-\-dry\-run
 Muestra el informe sin escribir nada.
 .SS baton rollback [plan]
 Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso que terminó (y del que falló, que pudo dejar cosas a medias), en orden inverso.

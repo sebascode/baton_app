@@ -4,6 +4,7 @@
 //! ofrece una lista numerada; sin terminal se falla listándolos. Nunca se deja al usuario
 //! adivinando cómo se llama.
 
+use crate::style;
 use baton_core::tr;
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
@@ -46,10 +47,7 @@ pub fn resolve(
             Err(ExitCode::from(EXIT_USAGE))
         }
         [only] => {
-            eprintln!(
-                "{}",
-                tr!("plan: {only} (es el único del proyecto)", only = only)
-            );
+            style::note(&tr!("plan: {only} (es el único del proyecto)", only = only));
             Ok(only.clone())
         }
         many if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() => {

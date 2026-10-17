@@ -17,3 +17,71 @@ CLAUDE.md
 # imágenes de diseño: solo locales
 /docs/design/
 /docs/design_2/
+
+# anàlisis de grafos de rendimientos en codigo:solo locales
+graphify-out/
+
+# --- Rust / Cargo ---
+# (Cargo.lock se versiona: baton es un binario)
+**/target/
+**/*.rs.bk
+*.pdb
+# salidas de herramientas de cobertura y perfilado
+*.profraw
+*.profdata
+/coverage/
+/tarpaulin-report.html
+cobertura.xml
+lcov.info
+flamegraph.svg
+perf.data
+perf.data.old
+callgrind.out.*
+# pruebas de snapshot (insta): pendientes de revisar
+*.snap.new
+*.pending-snap
+# fuzzing y mutación
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+mutants.out/
+mutants.out.old/
+
+# --- Artefactos de empaquetado y release ---
+/dist/
+/pkg/
+*.deb
+*.rpm
+*.tar.gz
+*.tgz
+*.sha256
+
+# --- Estado local de baton (nunca sale de la máquina) ---
+.baton/
+*.env
+!.env.example
+
+# --- Secretos y llaves ---
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# --- Editores y sistema operativo ---
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.direnv/
+.envrc
+
+# --- Temporales y registros ---
+*.log
+*.tmp
+*.orig
+*.rej
+.cache/
