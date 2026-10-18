@@ -272,3 +272,28 @@ fn overview_last_and_history_talk_english_too() {
     );
     assert!(!t.contains("siguiente") && !t.contains("orquesta"), "{t}");
 }
+
+#[test]
+fn import_report_talks_english_too() {
+    let fx = Fx::new();
+    let wf = fx.root.join("proj/ci.yml");
+    fs::write(
+        &wf,
+        "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+    )
+    .unwrap();
+    let o = fx.run(
+        Some("en"),
+        &["import", "ci.yml", "--from", "github", "--dry-run"],
+    );
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(t.contains("imported from"), "{t}");
+    assert!(t.contains("dry run: nothing is written"), "{t}");
+    assert!(t.contains("step(s)") && t.contains("active"), "{t}");
+    assert!(!t.contains("importado") && !t.contains("simulacro"), "{t}");
+
+    let o = fx.run(Some("en"), &["import", "nope.yml"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("error: could not read"), "{}", err(&o));
+}

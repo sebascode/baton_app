@@ -50,7 +50,10 @@ fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
     let latest = latest_version()?;
     match latest.cmp(&current) {
         Ordering::Equal => {
-            println!("{}", tr!("baton {current} es la última versión", current = current));
+            println!(
+                "{}",
+                tr!("baton {current} es la última versión", current = current)
+            );
             return Ok(ExitCode::SUCCESS);
         }
         Ordering::Less => {
@@ -111,10 +114,14 @@ fn refuse_if_managed(kind: InstallKind) -> Option<ExitCode> {
             tr!("este baton se instaló con Homebrew: actualiza con `brew upgrade baton`")
         }
         InstallKind::Package => {
-            tr!("este baton lo instaló un paquete (.deb o .rpm) y lo gestiona el sistema: baja el paquete de la versión nueva desde https://github.com/sebascode/baton_app/releases/latest")
+            tr!(
+                "este baton lo instaló un paquete (.deb o .rpm) y lo gestiona el sistema: baja el paquete de la versión nueva desde https://github.com/sebascode/baton_app/releases/latest"
+            )
         }
         InstallKind::Development => {
-            tr!("este baton es un build de desarrollo (target/): vuelve a compilarlo o usa scripts/install.sh")
+            tr!(
+                "este baton es un build de desarrollo (target/): vuelve a compilarlo o usa scripts/install.sh"
+            )
         }
     };
     eprintln!("{reason}");
@@ -138,16 +145,28 @@ fn latest_version() -> Result<Version, String> {
         &update::latest_url(REPO),
     ])?;
     let url = String::from_utf8_lossy(&out).into_owned();
-    let tag = update::tag_from_redirect(&url).ok_or_else(|| tr!("no hay ningún release publicado todavía"))?;
-    Version::parse(tag)
-        .ok_or_else(|| tr!("el último release tiene un tag que no es vX.Y.Z: {tag}", tag = tag))
+    let tag = update::tag_from_redirect(&url)
+        .ok_or_else(|| tr!("no hay ningún release publicado todavía"))?;
+    Version::parse(tag).ok_or_else(|| {
+        tr!(
+            "el último release tiene un tag que no es vX.Y.Z: {tag}",
+            tag = tag
+        )
+    })
 }
 
 fn install(exe: &Path, version: &Version) -> Result<(), String> {
     let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-    let platform = update::platform(os, arch)
-        .ok_or_else(|| tr!("no hay binarios publicados para {os} {arch}", os = os, arch = arch))?;
-    let dir = exe.parent().ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
+    let platform = update::platform(os, arch).ok_or_else(|| {
+        tr!(
+            "no hay binarios publicados para {os} {arch}",
+            os = os,
+            arch = arch
+        )
+    })?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
     // Junto al ejecutable: así el reemplazo final es un `rename` dentro del mismo sistema de
     // archivos (atómico, y funciona aunque baton esté corriendo).
     let work = Workdir::create(dir)?;
@@ -199,12 +218,13 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
     let prev = dir.join("baton.prev");
     let _ = fs::remove_file(&prev);
     fs::copy(exe, &prev).map_err(|e| tr!("no se pudo guardar la versión actual: {e}", e = e))?;
-    fs::rename(&new_bin, exe)
-        .map_err(|e| tr!(
+    fs::rename(&new_bin, exe).map_err(|e| {
+        tr!(
             "no se pudo reemplazar {path}: {e}",
             path = exe.display(),
             e = e
-        ))?;
+        )
+    })?;
 
     update_man(&work.path.join("baton.1"));
     Ok(())
@@ -231,7 +251,9 @@ fn check_runs(bin: &Path, version: &Version) -> Result<(), String> {
 
 /// Vuelve a la versión que había antes de la última actualización.
 fn rollback(exe: &Path) -> Result<(), String> {
-    let dir = exe.parent().ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
     let prev = dir.join("baton.prev");
     if !prev.is_file() {
         return Err(tr!(
@@ -249,7 +271,10 @@ fn rollback(exe: &Path) -> Result<(), String> {
     }
     println!(
         "{}",
-        tr!("versión anterior restaurada en {path}", path = exe.display())
+        tr!(
+            "versión anterior restaurada en {path}",
+            path = exe.display()
+        )
     );
     Ok(())
 }
