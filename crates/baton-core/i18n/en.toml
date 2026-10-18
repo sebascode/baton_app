@@ -1327,3 +1327,18 @@
 "| Servicio | Compose | Destino | Paso |\n|---|---|---|---|\n" = "| Service | Compose | Target | Step |\n|---|---|---|---|\n"
 "| Variable | Para qué |\n|---|---|\n" = "| Variable | What for |\n|---|---|\n"
 "últimas líneas del log (con --seguir, en vivo)" = "last log lines (with --seguir, live)"
+"ambiente {name}" = "environment {name}"
+"aviso: la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)" = "warning: the last run of '{plan}' was in the environment '{before}' and {what} uses '{now}' (--ambiente picks another)"
+"este --resume" = "this --resume"
+"este rollback" = "this rollback"
+"ninguno" = "none"
+
+" Ambiente " = " Environment "
+"ambiente" = "environment"
+"ambiente: {name}" = "environment: {name}"
+"ese nombre de ambiente no es válido" = "that environment name is not valid"
+"hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de ambiente" = "there are unsaved changes in the editor: save them (ctrl s) before changing the environment"
+"sin ambiente" = "no environment"
+"↑↓ · enter elegir · esc" = "↑↓ · enter choose · esc"
+
+"elegir el ambiente (solo esta sesión)" = "pick the environment (this session only)"

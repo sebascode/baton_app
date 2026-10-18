@@ -188,6 +188,8 @@ pub struct HistoryEntry {
     pub steps: Vec<HistoryStep>,
     /// ¿Se guardó un log de esta ejecución? (un dry-run no lo tiene).
     pub has_log: bool,
+    /// El ambiente con que corrió, si se eligió uno.
+    pub ambiente: Option<String>,
 }
 
 /// Cómo terminó la última ejecución, para la franja de estado de la vista del plan.
@@ -202,6 +204,8 @@ pub struct LastRunBanner {
     pub failed_step: Option<String>,
     /// ¿Hay pasos ya hechos que se pueden saltar al reanudar?
     pub can_resume: bool,
+    /// El ambiente con que corrió, si se eligió uno.
+    pub ambiente: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

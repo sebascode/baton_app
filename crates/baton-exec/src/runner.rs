@@ -1782,6 +1782,7 @@ async fn run(
             })
             .collect(),
         log_path: (!opts.dry_run).then(|| project.display_path(&log_path)),
+        ambiente: opts.ambiente.clone(),
     };
     // En un rollback se conserva el registro de la ejecución que se deshace.
     if rollback_mode && let Some(prev) = state.last_run(&plan.name) {

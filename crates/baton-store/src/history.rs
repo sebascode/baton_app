@@ -110,6 +110,7 @@ pub fn entries(state: &State, plan: &Plan, now: DateTime<FixedOffset>) -> Vec<Hi
             duration: duration(run),
             steps: steps(run, plan),
             has_log: run.log_path.is_some(),
+            ambiente: run.ambiente.clone(),
         })
         .collect()
 }
@@ -194,6 +195,7 @@ pub fn banner(state: &State, plan: &Plan, now: DateTime<FixedOffset>) -> Option<
         ago: ago(run.finished_at.as_deref().unwrap_or(&run.started_at), now),
         failed_step: failed,
         can_resume: done > 0 && pending > 0,
+        ambiente: run.ambiente.clone(),
     })
 }
 
@@ -234,6 +236,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect::<BTreeMap<_, _>>(),
             log_path: Some(".baton/logs/p.log".into()),
+            ambiente: None,
         }
     }
 

@@ -65,6 +65,7 @@ pub fn history() -> Vec<HistoryEntry> {
                 step("Levantar servicios", StepStatus::Pending, 0, 0),
             ],
             has_log: true,
+            ambiente: None,
         },
         HistoryEntry {
             id: "2026-10-01-1750".into(),
@@ -78,6 +79,7 @@ pub fn history() -> Vec<HistoryEntry> {
                 step("Levantar servicios", StepStatus::Done, 20, 0),
             ],
             has_log: true,
+            ambiente: None,
         },
         HistoryEntry {
             id: "2026-09-30-1103".into(),
@@ -90,6 +92,7 @@ pub fn history() -> Vec<HistoryEntry> {
                 step("Build imágenes", StepStatus::Skipped, 0, 0),
             ],
             has_log: true,
+            ambiente: None,
         },
     ]
 }
@@ -183,6 +186,9 @@ pub fn preview() -> PreviewState {
         notice: Vec::new(),
         plans: Vec::new(),
         switcher: None,
+        ambientes: Vec::new(),
+        ambiente: None,
+        ambiente_picker: None,
         prompt: None,
         last_run: None,
         filter: String::new(),

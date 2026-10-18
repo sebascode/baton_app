@@ -56,6 +56,37 @@ fn load(project: &Project, plan_name: &str) -> Result<(Config, Plan), ExitCode> 
     }
 }
 
+/// Avisa si la última ejecución del plan corrió con otro ambiente que el de ahora. Retomar
+/// (`--resume`) o deshacer (`rollback`) con otro ambiente es casi siempre un descuido: el estado
+/// que se salta o se deshace es el de aquel ambiente. Solo avisa; el ambiente nunca se hereda de
+/// la ejecución anterior.
+fn warn_if_other_ambiente(
+    project: &Project,
+    plan_name: &str,
+    current: Option<&str>,
+    what: fn() -> String,
+) {
+    let state = baton_store::state::State::load(project).unwrap_or_default();
+    let Some(last) = state.last_run(plan_name) else {
+        return;
+    };
+    let before = last.ambiente.as_deref();
+    if before == current {
+        return;
+    }
+    let none = || tr!("ninguno");
+    eprintln!(
+        "{}",
+        tr!(
+            "aviso: la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)",
+            plan = plan_name,
+            before = before.map_or_else(none, str::to_string),
+            what = what(),
+            now = current.map_or_else(none, str::to_string)
+        )
+    );
+}
+
 fn exit_for(outcome: RunOutcome) -> ExitCode {
     match outcome {
         RunOutcome::Completed | RunOutcome::CompletedWithWarnings => ExitCode::SUCCESS,
@@ -81,6 +112,12 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
             return ExitCode::from(EXIT_USAGE);
         }
     };
+
+    if flags.resume {
+        warn_if_other_ambiente(project, plan_name, flags.ambiente.as_deref(), || {
+            tr!("este --resume")
+        });
+    }
 
     if wants_tui(&flags) {
         let mut preview = PreviewState::from_plan(&plan);
@@ -433,6 +470,9 @@ pub fn rollback(project: &Project, plan_name: &str, ambiente: Option<&str>) -> E
             return ExitCode::from(EXIT_USAGE);
         }
     };
+    warn_if_other_ambiente(project, plan_name, ambiente.as_deref(), || {
+        tr!("este rollback")
+    });
     let mut options = RunOptions::for_plan(&plan);
     options.ambiente = ambiente;
     options.mode = Mode::Rollback;
