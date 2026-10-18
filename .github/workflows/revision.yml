@@ -26,7 +26,9 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           fail=0
-          for c in $(git rev-list --no-merges "$BASE..$HEAD"); do
+          # Los commits que ya están en main se revisaron al publicarse (y un squash de GitHub
+          # no lleva firma): el back-merge de un release no debe fallar por ellos.
+          for c in $(git rev-list --no-merges "$BASE..$HEAD" ^origin/main); do
             if ! git show -s --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
               echo "::error::El commit $(git rev-parse --short "$c") no tiene Signed-off-by (usa git commit -s, o git rebase --signoff $BASE)"
               fail=1
