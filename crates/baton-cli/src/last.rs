@@ -151,6 +151,9 @@ fn render(v: &View, style: &Style) -> String {
     if let Some(d) = v.entry.duration {
         facts.push(duration(d));
     }
+    if let Some(amb) = &b.ambiente {
+        facts.push(tr!("ambiente {name}", name = amb));
+    }
     line(&format!(
         "  {}  {}",
         step_bar(style, &statuses, 40),

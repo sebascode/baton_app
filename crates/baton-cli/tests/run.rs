@@ -1088,3 +1088,80 @@ fn each_ambiente_can_point_the_sqlite_credential_at_a_different_file() {
     );
     assert!(fx.root.join("qa.db").exists() && !fx.root.join("dev.db").exists());
 }
+
+#[test]
+fn a_run_records_its_ambiente_and_last_and_history_show_it() {
+    let fx = Fx::new(PLAN);
+    assert_eq!(
+        fx.baton(&["run", "instalar", "--ambiente", "qa"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let state = fs::read_to_string(fx.root.join(".baton/state.json")).unwrap();
+    assert!(state.contains("\"ambiente\": \"qa\""), "{state}");
+    let t = out(&fx.baton(&["last", "instalar"]));
+    assert!(t.contains("ambiente qa"), "{t}");
+    let t = out(&fx.baton(&["history", "instalar"]));
+    assert!(t.contains("ambiente qa"), "{t}");
+    let t = out(&fx.baton(&[]));
+    assert!(t.contains("ambiente qa"), "{t}");
+
+    // una ejecución sin ambiente no deja el campo, y no hereda el anterior
+    assert_eq!(fx.baton(&["run", "instalar"]).status.code(), Some(0));
+    let state = fs::read_to_string(fx.root.join(".baton/state.json")).unwrap();
+    let last = state.split("\"history\"").next().unwrap();
+    assert!(!last.contains("\"ambiente\""), "{last}");
+    assert!(!out(&fx.baton(&["last", "instalar"])).contains("ambiente"));
+}
+
+#[test]
+fn resume_and_rollback_warn_when_the_last_run_used_another_ambiente() {
+    let fx = Fx::new(PLAN);
+    fx.fail_on("probar");
+    assert_eq!(
+        fx.baton(&["run", "instalar", "--ambiente", "prod"])
+            .status
+            .code(),
+        Some(3)
+    );
+    fs::remove_file(fx.root.join("_fail")).unwrap();
+
+    // sin --ambiente: avisa y no hereda 'prod'
+    let o = fx.baton(&["run", "instalar", "--resume"]);
+    assert!(
+        err(&o).contains("fue en el ambiente 'prod' y este --resume usa 'ninguno'"),
+        "{}",
+        err(&o)
+    );
+    let state = fs::read_to_string(fx.root.join(".baton/state.json")).unwrap();
+    assert!(
+        !state
+            .split("\"history\"")
+            .next()
+            .unwrap()
+            .contains("\"prod\""),
+        "la ejecución nueva no hereda el ambiente: {state}"
+    );
+
+    // y el rollback con otro ambiente también avisa
+    let o = fx.baton(&["rollback", "instalar", "--ambiente", "qa"]);
+    assert!(
+        err(&o).contains("fue en el ambiente 'ninguno' y este rollback usa 'qa'"),
+        "{}",
+        err(&o)
+    );
+}
+
+#[test]
+fn no_warning_when_the_ambiente_is_the_same() {
+    let fx = Fx::new(PLAN);
+    assert_eq!(
+        fx.baton(&["run", "instalar", "--ambiente", "qa"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let o = fx.baton(&["rollback", "instalar", "--ambiente", "qa"]);
+    assert!(!err(&o).contains("fue en el ambiente"), "{}", err(&o));
+}

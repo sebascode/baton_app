@@ -640,11 +640,14 @@ impl PreviewState {
             RunOutcome::Failed => ("✗", theme::ERR),
         };
         let content = pad(area);
-        let when = if b.ago.is_empty() {
+        let mut when = if b.ago.is_empty() {
             String::new()
         } else {
             format!(" · {}", b.ago)
         };
+        if let Some(amb) = &b.ambiente {
+            when.push_str(&format!(" · {}", tr!("ambiente {name}", name = amb)));
+        }
         Line::from(vec![
             Span::styled(format!("{symbol} "), Style::new().fg(color)),
             Span::styled(tr!("Última ejecución: "), theme::secondary()),

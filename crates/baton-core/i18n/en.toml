@@ -1275,3 +1275,9 @@
 "el plugin '{name}' de esta máquina cambió desde que se instaló y no coincide con su registro: reinstálalo con baton plugin add --global <fuente>" = "the plugin '{name}' on this machine changed since it was installed and does not match its record: reinstall it with baton plugin add --global <source>"
 "el plugin '{name}' de esta máquina no lo instaló baton plugin add: instálalo con baton plugin add <fuente>" = "the plugin '{name}' on this machine was not installed by baton plugin add: install it with baton plugin add <source>"
 "se copia el plugin '{name}' que ya está instalado en esta máquina (no se descarga nada)" = "copying the plugin '{name}' that is already installed on this machine (nothing is downloaded)"
+
+"ambiente {name}" = "environment {name}"
+"aviso: la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)" = "warning: the last run of '{plan}' was in the environment '{before}' and {what} uses '{now}' (--ambiente picks another)"
+"este --resume" = "this --resume"
+"este rollback" = "this rollback"
+"ninguno" = "none"

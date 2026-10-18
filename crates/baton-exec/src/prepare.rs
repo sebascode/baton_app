@@ -1127,6 +1127,7 @@ mod tests {
                 ("cuatro".into(), rec(StepState::Done)), // sin rollback declarado
             ]),
             log_path: None,
+            ambiente: None,
         };
         let steps = prepare_rollback(&proj, &p, Some(&last)).unwrap();
         let ids: Vec<_> = steps.iter().map(|s| s.step.id.as_str()).collect();
