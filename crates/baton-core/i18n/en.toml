@@ -674,7 +674,7 @@
 "re-escanear antes de correr el gate" = "rescan before running the gate"
 "reanudar" = "resume"
 "reanudar la última ejecución" = "resume the last run"
-"recuperación · opcional" = "recovery · optional"
+"recuperación y prueba · opcional" = "recovery and testing · optional"
 "registro" = "registry"
 "reimagen (borrar la imagen, descargar y levantar)" = "reimage (delete the image, pull and start)"
 "reiniciar" = "restart"
@@ -1269,3 +1269,9 @@
 "{name} ({reason})" = "{name} ({reason})"
 "¿Continuar con {label} en {e}?" = "Continue with {label} in {e}?"
 "¿Continuar con {label}?" = "Continue with {label}?"
+
+"aviso: {path} está fuera del proyecto: su ruta absoluta solo existe en esta máquina, y quien clone el proyecto la verá registrada sin poder actualizarla" = "warning: {path} is outside the project: its absolute path only exists on this machine, and whoever clones the project will see it registered without being able to update it"
+"el manifiesto instalado no es válido" = "the installed manifest is not valid"
+"el plugin '{name}' de esta máquina cambió desde que se instaló y no coincide con su registro: reinstálalo con baton plugin add --global <fuente>" = "the plugin '{name}' on this machine changed since it was installed and does not match its record: reinstall it with baton plugin add --global <source>"
+"el plugin '{name}' de esta máquina no lo instaló baton plugin add: instálalo con baton plugin add <fuente>" = "the plugin '{name}' on this machine was not installed by baton plugin add: install it with baton plugin add <source>"
+"se copia el plugin '{name}' que ya está instalado en esta máquina (no se descarga nada)" = "copying the plugin '{name}' that is already installed on this machine (nothing is downloaded)"

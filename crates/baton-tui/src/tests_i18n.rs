@@ -107,7 +107,11 @@ fn the_screens_of_the_demo_are_in_english() {
             (
                 Screen::Editor,
                 "editor",
-                vec!["Edit step", "[ctrl s] save", "recovery · optional"],
+                vec![
+                    "Edit step",
+                    "[ctrl s] save",
+                    "recovery and testing · optional",
+                ],
             ),
             (
                 Screen::Gate,

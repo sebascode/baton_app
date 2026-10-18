@@ -86,6 +86,11 @@ lo tiene, y `plugins.lock` fija su commit y su sha256. Para tenerlo en toda tu m
 a un proyecto, usa `baton plugin add --global ./make-build` (fuera de un proyecto, `--global` es
 obligatorio). Si el proyecto y la máquina tienen un plugin del mismo tipo, gana el del proyecto.
 
+Si ya lo tienes en la máquina y quieres llevarlo a un proyecto, `baton plugin add make-build` (el
+nombre, sin ruta) lo copia desde ahí sin volver a bajarlo, con el mismo origen y sha256; se niega si
+cambió desde que se instaló. Una carpeta local dentro del proyecto queda registrada con su ruta
+relativa a la raíz, para que quien clone el proyecto vea la misma.
+
 Te muestra lo que va a ejecutar y pregunta. Necesita una terminal. Para ver los instalados, en los
 dos ámbitos: `baton plugin list`.
 

@@ -66,7 +66,7 @@ fn editor_of(app: &mut App) -> &mut EditorState {
 // ------------------------------------------------------------- ida y vuelta
 
 #[test]
-fn a_dry_run_written_in_the_plan_survives_the_editor_even_though_it_has_no_field() {
+fn a_dry_run_written_in_the_plan_survives_the_editor() {
     let plan = Plan::parse(
         "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
          command = \"make\"\ndry_run = \"make -n\"\n",
@@ -879,4 +879,33 @@ fn a_new_step_in_a_multi_db_plan_can_pick_its_database() {
     last.form.field_mut("origen").unwrap().set_text("db/*.sql");
     let steps = ed.to_steps().unwrap();
     assert_eq!(steps.last().unwrap().database.as_deref(), Some("app"));
+}
+
+#[test]
+fn the_dry_run_of_a_step_has_a_field_that_edits_and_clears_it() {
+    let plan = Plan::parse(
+        "name = \"x\"\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\n\
+         command = \"make\"\ndry_run = \"make -n\"\n",
+    )
+    .unwrap();
+    let mut e = editor_for(&plan);
+    let field = |e: &mut crate::editor::EditorState| {
+        e.steps[0]
+            .form
+            .field_mut("dry-run")
+            .expect("el formulario tiene el campo dry-run")
+            .set_text("")
+    };
+    assert_eq!(e.to_steps().unwrap()[0].dry_run.as_deref(), Some("make -n"));
+    e.steps[0]
+        .form
+        .field_mut("dry-run")
+        .unwrap()
+        .set_text("make -n all");
+    assert_eq!(
+        e.to_steps().unwrap()[0].dry_run.as_deref(),
+        Some("make -n all")
+    );
+    field(&mut e);
+    assert_eq!(e.to_steps().unwrap()[0].dry_run, None);
 }
