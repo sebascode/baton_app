@@ -17,10 +17,10 @@ expression: "screen(&app, 100, 24)"
 │                  │ │   3 activos · 1 nuevo sin activar                                         │ │
 │                  │ └───────────────────────────────────────────────────────────────────────────┘ │
 │                  ├───────────────────────────────────────────────────────────────────────────────┤
-│                  │ recuperación · opcional                                                       │
+│                  │ recuperación y prueba · opcional                                              │
 │                  │ rollback    [ docker compose down                                           ] │
 │                  │ backup      ( ) antes de este paso                                            │
-│                  │                                                                               │
+│                  │ dry-run     [                                                               ] │
 │                  │                                                                               │
 ├──────────────────┴───────────────────────────────────────────────────────────────────────────────┤
 │ [tab] campo  [ctrl g] configurar gate  [ctrl t] probar paso  [ctrl d] duplicar                   │

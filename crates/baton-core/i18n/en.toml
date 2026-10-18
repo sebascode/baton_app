@@ -674,7 +674,7 @@
 "re-escanear antes de correr el gate" = "rescan before running the gate"
 "reanudar" = "resume"
 "reanudar la última ejecución" = "resume the last run"
-"recuperación · opcional" = "recovery · optional"
+"recuperación y prueba · opcional" = "recovery and testing · optional"
 "registro" = "registry"
 "reimagen (borrar la imagen, descargar y levantar)" = "reimage (delete the image, pull and start)"
 "reiniciar" = "restart"

@@ -40,8 +40,10 @@ const F_RETRIES: usize = 7;
 const F_GATE: usize = 8;
 const F_ROLLBACK: usize = 9;
 const F_BACKUP: usize = 10;
+/// El comando de solo lectura que corre `--dry-run` (vacío: el del tipo, si lo tiene).
+const F_DRY_RUN: usize = 11;
 /// Solo existe si el plan declara varias credenciales `db`: cuál usa un paso `sql`.
-const F_DATABASE: usize = 11;
+const F_DATABASE: usize = 12;
 /// Lo que muestra el selector de base cuando el paso no elige ninguna.
 const NO_DATABASE: &str = tk!("(ninguna)");
 
@@ -61,6 +63,8 @@ pub struct StepSpec {
     pub gate: Option<GateState>,
     pub rollback: String,
     pub backup_before: bool,
+    /// Comando de solo lectura de `--dry-run` (vacío: ninguno propio).
+    pub dry_run: String,
     /// Credencial `db` que elige el paso (vacío: ninguna).
     pub database: String,
     /// Id del paso en el plan (vacío en un paso nuevo: se genera al guardar).
@@ -106,6 +110,7 @@ impl StepDraft {
             Field::card(tk!("gate para avanzar")),
             Field::text(tk!("rollback"), &spec.rollback),
             Field::toggle(tk!("backup"), tk!("antes de este paso"), spec.backup_before),
+            Field::text(tk!("dry-run"), &spec.dry_run),
         ];
         if !db_ids.is_empty() {
             let mut options: Vec<&str> = vec![NO_DATABASE];
@@ -318,6 +323,7 @@ impl EditorState {
                     retries: s.retries.to_string(),
                     rollback: s.rollback.clone().unwrap_or_default(),
                     backup_before: s.backup_before,
+                    dry_run: s.dry_run.clone().unwrap_or_default(),
                     database: s.database.clone().unwrap_or_default(),
                     step_id: s.id.clone(),
                     origin: Some(s.clone()),
@@ -488,8 +494,7 @@ impl EditorState {
                 Some(v) => (v != NO_DATABASE && !v.is_empty()).then_some(v),
                 None => origin.and_then(|o| o.database.clone()),
             },
-            // no tiene campo en el formulario (se escribe en el plan): se conserva del paso original
-            dry_run: origin.and_then(|o| o.dry_run.clone()),
+            dry_run: opt(f(F_DRY_RUN)),
         })
     }
 
@@ -1146,7 +1151,7 @@ impl EditorState {
                 theme::border(),
             );
             Line::from(Span::styled(
-                tr!("recuperación · opcional"),
+                tr!("recuperación y prueba · opcional"),
                 theme::secondary(),
             ))
             .render(Rect::new(content.x, sep2 + 1, content.width, 1), buf);
