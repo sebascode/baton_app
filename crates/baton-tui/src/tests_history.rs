@@ -34,6 +34,7 @@ fn banner(outcome: RunOutcome, detail: &str, can_resume: bool) -> LastRunBanner 
         ago: "hace 3 min".into(),
         failed_step: None,
         can_resume,
+        ambiente: None,
     }
 }
 

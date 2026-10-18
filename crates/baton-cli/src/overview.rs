@@ -236,6 +236,9 @@ fn plan_block(line: &mut impl FnMut(&str), style: &Style, v: &PlanView, state: &
     if let Some(d) = run.duration {
         headline.push(duration(d));
     }
+    if let Some(amb) = &banner.ambiente {
+        headline.push(tr!("ambiente {name}", name = amb));
+    }
     line(&format!(
         "      {}  {}",
         step_bar(style, &statuses, 40),

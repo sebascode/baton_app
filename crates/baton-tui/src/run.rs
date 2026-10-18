@@ -398,6 +398,7 @@ impl RunState {
             ago: tr!("ahora"),
             failed_step: stopped.map(|r| r.info.id.clone()),
             can_resume: done > 0 && left > 0,
+            ambiente: None,
         })
     }
 

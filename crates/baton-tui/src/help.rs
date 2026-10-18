@@ -49,6 +49,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
                 ("m", tk!("mantención (logs, reinicios, imágenes)")),
                 ("v", tk!("pipeline")),
                 ("p", tk!("cambiar de plan")),
+                ("a", tk!("elegir el ambiente (solo esta sesión)")),
                 ("q", tk!("salir de baton")),
             ],
         }),

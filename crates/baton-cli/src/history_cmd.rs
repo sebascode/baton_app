@@ -129,8 +129,11 @@ fn render(
             (RunOutcome::Aborted, None) => tr!("abortada"),
         };
         let took = e.duration.map_or("-".to_string(), duration);
+        let amb = e.ambiente.as_ref().map_or_else(String::new, |a| {
+            format!("  {}", style.dim(&tr!("ambiente {name}", name = a)))
+        });
         line(&format!(
-            "  {}  {}  {:<ago_w$}  {took:>dur_w$}  {}  {}",
+            "  {}  {}  {:<ago_w$}  {took:>dur_w$}  {}  {}{amb}",
             style.paint(tone, mark),
             e.started,
             e.ago,
