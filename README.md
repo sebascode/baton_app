@@ -190,6 +190,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-15 | **0.10.0.** Plugins por proyecto o globales, como npm: `baton plugin add` instala en el proyecto (`baton/plugins/`, versionado con él) y `--global` en la máquina; el del proyecto gana si hay uno del mismo tipo. **Cambio:** antes `add` instalaba siempre en la máquina, ahora usa `-g` para eso. |
 | 2026-10-15 | **0.10.2.** Idiomas: baton habla español (por defecto) e inglés, con `BATON_LANG` o `ui.language` (`baton settings set ui.language en`). `baton docs [plan]` genera la documentación de un plan en markdown con diagramas mermaid. Preset `bitwarden` para los proveedores de secretos. El CI no repite las pruebas de un contenido que ya pasó. |
 | 2026-10-15 | **0.10.3.** Los scripts `.sh` ya no se cargan como pasos al hacer `baton init`: quedan en la mantención (`baton ops`, `--script`, tecla `m`), elegidos por carpeta (`a > b > c`) y siempre con confirmación. `baton init` ofrece iniciar git (o crear el proyecto en la raíz del repositorio) y siempre agrega `.baton/` al `.gitignore`. |
+| 2026-10-17 | **0.10.4.** Opción global `--quiet` / `-q` para callar los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`), alias `-n` para `--dry-run`, `NO_COLOR` en la TUI y un solo formato para errores de plan inexistente. |
 
 ## Desarrollo
 
