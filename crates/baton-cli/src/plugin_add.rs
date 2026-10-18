@@ -413,16 +413,121 @@ impl Ask for Terminal {
     }
 }
 
-/// `baton plugin add <fuente> [--global]`.
+/// Un nombre suelto (`terraform`), sin ruta ni origen: puede ser un plugin ya instalado en la
+/// máquina que se quiere traer al proyecto.
+fn is_bare_name(text: &str) -> bool {
+    baton_core::kind::is_valid_name(text.trim())
+}
+
+/// El plugin `name` de la carpeta global, tal como lo registró `plugin add`, sin tocar la red.
+/// Falla si no lo instaló baton o si su manifiesto ya no coincide con el registro: lo que se copia
+/// al proyecto es exactamente lo que alguien revisó al instalarlo.
+pub fn from_global(global_dir: &Path, name: &str) -> Result<Fetched, String> {
+    let lock = read_lock(global_dir)?;
+    let Some(entry) = lock.plugins.get(name) else {
+        return Err(tr!(
+            "el plugin '{name}' de esta máquina no lo instaló baton plugin add: instálalo con baton plugin add <fuente>",
+            name = name
+        ));
+    };
+    let text = read_manifest_text(&global_dir.join(name).join(MANIFEST_FILE))
+        .map_err(|d| d.to_string())?;
+    let sha256 = sha256_hex(text.as_bytes());
+    if sha256 != entry.sha256 {
+        return Err(tr!(
+            "el plugin '{name}' de esta máquina cambió desde que se instaló y no coincide con su registro: reinstálalo con baton plugin add --global <fuente>",
+            name = name
+        ));
+    }
+    let checked = check_manifest_text(&global_dir.join(name).join(MANIFEST_FILE), &text);
+    let valid = checked.is_valid();
+    let Some(manifest) = checked.value.filter(|_| valid) else {
+        return Err(tr!("el manifiesto instalado no es válido"));
+    };
+    let source = match entry.source.strip_prefix("local:") {
+        Some(path) => Source::Local(PathBuf::from(path)),
+        None => Source::parse(&format!(
+            "{}@{}",
+            entry.source,
+            entry
+                .git_ref
+                .as_deref()
+                .or(entry.commit.as_deref())
+                .unwrap_or("HEAD")
+        ))?,
+    };
+    let commit = entry.commit.as_ref().map(|sha| CommitInfo {
+        sha: sha.clone(),
+        verified: true,
+        reason: entry.verification.clone(),
+    });
+    Ok(Fetched {
+        source,
+        commit,
+        text,
+        manifest,
+        sha256,
+    })
+}
+
+/// Una carpeta local dentro del proyecto se registra con su ruta relativa a la raíz: el registro
+/// se versiona y una ruta absoluta no existe en la máquina de quien clone el proyecto. Fuera del
+/// proyecto no hay ruta portable; se avisa.
+pub fn portable(mut f: Fetched, root: Option<&Path>) -> Fetched {
+    let (Source::Local(path), Some(root)) = (&f.source, root) else {
+        return f;
+    };
+    match path.strip_prefix(root) {
+        Ok(rel) => f.source = Source::Local(rel.to_path_buf()),
+        Err(_) => eprintln!(
+            "{}",
+            tr!(
+                "aviso: {path} está fuera del proyecto: su ruta absoluta solo existe en esta máquina, y quien clone el proyecto la verá registrada sin poder actualizarla",
+                path = path.display()
+            )
+        ),
+    }
+    f
+}
+
+/// `baton plugin add <fuente> [--global]`. Un nombre suelto que ya está instalado en la máquina
+/// se copia al proyecto sin volver a bajarlo.
 pub fn add(source_text: &str, start: &Path, global: bool) -> ExitCode {
     let dir = match target_dir(global, start) {
         Ok(d) => d,
         Err(code) => return code,
     };
+    let text = source_text.trim();
+    if !global
+        && is_bare_name(text)
+        && !Path::new(text).exists()
+        && let Some(gdir) = baton_store::plugins::plugins_dir()
+        && gdir.join(text).is_dir()
+    {
+        println!(
+            "{}",
+            tr!(
+                "se copia el plugin '{name}' que ya está instalado en esta máquina (no se descarga nada)",
+                name = text
+            )
+        );
+        let name = text.to_string();
+        return ExitCode::from(add_in(
+            &dir,
+            text,
+            &|_| from_global(&gdir, &name),
+            &mut Terminal,
+            &mut std::io::stdout(),
+        ));
+    }
+    let root = (!global)
+        .then(|| baton_store::Project::discover(start))
+        .flatten()
+        .map(|p| std::fs::canonicalize(&p.root).unwrap_or(p.root));
     ExitCode::from(add_in(
         &dir,
         source_text,
-        &fetch,
+        &|s| fetch(s).map(|f| portable(f, root.as_deref())),
         &mut Terminal,
         &mut std::io::stdout(),
     ))
@@ -603,6 +708,13 @@ pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut
 
 /// El manifiesto con el que empieza quien escribe un plugin. Tiene que pasar `plugin validate`.
 pub fn template(name: &str) -> String {
+    match baton_core::i18n::lang() {
+        baton_core::i18n::Lang::En => template_en(name),
+        _ => template_es(name),
+    }
+}
+
+fn template_es(name: &str) -> String {
     format!(
         r#"# Plugin de baton: un tipo de paso nuevo, descrito con datos.
 # Revisa lo que hace con:  baton plugin validate .
@@ -631,6 +743,48 @@ dry_run = "echo planificando {{name}}"
 # El plan la declara con [[credentials]] (kind = "mi-nube", ref = "servers.env#PREFIJO"); si no la
 # declara, el comando usa lo que ya haya en el entorno. Un tipo de baton (docker, git...) se usa
 # sin `fields`, solo con `env`.
+# [[credentials]]
+# kind = "mi-nube"
+# fields = [
+#   {{ key = "TOKEN", secret = true }},
+#   {{ key = "REGION", optional = true }},
+# ]
+# [credentials.env]
+# MI_NUBE_TOKEN = "{{TOKEN}}"
+# MI_NUBE_REGION = "{{REGION}}"
+"#
+    )
+}
+
+fn template_en(name: &str) -> String {
+    format!(
+        r#"# baton plugin: a new step type, described with data.
+# Check what it does with:  baton plugin validate .
+api = 1
+name = "{name}"
+version = "0.1.0"
+description = "What this step type does"
+
+# Programs that must exist where the step runs (checked before running).
+requires = []
+
+[type]
+# true: the step source is a glob and the command runs once per file, in its folder.
+scanned = true
+# What `baton init` uses to suggest steps of this type (always disabled).
+detect = ["**/{name}.txt"]
+# The default command of the type ({{name}}, {{dir}}, {{file}}, {{ambiente}}...). A step can
+# declare its own.
+command = "echo running {{name}}"
+# With --dry-run it really runs: it must be READ-ONLY (plan, what-if, validate...).
+dry_run = "echo planning {{name}}"
+# Phrases that, if they appear in the dry_run output, ask for confirmation before running.
+# destructive = ["will be destroyed"]
+
+# Credentials: a new type (its fields) and the variables your tool expects them in.
+# The plan declares it with [[credentials]] (kind = "mi-nube", ref = "servers.env#PREFIX"); if it
+# does not, the command uses whatever is already in the environment. A baton type (docker, git...)
+# is used without `fields`, only with `env`.
 # [[credentials]]
 # kind = "mi-nube"
 # fields = [
@@ -794,6 +948,97 @@ mod tests {
         fn fetch(&self, source: &str) -> Result<Fetched, String> {
             fetch_with(self, &Source::parse(source).unwrap())
         }
+    }
+
+    // ------------------------------------------------- copiar un plugin global al proyecto
+
+    fn install_global(dir: &Path, name: &str) -> Fetched {
+        let h = FakeHttp::new(
+            &commit_json(true, "valid"),
+            &manifest_text(name, "echo hola"),
+        );
+        let f = h.fetch("github:o/r@v1").unwrap();
+        apply_install(dir, &f).unwrap();
+        f
+    }
+
+    #[test]
+    fn a_global_plugin_is_copied_to_the_project_with_its_record_and_without_the_network() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (global, project) = (tmp.path().join("g"), tmp.path().join("p"));
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let original = install_global(&global, "t-copy-ok");
+
+        let copied = from_global(&global, "t-copy-ok").unwrap();
+        assert_eq!(copied.sha256, original.sha256);
+        assert_eq!(copied.source, original.source);
+        assert_eq!(copied.commit, original.commit);
+        apply_install(&project, &copied).unwrap();
+
+        let lock = read_lock(&project).unwrap();
+        let (a, b) = (
+            &read_lock(&global).unwrap().plugins["t-copy-ok"],
+            &lock.plugins["t-copy-ok"],
+        );
+        assert_eq!(
+            (&a.source, &a.git_ref, &a.commit),
+            (&b.source, &b.git_ref, &b.commit)
+        );
+        assert_eq!(a.sha256, b.sha256);
+        assert_eq!(
+            fs::read_to_string(project.join("t-copy-ok").join(MANIFEST_FILE)).unwrap(),
+            original.text
+        );
+    }
+
+    #[test]
+    fn a_global_plugin_that_changed_or_was_never_installed_by_baton_is_not_copied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let global = tmp.path().join("g");
+        fs::create_dir_all(&global).unwrap();
+        install_global(&global, "t-copy-bad");
+        fs::write(
+            global.join("t-copy-bad").join(MANIFEST_FILE),
+            manifest_text("t-copy-bad", "rm -rf /"),
+        )
+        .unwrap();
+        let e = from_global(&global, "t-copy-bad").unwrap_err();
+        assert!(e.contains("cambió desde que se instaló"), "{e}");
+
+        fs::create_dir_all(global.join("t-copy-hand")).unwrap();
+        fs::write(
+            global.join("t-copy-hand").join(MANIFEST_FILE),
+            manifest_text("t-copy-hand", "echo"),
+        )
+        .unwrap();
+        let e = from_global(&global, "t-copy-hand").unwrap_err();
+        assert!(e.contains("no lo instaló baton plugin add"), "{e}");
+    }
+
+    #[test]
+    fn a_local_source_inside_the_project_is_recorded_relative_to_its_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        let fetched = |p: PathBuf| Fetched {
+            source: Source::Local(p),
+            commit: None,
+            text: String::new(),
+            manifest: check_manifest_text(Path::new("m"), &manifest_text("t-rel", "x"))
+                .value
+                .unwrap(),
+            sha256: String::new(),
+        };
+        let inside = portable(fetched(root.join("tools/mi-plugin")), Some(&root));
+        assert_eq!(inside.source.label(), "local:tools/mi-plugin");
+        // sin proyecto (--global) o fuera de él no hay ruta relativa que dar
+        let global = portable(fetched(root.join("tools/mi-plugin")), None);
+        assert_eq!(
+            global.source.label(),
+            format!("local:{}/tools/mi-plugin", root.display())
+        );
+        let outside = portable(fetched(PathBuf::from("/otra/parte")), Some(&root));
+        assert_eq!(outside.source.label(), "local:/otra/parte");
     }
 
     // ---------------------------------------------------------------- traer de GitHub

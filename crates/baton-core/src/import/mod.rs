@@ -80,9 +80,17 @@ pub enum ImportError {
 impl fmt::Display for ImportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ImportError::Yaml(e) => write!(f, "el archivo no es un YAML válido: {e}"),
+            ImportError::Yaml(e) => write!(
+                f,
+                "{}",
+                crate::tr!("el archivo no es un YAML válido: {e}", e = e)
+            ),
             ImportError::Shape(e) => write!(f, "{e}"),
-            ImportError::Cycle(e) => write!(f, "dependencias circulares entre: {e}"),
+            ImportError::Cycle(e) => write!(
+                f,
+                "{}",
+                crate::tr!("dependencias circulares entre: {e}", e = e)
+            ),
         }
     }
 }
@@ -131,9 +139,9 @@ pub fn convert(platform: Platform, text: &str) -> Result<Imported, ImportError> 
     let mut doc: Value =
         serde_yaml_ng::from_str(text).map_err(|e| ImportError::Yaml(e.to_string()))?;
     if !doc.is_mapping() {
-        return Err(ImportError::Shape(
-            "el archivo debe ser un mapa YAML en su nivel superior".into(),
-        ));
+        return Err(ImportError::Shape(crate::tr!(
+            "el archivo debe ser un mapa YAML en su nivel superior"
+        )));
     }
     // `<<: *ancla` (GitLab lo usa mucho): se aplica antes de leer nada.
     doc.apply_merge()
@@ -252,9 +260,9 @@ impl Builder {
             self.note(
                 NoteLevel::Info,
                 &spec.at,
-                format!(
-                    "script detectado: paso script con origen {} (revisa el origen)",
-                    source.0[0]
+                crate::tr!(
+                    "script detectado: paso script con origen {a0} (revisa el origen)",
+                    a0 = source.0[0]
                 ),
             );
         }
@@ -262,9 +270,9 @@ impl Builder {
             self.note(
                 NoteLevel::Info,
                 &spec.at,
-                format!(
-                    "docker compose detectado: paso compose con origen {} (revisa el origen)",
-                    source.0[0]
+                crate::tr!(
+                    "docker compose detectado: paso compose con origen {a0} (revisa el origen)",
+                    a0 = source.0[0]
                 ),
             );
         }
@@ -272,7 +280,7 @@ impl Builder {
             self.note(
                 NoteLevel::Disabled,
                 &spec.at,
-                format!("{} ({reason})", spec.name),
+                crate::tr!("{name} ({reason})", name = spec.name, reason = reason),
             );
         }
         self.scan_predefined(command.as_deref().unwrap_or(""));
@@ -309,12 +317,12 @@ impl Builder {
         enabled: bool,
     ) -> Step {
         let message = match env {
-            Some(e) => format!("¿Continuar con {label} en {e}?"),
-            None => format!("¿Continuar con {label}?"),
+            Some(e) => crate::tr!("¿Continuar con {label} en {e}?", label = label, e = e),
+            None => crate::tr!("¿Continuar con {label}?", label = label),
         };
         let origin = match env {
             Some(e) => format!("Origen: {at} (environment {e})"),
-            None => format!("Origen: {at} (ejecución manual)"),
+            None => crate::tr!("Origen: {at} (ejecución manual)", at = at),
         };
         Step {
             id: self.unique_id(&format!("{label}-aprobacion")),
@@ -372,7 +380,10 @@ impl Builder {
             self.note(
                 NoteLevel::Info,
                 "variables",
-                format!("los comandos esperan estas variables en el entorno: {names}"),
+                crate::tr!(
+                    "los comandos esperan estas variables en el entorno: {names}",
+                    names = names
+                ),
             );
         }
         if !self.untranslated.is_empty() {
@@ -380,7 +391,10 @@ impl Builder {
             self.note(
                 NoteLevel::Warning,
                 "expresiones",
-                format!("quedaron sin traducir (revisa los comandos): {names}"),
+                crate::tr!(
+                    "quedaron sin traducir (revisa los comandos): {names}",
+                    names = names
+                ),
             );
         }
         if !self.predefined.is_empty() {
@@ -388,9 +402,10 @@ impl Builder {
             self.note(
                 NoteLevel::Warning,
                 "variables",
-                format!(
-                    "variables predefinidas de {} que baton no define: {names}",
-                    platform.label()
+                crate::tr!(
+                    "variables predefinidas de {label} que baton no define: {names}",
+                    label = platform.label(),
+                    names = names
                 ),
             );
         }
@@ -440,7 +455,10 @@ fn order_units(units: Vec<Unit>, b: &mut Builder) -> Result<Vec<Step>, ImportErr
         b.note(
             NoteLevel::Warning,
             &key,
-            format!("depende de '{need}', que no existe o no se importó: se ignora"),
+            crate::tr!(
+                "depende de '{need}', que no existe o no se importó: se ignora",
+                need = need
+            ),
         );
     }
 

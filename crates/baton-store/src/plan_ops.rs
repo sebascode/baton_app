@@ -210,6 +210,7 @@ mod tests {
             status: RunStatus::Completed,
             steps: Default::default(),
             log_path: Some(".baton/logs/app-2026-09-24-1402.log".into()),
+            ambiente: None,
         }
     }
 

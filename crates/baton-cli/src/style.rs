@@ -151,7 +151,10 @@ pub fn duration(d: Duration) -> String {
 
 /// `1 paso`, `5 pasos`.
 pub fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
+    format!(
+        "{n} {}",
+        baton_core::i18n::tr_dyn(if n == 1 { one } else { many })
+    )
 }
 
 #[cfg(test)]

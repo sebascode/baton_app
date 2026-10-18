@@ -48,7 +48,7 @@ pub async fn send(
             let (target, res, records) = (syslog.clone(), res.clone(), records.to_vec());
             tokio::task::spawn_blocking(move || send_syslog(&target, &res, &records))
                 .await
-                .map_err(|e| format!("el envío se interrumpió: {e}"))?
+                .map_err(|e| baton_core::tr!("el envío se interrumpió: {e}", e = e))?
         }
     }
 }
@@ -68,7 +68,7 @@ async fn send_otlp(
 ) -> Result<(), String> {
     let body = scratch.join(format!(".baton-export-{}.json", std::process::id()));
     std::fs::write(&body, otlp_body(res, records))
-        .map_err(|e| format!("no se pudo preparar el envío: {e}"))?;
+        .map_err(|e| baton_core::tr!("no se pudo preparar el envío: {e}", e = e))?;
     let result = post(url, &body).await;
     let _ = std::fs::remove_file(&body);
     result
@@ -109,16 +109,15 @@ async fn post(url: &str, body: &Path) -> Result<(), String> {
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "la exportación OTLP necesita `curl` y no se encontró en el PATH".to_string()
+                baton_core::tr!("la exportación OTLP necesita `curl` y no se encontró en el PATH")
             } else {
                 format!("no se pudo ejecutar curl: {e}")
             }
         })?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(config.as_bytes())
-            .await
-            .map_err(|e| format!("no se pudo enviar la configuración a curl: {e}"))?;
+        stdin.write_all(config.as_bytes()).await.map_err(|e| {
+            baton_core::tr!("no se pudo enviar la configuración a curl: {e}", e = e)
+        })?;
     }
     let out = child
         .wait_with_output()
@@ -135,7 +134,10 @@ async fn post(url: &str, body: &Path) -> Result<(), String> {
         } else {
             why
         };
-        Err(format!("el colector OTLP rechazó el envío: {why}"))
+        Err(baton_core::tr!(
+            "el colector OTLP rechazó el envío: {why}",
+            why = why
+        ))
     }
 }
 
@@ -197,5 +199,5 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     addr.to_socket_addrs()
         .map_err(|e| format!("no se pudo resolver {addr}: {e}"))?
         .next()
-        .ok_or_else(|| format!("{addr} no tiene dirección"))
+        .ok_or_else(|| baton_core::tr!("{addr} no tiene dirección", addr = addr))
 }

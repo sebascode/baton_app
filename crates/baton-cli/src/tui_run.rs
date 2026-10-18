@@ -135,6 +135,8 @@ impl RunDriver {
             }
         }
         preview.context = Some(run_context(&self.config, self.flags.ambiente.as_deref()));
+        preview.ambientes = self.known_ambientes();
+        preview.ambiente = self.flags.ambiente.clone();
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_quit_confirm(self.config.ui.confirms_exit())
@@ -184,6 +186,52 @@ impl RunDriver {
         if self.plan.steps.is_empty() {
             app.open_editor_first();
         }
+    }
+
+    /// Los ambientes que se conocen: las carpetas de `.baton/credentials/`, los de `[ambientes]` y
+    /// el elegido ahora. Solo nombres válidos (van dentro de comandos y de rutas).
+    fn known_ambientes(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.project.credentials_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        names.extend(self.config.ambientes.keys().cloned());
+        names.extend(self.flags.ambiente.clone());
+        names.retain(|n| baton_core::secrets::is_safe_ambiente(n));
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Elige el ambiente de esta sesión (`a` en la vista del plan) y rehace la pantalla con él:
+    /// credenciales, etiqueta de la cabecera y confirmación de los protegidos. No se guarda en
+    /// ningún lado: la próxima vez vuelve a mandar `--ambiente`, la variable o `[defaults]`.
+    fn set_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
+        if ambiente
+            .as_deref()
+            .is_some_and(|a| !baton_core::secrets::is_safe_ambiente(a))
+        {
+            return app.notify(&tr!("ese nombre de ambiente no es válido"));
+        }
+        if let Some(edited) = app.editor_steps() {
+            match edited {
+                Ok(steps) if steps == self.plan.steps => {}
+                _ => {
+                    return app.notify(&tr!(
+                        "hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de ambiente"
+                    ));
+                }
+            }
+        }
+        self.flags.ambiente = ambiente;
+        *app = self.initial_app();
+        app.notify(&match &self.flags.ambiente {
+            Some(a) => tr!("ambiente: {name}", name = a),
+            None => tr!("sin ambiente"),
+        });
     }
 
     /// Copiar, renombrar o eliminar un plan desde el selector. Renombrar el plan abierto recarga
@@ -1102,6 +1150,7 @@ impl Driver for RunDriver {
             }
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
+            Effect::SetAmbiente(amb) => self.set_ambiente(app, amb),
             Effect::OpenHistory => self.open_history(app),
             Effect::Maintenance => self.maintenance(app),
             Effect::MaintRun(req) => self.maint_run(app, &req),

@@ -333,15 +333,16 @@ pub fn parse_meta(line: &str) -> Meta {
         "tablas" | "dt" => Meta::Tables,
         "columnas" | "d" => match arg {
             Some(t) => Meta::Columns(t),
-            None => Meta::Unknown("\\columnas necesita el nombre de una tabla".to_string()),
+            None => Meta::Unknown(crate::tr!("\\columnas necesita el nombre de una tabla")),
         },
         "formato" => Meta::Format(arg),
         "limite" | "límite" => Meta::Limit(arg),
         "completo" => Meta::Full,
         "escribir" => Meta::Write,
         "lectura" | "solo-lectura" => Meta::ReadOnly,
-        other => Meta::Unknown(format!(
-            "comando desconocido: \\{other} (\\? muestra la ayuda)"
+        other => Meta::Unknown(crate::tr!(
+            "comando desconocido: \\{other} (\\? muestra la ayuda)",
+            other = other
         )),
     }
 }
@@ -376,7 +377,10 @@ pub fn columns_query(kind: crate::plan::CredentialKind, table: &str) -> Result<S
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'));
     if !ok {
-        return Err(format!("'{table}' no es un nombre de tabla válido"));
+        return Err(crate::tr!(
+            "'{table}' no es un nombre de tabla válido",
+            table = table
+        ));
     }
     Ok(match kind {
         crate::plan::CredentialKind::Sqlite => {

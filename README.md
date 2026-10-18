@@ -103,7 +103,7 @@ baton last                    # cómo terminó la última ejecución y, si fall�
 baton history                 # las ejecuciones anteriores del plan, una por línea
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
 baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
-baton docs instalar -o docs/instalar.md   # documentación del plan en markdown con diagramas mermaid
+baton docs instalar -o docs/instalar.md   # documentación del plan: resumen, flujo mermaid, variables, destinos con su host, ambientes y mantención
 baton settings set ui.language en   # baton en inglés (también BATON_LANG=en)
 baton settings                  # configuración global (~/.config/baton/config.toml) y de dónde sale cada valor
 baton settings set defaults.engine podman   # para todos tus proyectos
@@ -160,6 +160,7 @@ baton plugin new mi-plugin        # crea un manifiesto para empezar
 baton plugin validate mi-plugin   # lo revisa y muestra lo que ejecutaría
 baton plugin add ./mi-plugin      # lo instala en el proyecto, en baton/plugins/ (o github:dueño/repo@v1.0.0, con commit firmado)
 baton plugin add -g ./mi-plugin   # o en toda tu máquina
+baton plugin add mi-plugin      # copia al proyecto uno ya instalado en tu máquina, sin descargar
 baton plugin list                 # los instalados, de los dos ámbitos
 ```
 
@@ -191,6 +192,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-15 | **0.10.2.** Idiomas: baton habla español (por defecto) e inglés, con `BATON_LANG` o `ui.language` (`baton settings set ui.language en`). `baton docs [plan]` genera la documentación de un plan en markdown con diagramas mermaid. Preset `bitwarden` para los proveedores de secretos. El CI no repite las pruebas de un contenido que ya pasó. |
 | 2026-10-15 | **0.10.3.** Los scripts `.sh` ya no se cargan como pasos al hacer `baton init`: quedan en la mantención (`baton ops`, `--script`, tecla `m`), elegidos por carpeta (`a > b > c`) y siempre con confirmación. `baton init` ofrece iniciar git (o crear el proyecto en la raíz del repositorio) y siempre agrega `.baton/` al `.gitignore`. |
 | 2026-10-17 | **0.10.4.** Opción global `--quiet` / `-q` para callar los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`), alias `-n` para `--dry-run`, `NO_COLOR` en la TUI y un solo formato para errores de plan inexistente. |
+| 2026-10-18 | **0.10.5.** `baton docs` más completo: índice, resumen en tabla, cómo se usa, variables, destinos con su host (sin usuarios), planes y ambientes del proyecto y la mantención de `baton ops`. Cada ejecución registra con qué ambiente corrió (`last`, `history`, la TUI) y `--resume` y `rollback` avisan si fue otro; tecla `a` para elegirlo en la TUI. `baton plugin add <nombre>` copia al proyecto un plugin global sin volver a bajarlo, y el editor tiene el campo `dry-run`. Más textos en inglés (`last`, `history`, `update`, `import`, `db`, `validate`). |
 
 ## Desarrollo
 

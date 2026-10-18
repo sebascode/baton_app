@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use baton_core::tr;
 use baton_core::update::{self, InstallKind, Version};
 
 use crate::EXIT_USAGE;
@@ -35,7 +36,7 @@ pub fn run(flags: Flags) -> ExitCode {
 fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
     let exe = std::env::current_exe()
         .and_then(fs::canonicalize)
-        .map_err(|e| format!("no se pudo ubicar el ejecutable de baton: {e}"))?;
+        .map_err(|e| tr!("no se pudo ubicar el ejecutable de baton: {e}", e = e))?;
     let kind = update::install_kind(&exe.to_string_lossy());
 
     if flags.rollback {
@@ -45,25 +46,45 @@ fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
         };
     }
 
-    let current = Version::parse(CURRENT).ok_or("la versión de baton no es X.Y.Z")?;
+    let current = Version::parse(CURRENT).ok_or_else(|| tr!("la versión de baton no es X.Y.Z"))?;
     let latest = latest_version()?;
     match latest.cmp(&current) {
         Ordering::Equal => {
-            println!("baton {current} es la última versión");
+            println!(
+                "{}",
+                tr!("baton {current} es la última versión", current = current)
+            );
             return Ok(ExitCode::SUCCESS);
         }
         Ordering::Less => {
-            println!("baton {current} es más nuevo que el último release publicado ({latest})");
+            println!(
+                "{}",
+                tr!(
+                    "baton {current} es más nuevo que el último release publicado ({latest})",
+                    current = current,
+                    latest = latest
+                )
+            );
             return Ok(ExitCode::SUCCESS);
         }
-        Ordering::Greater => println!("hay una versión nueva: {latest} (tienes {current})"),
+        Ordering::Greater => println!(
+            "{}",
+            tr!(
+                "hay una versión nueva: {latest} (tienes {current})",
+                latest = latest,
+                current = current
+            )
+        ),
     }
 
     if flags.check {
         match kind {
-            InstallKind::Homebrew => println!("actualiza con: brew upgrade baton"),
-            InstallKind::Package => println!("baja el paquete nuevo: {REPO}/releases/latest"),
-            InstallKind::Direct => println!("actualiza con: baton update"),
+            InstallKind::Homebrew => println!("{}", tr!("actualiza con: brew upgrade baton")),
+            InstallKind::Package => println!(
+                "{}",
+                tr!("baja el paquete nuevo: {repo}/releases/latest", repo = REPO)
+            ),
+            InstallKind::Direct => println!("{}", tr!("actualiza con: baton update")),
             InstallKind::Development => {}
         }
         return Ok(ExitCode::SUCCESS);
@@ -73,7 +94,14 @@ fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
     }
 
     install(&exe, &latest)?;
-    println!("actualizado: {current} -> {latest} (para volver atrás: baton update --rollback)");
+    println!(
+        "{}",
+        tr!(
+            "actualizado: {current} -> {latest} (para volver atrás: baton update --rollback)",
+            current = current,
+            latest = latest
+        )
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -83,13 +111,17 @@ fn refuse_if_managed(kind: InstallKind) -> Option<ExitCode> {
     let reason = match kind {
         InstallKind::Direct => return None,
         InstallKind::Homebrew => {
-            "este baton se instaló con Homebrew: actualiza con `brew upgrade baton`"
+            tr!("este baton se instaló con Homebrew: actualiza con `brew upgrade baton`")
         }
         InstallKind::Package => {
-            "este baton lo instaló un paquete (.deb o .rpm) y lo gestiona el sistema: baja el paquete de la versión nueva desde https://github.com/sebascode/baton_app/releases/latest"
+            tr!(
+                "este baton lo instaló un paquete (.deb o .rpm) y lo gestiona el sistema: baja el paquete de la versión nueva desde https://github.com/sebascode/baton_app/releases/latest"
+            )
         }
         InstallKind::Development => {
-            "este baton es un build de desarrollo (target/): vuelve a compilarlo o usa scripts/install.sh"
+            tr!(
+                "este baton es un build de desarrollo (target/): vuelve a compilarlo o usa scripts/install.sh"
+            )
         }
     };
     eprintln!("{reason}");
@@ -113,23 +145,35 @@ fn latest_version() -> Result<Version, String> {
         &update::latest_url(REPO),
     ])?;
     let url = String::from_utf8_lossy(&out).into_owned();
-    let tag = update::tag_from_redirect(&url).ok_or("no hay ningún release publicado todavía")?;
-    Version::parse(tag)
-        .ok_or_else(|| format!("el último release tiene un tag que no es vX.Y.Z: {tag}"))
+    let tag = update::tag_from_redirect(&url)
+        .ok_or_else(|| tr!("no hay ningún release publicado todavía"))?;
+    Version::parse(tag).ok_or_else(|| {
+        tr!(
+            "el último release tiene un tag que no es vX.Y.Z: {tag}",
+            tag = tag
+        )
+    })
 }
 
 fn install(exe: &Path, version: &Version) -> Result<(), String> {
     let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
-    let platform = update::platform(os, arch)
-        .ok_or_else(|| format!("no hay binarios publicados para {os} {arch}"))?;
-    let dir = exe.parent().ok_or("el ejecutable no tiene carpeta")?;
+    let platform = update::platform(os, arch).ok_or_else(|| {
+        tr!(
+            "no hay binarios publicados para {os} {arch}",
+            os = os,
+            arch = arch
+        )
+    })?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
     // Junto al ejecutable: así el reemplazo final es un `rename` dentro del mismo sistema de
     // archivos (atómico, y funciona aunque baton esté corriendo).
     let work = Workdir::create(dir)?;
 
     let asset = update::asset_name(version, platform);
     let tarball = work.path.join(&asset);
-    println!("descargando {asset}...");
+    println!("{}", tr!("descargando {asset}...", asset = asset));
     download(&update::asset_url(REPO, version, &asset), &tarball)?;
     let sum_file = work.path.join("sha256");
     download(
@@ -138,16 +182,18 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
     )?;
 
     let text =
-        fs::read_to_string(&sum_file).map_err(|e| format!("no se pudo leer el .sha256: {e}"))?;
+        fs::read_to_string(&sum_file).map_err(|e| tr!("no se pudo leer el .sha256: {e}", e = e))?;
     let expected = update::parse_checksum(&text, &asset)
-        .ok_or("el archivo .sha256 del release no trae un hash válido")?;
+        .ok_or_else(|| tr!("el archivo .sha256 del release no trae un hash válido"))?;
     let actual = sha256(&tarball)?;
     if actual != expected {
-        return Err(format!(
-            "la suma de verificación no coincide (esperada {expected}, obtenida {actual}); no se instaló nada"
+        return Err(tr!(
+            "la suma de verificación no coincide (esperada {expected}, obtenida {actual}); no se instaló nada",
+            expected = expected,
+            actual = actual
         ));
     }
-    println!("suma sha256 verificada");
+    println!("{}", tr!("suma sha256 verificada"));
 
     let status = Command::new("tar")
         .arg("-xzf")
@@ -157,23 +203,28 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
         .status()
         .map_err(|e| missing_tool("tar", &e))?;
     if !status.success() {
-        return Err("no se pudo extraer el archivo descargado".to_string());
+        return Err(tr!("no se pudo extraer el archivo descargado"));
     }
     let new_bin = work.path.join("baton");
     if !new_bin.is_file() {
-        return Err("el archivo descargado no trae el binario `baton`".to_string());
+        return Err(tr!("el archivo descargado no trae el binario `baton`"));
     }
     fs::set_permissions(&new_bin, fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("no se pudo marcar como ejecutable: {e}"))?;
+        .map_err(|e| tr!("no se pudo marcar como ejecutable: {e}", e = e))?;
     check_runs(&new_bin, version)?;
 
     // Se guarda el actual como `baton.prev` (lo que restaura `--rollback`). `rm` antes de copiar:
     // en macOS sobrescribir un binario en su sitio puede invalidar su firma.
     let prev = dir.join("baton.prev");
     let _ = fs::remove_file(&prev);
-    fs::copy(exe, &prev).map_err(|e| format!("no se pudo guardar la versión actual: {e}"))?;
-    fs::rename(&new_bin, exe)
-        .map_err(|e| format!("no se pudo reemplazar {}: {e}", exe.display()))?;
+    fs::copy(exe, &prev).map_err(|e| tr!("no se pudo guardar la versión actual: {e}", e = e))?;
+    fs::rename(&new_bin, exe).map_err(|e| {
+        tr!(
+            "no se pudo reemplazar {path}: {e}",
+            path = exe.display(),
+            e = e
+        )
+    })?;
 
     update_man(&work.path.join("baton.1"));
     Ok(())
@@ -185,24 +236,30 @@ fn check_runs(bin: &Path, version: &Version) -> Result<(), String> {
     let out = Command::new(bin)
         .arg("version")
         .output()
-        .map_err(|e| format!("el binario descargado no se ejecuta: {e}"))?;
+        .map_err(|e| tr!("el binario descargado no se ejecuta: {e}", e = e))?;
     let said = String::from_utf8_lossy(&out.stdout);
     if out.status.success() && said.starts_with(&format!("baton {version}")) {
         Ok(())
     } else {
-        Err(format!(
-            "el binario descargado no responde como baton {version} (dijo: {:?}); no se instaló nada",
-            said.trim()
+        Err(tr!(
+            "el binario descargado no responde como baton {version} (dijo: {said}); no se instaló nada",
+            version = version,
+            said = format!("{:?}", said.trim())
         ))
     }
 }
 
 /// Vuelve a la versión que había antes de la última actualización.
 fn rollback(exe: &Path) -> Result<(), String> {
-    let dir = exe.parent().ok_or("el ejecutable no tiene carpeta")?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| tr!("el ejecutable no tiene carpeta"))?;
     let prev = dir.join("baton.prev");
     if !prev.is_file() {
-        return Err(format!("no hay versión anterior en {}", prev.display()));
+        return Err(tr!(
+            "no hay versión anterior en {path}",
+            path = prev.display()
+        ));
     }
     let tmp = dir.join(format!(".baton.rollback-{}", std::process::id()));
     let result = fs::copy(&prev, &tmp)
@@ -212,7 +269,13 @@ fn rollback(exe: &Path) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         return Err(write_error(dir, &e));
     }
-    println!("versión anterior restaurada en {}", exe.display());
+    println!(
+        "{}",
+        tr!(
+            "versión anterior restaurada en {path}",
+            path = exe.display()
+        )
+    );
     Ok(())
 }
 
@@ -228,7 +291,10 @@ fn update_man(new_page: &Path) {
         return;
     };
     if fs::copy(new_page, &target).is_ok() {
-        println!("manual actualizado en {}", target.display());
+        println!(
+            "{}",
+            tr!("manual actualizado en {path}", path = target.display())
+        );
     }
 }
 
@@ -261,7 +327,7 @@ fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
         Ok(out.stdout)
     } else {
         let why = String::from_utf8_lossy(&out.stderr);
-        Err(format!("no se pudo consultar GitHub: {}", why.trim()))
+        Err(tr!("no se pudo consultar GitHub: {why}", why = why.trim()))
     }
 }
 
@@ -276,37 +342,47 @@ fn sha256(file: &Path) -> Result<String, String> {
                     .split_whitespace()
                     .next()
                     .map(str::to_ascii_lowercase)
-                    .ok_or_else(|| format!("{tool} no devolvió un hash"));
+                    .ok_or_else(|| tr!("{tool} no devolvió un hash", tool = tool));
             }
             Ok(out) => {
-                return Err(format!(
-                    "{tool} falló: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
+                return Err(tr!(
+                    "{tool} falló: {why}",
+                    tool = tool,
+                    why = String::from_utf8_lossy(&out.stderr).trim()
                 ));
             }
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
             Err(e) => return Err(format!("{tool}: {e}")),
         }
     }
-    Err("no se encontró sha256sum ni shasum para verificar la descarga".to_string())
+    Err(tr!(
+        "no se encontró sha256sum ni shasum para verificar la descarga"
+    ))
 }
 
 fn missing_tool(tool: &str, e: &std::io::Error) -> String {
     if e.kind() == ErrorKind::NotFound {
-        format!("baton update necesita `{tool}` y no se encontró en el PATH")
+        tr!(
+            "baton update necesita `{tool}` y no se encontró en el PATH",
+            tool = tool
+        )
     } else {
-        format!("no se pudo ejecutar {tool}: {e}")
+        tr!("no se pudo ejecutar {tool}: {e}", tool = tool, e = e)
     }
 }
 
 fn write_error(dir: &Path, e: &std::io::Error) -> String {
     if e.kind() == ErrorKind::PermissionDenied {
-        format!(
-            "no se puede escribir en {} (¿una carpeta del sistema? ejecuta con sudo o reinstala en ~/.local/bin)",
-            dir.display()
+        tr!(
+            "no se puede escribir en {path} (¿una carpeta del sistema? ejecuta con sudo o reinstala en ~/.local/bin)",
+            path = dir.display()
         )
     } else {
-        format!("no se pudo escribir en {}: {e}", dir.display())
+        tr!(
+            "no se pudo escribir en {path}: {e}",
+            path = dir.display(),
+            e = e
+        )
     }
 }
 

@@ -201,12 +201,18 @@ impl HistoryState {
         };
         let (_, label, color) = outcome_style(e.outcome);
         let content = pad(area);
-        Line::from(vec![
+        let mut head = vec![
             Span::styled(tr!("Ejecución {id}", id = e.id), theme::bold()),
             Span::styled(" · ", theme::secondary()),
             Span::styled(label.clone(), Style::new().fg(color)),
-        ])
-        .render(Rect::new(content.x, content.y, content.width, 1), buf);
+        ];
+        if let Some(amb) = &e.ambiente {
+            head.push(Span::styled(
+                format!(" · {}", tr!("ambiente {name}", name = amb)),
+                theme::secondary(),
+            ));
+        }
+        Line::from(head).render(Rect::new(content.x, content.y, content.width, 1), buf);
         for (n, step) in e.steps.iter().enumerate() {
             let y = content.y + 2 + n as u16;
             if y >= content.bottom() {

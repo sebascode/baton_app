@@ -56,6 +56,10 @@ pub struct LastRun {
     /// Ruta del log de esa ejecución.
     #[serde(default)]
     pub log_path: Option<String>,
+    /// Con qué ambiente corrió, si se eligió uno. Es un dato de la ejecución: nunca se usa como
+    /// valor por defecto de la siguiente.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambiente: Option<String>,
 }
 
 impl LastRun {
@@ -258,6 +262,7 @@ mod tests {
                 ),
             ]),
             log_path: Some(".baton/logs/instalar-2026-09-24-1402.log".into()),
+            ambiente: None,
         }
     }
 
@@ -381,6 +386,7 @@ mod tests {
             status,
             steps: BTreeMap::new(),
             log_path: Some(format!(".baton/logs/{id}.log")),
+            ambiente: None,
         }
     }
 

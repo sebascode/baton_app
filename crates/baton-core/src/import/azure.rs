@@ -12,12 +12,27 @@ use super::{
 
 /// Tareas que solo preparan el agente o mueven artifacts.
 const IGNORED_TASKS: [(&str, &str); 6] = [
-    ("PublishBuildArtifacts", "baton no maneja artifacts"),
-    ("PublishPipelineArtifact", "baton no maneja artifacts"),
-    ("DownloadBuildArtifacts", "baton no maneja artifacts"),
-    ("DownloadPipelineArtifact", "baton no maneja artifacts"),
-    ("Cache@", "baton no tiene caché"),
-    ("Use", "las herramientas deben existir en el destino"),
+    (
+        "PublishBuildArtifacts",
+        crate::tk!("baton no maneja artifacts"),
+    ),
+    (
+        "PublishPipelineArtifact",
+        crate::tk!("baton no maneja artifacts"),
+    ),
+    (
+        "DownloadBuildArtifacts",
+        crate::tk!("baton no maneja artifacts"),
+    ),
+    (
+        "DownloadPipelineArtifact",
+        crate::tk!("baton no maneja artifacts"),
+    ),
+    ("Cache@", crate::tk!("baton no tiene caché")),
+    (
+        "Use",
+        crate::tk!("las herramientas deben existir en el destino"),
+    ),
 ];
 const IGNORED_KEYS: [&str; 4] = ["checkout", "download", "publish", "getPackage"];
 
@@ -36,7 +51,10 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
             b.note(
                 NoteLevel::Info,
                 key,
-                format!("{key}: no se importa, baton ejecuta el plan bajo demanda"),
+                crate::tr!(
+                    "{key}: no se importa, baton ejecuta el plan bajo demanda",
+                    key = key
+                ),
             );
         }
     }
@@ -51,7 +69,7 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
                 b.note(
                     NoteLevel::Warning,
                     &format!("stages[{i}]"),
-                    "template de stage sin seguir: no se importa",
+                    crate::tr!("template de stage sin seguir: no se importa"),
                 );
                 continue;
             };
@@ -97,9 +115,9 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
             vars: Vec::new(),
         });
     } else {
-        return Err(ImportError::Shape(
-            "no se encontró 'stages', 'jobs' ni 'steps' en el archivo".into(),
-        ));
+        return Err(ImportError::Shape(crate::tr!(
+            "no se encontró 'stages', 'jobs' ni 'steps' en el archivo"
+        )));
     }
 
     let mut order = 0;
@@ -130,9 +148,9 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
     }
 
     if b.units.iter().all(|u| u.steps.is_empty()) {
-        return Err(ImportError::Shape(
-            "no se encontró ningún paso convertible".into(),
-        ));
+        return Err(ImportError::Shape(crate::tr!(
+            "no se encontró ningún paso convertible"
+        )));
     }
     Ok(())
 }
@@ -176,10 +194,10 @@ fn convert_job(
             name: label,
             id_hint: name.clone(),
             at,
-            script: commented(&format!("pendiente de migrar: template {t}")),
+            script: commented(&crate::tr!("pendiente de migrar: template {t}", t = t)),
             env: Vec::new(),
             workdir: None,
-            disabled: Some("template sin seguir".into()),
+            disabled: Some(crate::tr!("template sin seguir")),
             timeout: None,
             retries: 0,
         };
@@ -189,13 +207,15 @@ fn convert_job(
 
     let mut job_off = non_trivial_condition(job.get("condition"));
     if job.get("strategy").and_then(|s| s.get("matrix")).is_some() && job_off.is_none() {
-        job_off = Some("strategy.matrix no se expande (correría una sola vez)".into());
+        job_off = Some(crate::tr!(
+            "strategy.matrix no se expande (correría una sola vez)"
+        ));
     }
     if job.get("container").is_some() {
         b.note(
             NoteLevel::Warning,
             &at,
-            "container: los comandos corren en el destino, no dentro de esa imagen",
+            crate::tr!("container: los comandos corren en el destino, no dentro de esa imagen"),
         );
     }
 
@@ -242,7 +262,10 @@ fn convert_job(
             b.note(
                 NoteLevel::Skipped,
                 &sat,
-                format!("{key}: baton trabaja sobre la carpeta del proyecto"),
+                crate::tr!(
+                    "{key}: baton trabaja sobre la carpeta del proyecto",
+                    key = key
+                ),
             );
             continue;
         }
@@ -260,7 +283,7 @@ fn convert_job(
             b.note(
                 NoteLevel::Info,
                 &sat,
-                "continueOnError no se importa: un fallo detiene el plan",
+                crate::tr!("continueOnError no se importa: un fallo detiene el plan"),
             );
         }
 
@@ -279,15 +302,23 @@ fn convert_job(
         {
             (
                 commented(&format!("{k}:\n{s}")),
-                Some(format!("{k} no está soportado")),
+                Some(crate::tr!("{k} no está soportado", k = k)),
                 first_line(&s, 50),
             )
         } else if let Some(task) = st.get("task").and_then(text) {
             if let Some((_, why)) = IGNORED_TASKS.iter().find(|(p, _)| task.starts_with(p)) {
-                b.note(NoteLevel::Skipped, &sat, format!("task: {task} ({why})"));
+                b.note(
+                    NoteLevel::Skipped,
+                    &sat,
+                    crate::tr!(
+                        "task: {task} ({why})",
+                        task = task,
+                        why = crate::i18n::tr_dyn(why)
+                    ),
+                );
                 continue;
             }
-            let mut original = format!("pendiente de migrar: task: {task}");
+            let mut original = crate::tr!("pendiente de migrar: task: {task}", task = task);
             if let Some(inputs) = st.get("inputs").and_then(Value::as_mapping) {
                 for (ik, iv) in inputs {
                     if let (Some(ik), Some(iv)) = (text(ik), text(iv)) {
@@ -297,17 +328,21 @@ fn convert_job(
             }
             (
                 commented(&original),
-                Some("tarea sin equivalente en baton".into()),
+                Some(crate::tr!("tarea sin equivalente en baton")),
                 task.clone(),
             )
         } else if let Some(t) = st.get("template").and_then(text) {
             (
-                commented(&format!("pendiente de migrar: template {t}")),
-                Some("template sin seguir".into()),
+                commented(&crate::tr!("pendiente de migrar: template {t}", t = t)),
+                Some(crate::tr!("template sin seguir")),
                 t.clone(),
             )
         } else {
-            b.note(NoteLevel::Skipped, &sat, "tipo de paso no reconocido");
+            b.note(
+                NoteLevel::Skipped,
+                &sat,
+                crate::tr!("tipo de paso no reconocido"),
+            );
             continue;
         };
         let inert = kind_off.is_some();
@@ -362,7 +397,7 @@ fn non_trivial_condition(v: Option<&Value>) -> Option<String> {
     let c = text(v?)?;
     let trimmed = c.trim();
     (!matches!(trimmed, "succeeded()" | "succeeded('')" | ""))
-        .then(|| format!("condición: {trimmed}"))
+        .then(|| crate::tr!("condición: {trimmed}", trimmed = trimmed))
 }
 
 /// `variables:` como mapa o como lista de `{name, value}` / `{group}` / `{template}`.
@@ -375,10 +410,13 @@ fn variables(v: Option<&Value>, at: &str, b: &mut Builder) -> Vec<(String, Strin
                     b.note(
                         NoteLevel::Info,
                         at,
-                        format!("grupo de variables '{g}': define sus variables en el entorno o en .baton/credentials/"),
-                    );
+                        crate::tr!("grupo de variables '{g}': define sus variables en el entorno o en .baton/credentials/", g = g));
                 } else if item.get("template").is_some() {
-                    b.note(NoteLevel::Warning, at, "template de variables sin seguir");
+                    b.note(
+                        NoteLevel::Warning,
+                        at,
+                        crate::tr!("template de variables sin seguir"),
+                    );
                 } else if let (Some(n), Some(v)) = (
                     item.get("name").and_then(text),
                     item.get("value").and_then(text),

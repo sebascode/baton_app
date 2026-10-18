@@ -68,7 +68,7 @@ const OTLP_PATH: &str = "/v1/logs";
 pub fn parse_endpoint(kind: ExportKind, endpoint: &str) -> Result<Target, String> {
     let e = endpoint.trim();
     if e.is_empty() {
-        return Err("el endpoint está vacío".into());
+        return Err(crate::tr!("el endpoint está vacío"));
     }
     match kind {
         ExportKind::Otlp => {
@@ -78,7 +78,7 @@ pub fn parse_endpoint(kind: ExportKind, endpoint: &str) -> Result<Target, String
                 .ok_or("el endpoint OTLP debe empezar con http:// o https://")?;
             let host = rest.split(['/', '?']).next().unwrap_or_default();
             if host.is_empty() || host.contains(char::is_whitespace) {
-                return Err("el endpoint OTLP no tiene un host válido".into());
+                return Err(crate::tr!("el endpoint OTLP no tiene un host válido"));
             }
             let (base, query) = e.split_once('?').map_or((e, ""), |(b, q)| (b, q));
             let base = base.trim_end_matches('/');
@@ -100,7 +100,9 @@ pub fn parse_endpoint(kind: ExportKind, endpoint: &str) -> Result<Target, String
                 return if path.starts_with('/') {
                     Ok(Target::SyslogUnix { path: path.into() })
                 } else {
-                    Err("unix:// necesita una ruta absoluta (unix:///dev/log)".into())
+                    Err(crate::tr!(
+                        "unix:// necesita una ruta absoluta (unix:///dev/log)"
+                    ))
                 };
             }
             let (tcp, addr) = match e.strip_prefix("tcp://") {
@@ -116,7 +118,9 @@ pub fn parse_endpoint(kind: ExportKind, endpoint: &str) -> Result<Target, String
                         Target::SyslogUdp { addr: addr.into() }
                     })
                 }
-                _ => Err("el endpoint syslog debe ser udp://host:puerto, tcp://host:puerto o unix:///ruta".into()),
+                _ => Err(crate::tr!(
+                    "el endpoint syslog debe ser udp://host:puerto, tcp://host:puerto o unix:///ruta"
+                )),
             }
         }
     }

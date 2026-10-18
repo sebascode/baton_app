@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use baton_core::events::{HistoryEntry, LastRunBanner, LogKind, RunOutcome, StepStatus};
+use baton_core::tk;
+use baton_core::tr;
 use baton_store::history::{self, RunCounts};
 use baton_store::logs::{self, StepExcerpt};
 use baton_store::state::State;
@@ -43,8 +45,20 @@ pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
         history::banner(&state, &plan, now),
         history::entries(&state, &plan, now).into_iter().next(),
     ) else {
-        eprintln!("el plan '{plan_name}' todavía no se ejecutó");
-        eprintln!("  ejecútalo con: baton run {plan_name}");
+        eprintln!(
+            "{}",
+            tr!(
+                "el plan '{plan_name}' todavía no se ejecutó",
+                plan_name = plan_name
+            )
+        );
+        eprintln!(
+            "{}",
+            tr!(
+                "  ejecútalo con: baton run {plan_name}",
+                plan_name = plan_name
+            )
+        );
         return ExitCode::from(EXIT_INVALID);
     };
 
@@ -94,7 +108,7 @@ enum Excerpt {
 fn read_excerpt(path: &Path, step_id: &str, lines: usize) -> Excerpt {
     match logs::read_log(path) {
         Ok(log) => logs::step_excerpt(&log, step_id, lines).map_or(Excerpt::Silent, Excerpt::Found),
-        Err(e) => Excerpt::Unreadable(format!("no se pudo leer el log: {e}")),
+        Err(e) => Excerpt::Unreadable(tr!("no se pudo leer el log: {e}", e = e)),
     }
 }
 
@@ -127,11 +141,18 @@ fn render(v: &View, style: &Style) -> String {
     let statuses: Vec<StepStatus> = v.entry.steps.iter().map(|s| s.status).collect();
     let done = statuses.iter().filter(|s| **s == StepStatus::Done).count();
     let mut facts = vec![
-        format!("{done} de {}", plural(statuses.len(), "paso", "pasos")),
+        tr!(
+            "{done} de {steps}",
+            done = done,
+            steps = plural(statuses.len(), tk!("paso"), tk!("pasos"))
+        ),
         b.ago.clone(),
     ];
     if let Some(d) = v.entry.duration {
         facts.push(duration(d));
+    }
+    if let Some(amb) = &b.ambiente {
+        facts.push(tr!("ambiente {name}", name = amb));
     }
     line(&format!(
         "  {}  {}",
@@ -140,15 +161,15 @@ fn render(v: &View, style: &Style) -> String {
     ));
     line(&format!(
         "  {}",
-        style.dim(&format!(
-            "inició {} · {}",
-            v.entry.started,
-            runs_summary(v.counts, style)
+        style.dim(&tr!(
+            "inició {started} · {runs}",
+            started = v.entry.started,
+            runs = runs_summary(v.counts, style)
         ))
     ));
 
     line("");
-    line(&style.bold("pasos"));
+    line(&style.bold(&tr!("pasos")));
     let name_w = v
         .entry
         .steps
@@ -160,8 +181,8 @@ fn render(v: &View, style: &Style) -> String {
     for (i, s) in v.entry.steps.iter().enumerate() {
         let (glyph, tone) = step_mark(s.status);
         let detail = match (s.status, s.duration) {
-            (StepStatus::Skipped, _) => style.dim("omitido"),
-            (StepStatus::Pending, _) => style.dim("pendiente"),
+            (StepStatus::Skipped, _) => style.dim(&tr!("omitido")),
+            (StepStatus::Pending, _) => style.dim(&tr!("pendiente")),
             (_, Some(d)) => duration(d),
             (StepStatus::Done, None) => "<1s".to_string(),
             (_, None) => String::new(),
@@ -169,7 +190,7 @@ fn render(v: &View, style: &Style) -> String {
         let retries = if s.retries > 0 {
             format!(
                 " · {}",
-                plural(s.retries as usize, "reintento", "reintentos")
+                plural(s.retries as usize, tk!("reintento"), tk!("reintentos"))
             )
         } else {
             String::new()
@@ -185,54 +206,54 @@ fn render(v: &View, style: &Style) -> String {
     if let (Some(excerpt), Some(name)) = (&v.excerpt, &v.step_name) {
         line("");
         let what = if b.outcome == RunOutcome::Failed {
-            "qué pasó en"
+            tr!("qué pasó en «{name}»", name = name)
         } else {
-            "dónde se detuvo,"
+            tr!("dónde se detuvo, «{name}»", name = name)
         };
-        line(&style.bold(&format!("{what} «{name}»")));
+        line(&style.bold(&what));
         match excerpt {
             Excerpt::Found(e) => excerpt_lines(&mut line, style, e),
-            Excerpt::Silent => line("  el log no tiene líneas de este paso"),
+            Excerpt::Silent => line(&format!("  {}", tr!("el log no tiene líneas de este paso"))),
             Excerpt::Unreadable(why) => line(&format!("  {}", style.paint(Tone::Yellow, why))),
         }
     } else if b.outcome == RunOutcome::CompletedWithWarnings {
         line("");
         line(&style.paint(
             Tone::Yellow,
-            "hubo advertencias (checks no críticos que fallaron o gates saltados): están en el log",
+            &tr!("hubo advertencias (checks no críticos que fallaron o gates saltados): están en el log"),
         ));
     }
 
     if let Some(log) = &v.log {
         line("");
-        line(&format!("{} {log}", style.dim("log      ")));
+        line(&format!("{} {log}", style.dim(&tr!("log      "))));
     }
 
     line("");
-    line(&style.bold("siguiente"));
-    let mut hints: Vec<(String, &str)> = Vec::new();
+    line(&style.bold(&tr!("siguiente")));
+    let mut hints: Vec<(String, String)> = Vec::new();
     match b.outcome {
         RunOutcome::Failed | RunOutcome::Aborted => {
             if b.can_resume {
                 hints.push((
                     format!("baton run {} --resume", v.plan),
-                    "reanuda desde donde quedó",
+                    tr!("reanuda desde donde quedó"),
                 ));
             }
             hints.push((
                 format!("baton start {}", v.plan),
-                "corregir el paso (e), h historial, l log completo",
+                tr!("corregir el paso (e), h historial, l log completo"),
             ));
             hints.push((
                 format!("baton rollback {}", v.plan),
-                "deshace lo que alcanzó a hacer",
+                tr!("deshace lo que alcanzó a hacer"),
             ));
         }
         RunOutcome::Completed | RunOutcome::CompletedWithWarnings => {
-            hints.push((format!("baton run {}", v.plan), "volver a ejecutarla"));
+            hints.push((format!("baton run {}", v.plan), tr!("volver a ejecutarla")));
             hints.push((
                 format!("baton rollback {}", v.plan),
-                "deshace esta ejecución",
+                tr!("deshace esta ejecución"),
             ));
         }
     }
@@ -254,9 +275,9 @@ fn excerpt_lines(line: &mut impl FnMut(&str), style: &Style, e: &StepExcerpt) {
     if e.omitted > 0 {
         line(&format!(
             "  {}",
-            style.dim(&format!(
-                "... {} antes (--lines para ver más, o el log completo)",
-                plural(e.omitted, "línea", "líneas")
+            style.dim(&tr!(
+                "... {lines} antes (--lines para ver más, o el log completo)",
+                lines = plural(e.omitted, tk!("línea"), tk!("líneas"))
             ))
         ));
     }
@@ -270,12 +291,12 @@ fn excerpt_lines(line: &mut impl FnMut(&str), style: &Style, e: &StepExcerpt) {
         });
     }
     if e.lines.is_empty() {
-        line("  (el paso no escribió nada)");
+        line(&format!("  ({})", tr!("el paso no escribió nada")));
     }
 }
 
 fn runs_summary(c: RunCounts, style: &Style) -> String {
-    let mut s = plural(c.total, "ejecución", "ejecuciones");
+    let mut s = plural(c.total, tk!("ejecución"), tk!("ejecuciones"));
     if c.total > 1 {
         let mut parts = Vec::new();
         if c.completed > 0 {

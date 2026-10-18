@@ -73,6 +73,8 @@ pub enum PreviewAction {
     Pipeline,
     /// Pasar a otro plan del proyecto.
     SwitchPlan(String),
+    /// Elegir con qué ambiente se ejecuta (`None`: ninguno). Solo vale para esta sesión.
+    SetAmbiente(Option<String>),
     /// Copiar, renombrar o eliminar un plan (ya confirmado en la caja).
     PlanOp(PlanRequest),
     Quit,
@@ -95,6 +97,13 @@ pub struct PreviewState {
     pub plans: Vec<String>,
     /// Selector de planes abierto: posición del cursor.
     pub switcher: Option<usize>,
+    /// Los ambientes que se conocen (carpetas de credenciales y `[ambientes]`), para poder elegir
+    /// uno con `a`. Vacío: la tecla no se ofrece.
+    pub ambientes: Vec<String>,
+    /// El ambiente elegido ahora (el de `--ambiente`, la variable o `[defaults]`).
+    pub ambiente: Option<String>,
+    /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
+    pub ambiente_picker: Option<usize>,
     /// Caja de copiar, renombrar o eliminar el plan elegido en el selector.
     pub prompt: Option<Box<PlanPrompt>>,
     /// Cómo terminó la última ejecución (la franja de estado de arriba); `None` si nunca se ejecutó.
@@ -242,6 +251,9 @@ impl PreviewState {
             notice: Vec::new(),
             plans: Vec::new(),
             switcher: None,
+            ambientes: Vec::new(),
+            ambiente: None,
+            ambiente_picker: None,
             prompt: None,
             last_run: None,
             filter: String::new(),
@@ -320,6 +332,9 @@ impl PreviewState {
         if self.can_switch() {
             items.insert(items.len() - 1, ("p", tk!("planes")));
         }
+        if !self.ambientes.is_empty() {
+            items.insert(items.len() - 1, ("a", tk!("ambiente")));
+        }
         // lo de la última ejecución solo aparece si hay una
         if let Some(b) = &self.last_run {
             let mut extra = vec![("h", tk!("historial")), ("l", tk!("último log"))];
@@ -355,6 +370,35 @@ impl PreviewState {
             KeyCode::Char('r') => self.open_prompt(PlanOp::Rename),
             KeyCode::Char('d') => self.open_prompt(PlanOp::Delete),
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => self.switcher = None,
+            _ => {}
+        }
+        None
+    }
+
+    /// Las opciones del selector de ambiente: «ninguno» y los conocidos.
+    fn ambiente_choices(&self) -> Vec<Option<String>> {
+        std::iter::once(None)
+            .chain(self.ambientes.iter().cloned().map(Some))
+            .collect()
+    }
+
+    fn ambiente_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
+        let cursor = self.ambiente_picker?;
+        let last = self.ambientes.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.ambiente_picker = Some(cursor.saturating_sub(1));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.ambiente_picker = Some((cursor + 1).min(last));
+            }
+            KeyCode::Enter => {
+                self.ambiente_picker = None;
+                let chosen = self.ambiente_choices().get(cursor)?.clone();
+                // elegir el que ya está solo cierra el selector
+                return (chosen != self.ambiente).then_some(PreviewAction::SetAmbiente(chosen));
+            }
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('a') => self.ambiente_picker = None,
             _ => {}
         }
         None
@@ -451,7 +495,10 @@ impl PreviewState {
 
     /// `?` abre la ayuda salvo mientras una caja o el selector de planes usan las teclas.
     pub fn accepts_help(&self) -> bool {
-        self.prompt.is_none() && self.switcher.is_none() && !self.filtering
+        self.prompt.is_none()
+            && self.switcher.is_none()
+            && self.ambiente_picker.is_none()
+            && !self.filtering
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<PreviewAction> {
@@ -461,6 +508,9 @@ impl PreviewState {
         }
         if self.switcher.is_some() {
             return self.switcher_key(key);
+        }
+        if self.ambiente_picker.is_some() {
+            return self.ambiente_key(key);
         }
         if self.filtering {
             self.filter_key(key);
@@ -506,6 +556,14 @@ impl PreviewState {
             KeyCode::Char('p') if self.can_switch() => {
                 let at = self.plans.iter().position(|p| *p == self.plan).unwrap_or(0);
                 self.switcher = Some(at);
+            }
+            KeyCode::Char('a') if !self.ambientes.is_empty() => {
+                let at = self
+                    .ambiente
+                    .as_ref()
+                    .and_then(|a| self.ambientes.iter().position(|x| x == a))
+                    .map_or(0, |i| i + 1);
+                self.ambiente_picker = Some(at);
             }
             KeyCode::Char('v') => return Some(PreviewAction::Pipeline),
             KeyCode::Char('h') => return Some(PreviewAction::History),
@@ -626,6 +684,8 @@ impl PreviewState {
             p.render(buf, list);
         } else if self.switcher.is_some() {
             self.render_switcher(buf, list);
+        } else if self.ambiente_picker.is_some() {
+            self.render_ambiente_picker(buf, list);
         }
     }
 
@@ -640,11 +700,14 @@ impl PreviewState {
             RunOutcome::Failed => ("✗", theme::ERR),
         };
         let content = pad(area);
-        let when = if b.ago.is_empty() {
+        let mut when = if b.ago.is_empty() {
             String::new()
         } else {
             format!(" · {}", b.ago)
         };
+        if let Some(amb) = &b.ambiente {
+            when.push_str(&format!(" · {}", tr!("ambiente {name}", name = amb)));
+        }
         Line::from(vec![
             Span::styled(format!("{symbol} "), Style::new().fg(color)),
             Span::styled(tr!("Última ejecución: "), theme::secondary()),
@@ -656,84 +719,38 @@ impl PreviewState {
 
     /// Lista de planes sobre la lista de pasos: `●` el actual, `›` el cursor.
     fn render_switcher(&self, buf: &mut Buffer, over: Rect) {
-        let rows = self
-            .plans
-            .len()
-            .min(over.height.saturating_sub(4) as usize)
-            .max(1);
-        let hint = tr!("↑↓ · enter abrir · c copiar · r renombrar · d eliminar · esc");
-        let widest = self
+        let rows: Vec<(String, bool)> = self
             .plans
             .iter()
-            .map(|p| p.chars().count())
-            .max()
-            .unwrap_or(0)
-            + 12;
-        // el ancho que pide el hint (más los bordes) manda; nunca más que el área disponible
-        let w = widest
-            .max(hint.chars().count() + 4)
-            .min(over.width.saturating_sub(2) as usize) as u16;
-        let h = rows as u16 + 4;
-        let area = Rect::new(
-            over.x + over.width.saturating_sub(w) / 2,
-            over.y + over.height.saturating_sub(h) / 2,
-            w.min(over.width),
-            h.min(over.height),
-        );
-        Clear.render(area, buf);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(theme::border())
-            .title(Span::styled(tr!(" Cambiar de plan "), theme::bold()));
-        let inner = block.inner(area);
-        block.render(area, buf);
-        let cursor = self.switcher.unwrap_or(0);
-        let offset = (cursor + 1).saturating_sub(rows);
-        for (row, (i, name)) in self
-            .plans
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(rows)
-            .enumerate()
-        {
-            let selected = i == cursor;
-            let y = inner.y + row as u16;
-            if selected {
-                buf.set_style(
-                    Rect::new(inner.x, y, inner.width, 1),
-                    Style::new().bg(theme::SELECTED_BG),
-                );
-            }
-            let marker = if selected {
-                Span::styled("›", Style::new().fg(theme::INFO))
-            } else {
-                Span::raw(" ")
-            };
-            let current = if *name == self.plan {
-                Span::styled(" ●", Style::new().fg(theme::OK))
-            } else {
-                Span::raw("  ")
-            };
-            Line::from(vec![
-                marker,
-                current,
-                Span::raw(" "),
-                Span::styled(
-                    truncate(name, inner.width.saturating_sub(5) as usize),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-            ])
-            .render(Rect::new(inner.x, y, inner.width, 1), buf);
-        }
-        Line::from(Span::styled(hint, theme::muted())).render(
-            Rect::new(
-                inner.x + 1,
-                inner.bottom().saturating_sub(1),
-                inner.width,
-                1,
-            ),
+            .map(|p| (p.clone(), *p == self.plan))
+            .collect();
+        render_popup(
             buf,
+            over,
+            &tr!(" Cambiar de plan "),
+            &tr!("↑↓ · enter abrir · c copiar · r renombrar · d eliminar · esc"),
+            &rows,
+            self.switcher.unwrap_or(0),
+        );
+    }
+
+    /// El selector de ambiente: «ninguno» y los conocidos, con ● el elegido ahora.
+    fn render_ambiente_picker(&self, buf: &mut Buffer, over: Rect) {
+        let rows: Vec<(String, bool)> = self
+            .ambiente_choices()
+            .into_iter()
+            .map(|a| {
+                let current = a == self.ambiente;
+                (a.unwrap_or_else(|| tr!("(ninguno)")), current)
+            })
+            .collect();
+        render_popup(
+            buf,
+            over,
+            &tr!(" Ambiente "),
+            &tr!("↑↓ · enter elegir · esc"),
+            &rows,
+            self.ambiente_picker.unwrap_or(0),
         );
     }
 
@@ -995,4 +1012,84 @@ fn step_lines(
     meta.push(Span::styled(step.meta.clone(), meta_style));
     let meta = Line::from(widgets::truncate_spans(meta, width as usize));
     (title, meta)
+}
+
+/// Una lista corta sobre la lista de pasos: `›` el cursor, `●` la fila vigente.
+fn render_popup(
+    buf: &mut Buffer,
+    over: Rect,
+    title: &str,
+    hint: &str,
+    items: &[(String, bool)],
+    cursor: usize,
+) {
+    let rows = items
+        .len()
+        .min(over.height.saturating_sub(4) as usize)
+        .max(1);
+    let widest = items
+        .iter()
+        .map(|(p, _)| p.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 12;
+    // el ancho que pide el hint (más los bordes) manda; nunca más que el área disponible
+    let w = widest
+        .max(hint.chars().count() + 4)
+        .min(over.width.saturating_sub(2) as usize) as u16;
+    let h = rows as u16 + 4;
+    let area = Rect::new(
+        over.x + over.width.saturating_sub(w) / 2,
+        over.y + over.height.saturating_sub(h) / 2,
+        w.min(over.width),
+        h.min(over.height),
+    );
+    Clear.render(area, buf);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::border())
+        .title(Span::styled(title.to_string(), theme::bold()));
+    let inner = block.inner(area);
+    block.render(area, buf);
+    let offset = (cursor + 1).saturating_sub(rows);
+    for (row, (i, (name, current))) in items.iter().enumerate().skip(offset).take(rows).enumerate()
+    {
+        let selected = i == cursor;
+        let y = inner.y + row as u16;
+        if selected {
+            buf.set_style(
+                Rect::new(inner.x, y, inner.width, 1),
+                Style::new().bg(theme::SELECTED_BG),
+            );
+        }
+        let marker = if selected {
+            Span::styled("›", Style::new().fg(theme::INFO))
+        } else {
+            Span::raw(" ")
+        };
+        let current = if *current {
+            Span::styled(" ●", Style::new().fg(theme::OK))
+        } else {
+            Span::raw("  ")
+        };
+        Line::from(vec![
+            marker,
+            current,
+            Span::raw(" "),
+            Span::styled(
+                truncate(name, inner.width.saturating_sub(5) as usize),
+                Style::new().add_modifier(Modifier::BOLD),
+            ),
+        ])
+        .render(Rect::new(inner.x, y, inner.width, 1), buf);
+    }
+    Line::from(Span::styled(hint.to_string(), theme::muted())).render(
+        Rect::new(
+            inner.x + 1,
+            inner.bottom().saturating_sub(1),
+            inner.width,
+            1,
+        ),
+        buf,
+    );
 }

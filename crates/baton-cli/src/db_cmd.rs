@@ -12,8 +12,11 @@ use std::time::Duration;
 
 use baton_core::credential::fields_for;
 use baton_core::db_console::{self, Invocation, NULL_MARK, Table};
+use baton_core::i18n::tr_dyn;
 use baton_core::plan::{CredentialKind, CredentialReq};
 use baton_core::sql::{destructive_statements, statement_count};
+use baton_core::tk;
+use baton_core::tr;
 use baton_store::secrets::Resolver;
 use baton_store::{Project, check_config, check_plan};
 
@@ -80,22 +83,31 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     let ambiente = match crate::ambiente::resolve(args.ambiente.as_deref(), &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_USAGE);
         }
     };
     let resolver = Resolver::new(project, &config, ambiente.as_deref());
     let dbs: Vec<&CredentialReq> = plan.db_credentials().collect();
     if dbs.is_empty() {
-        eprintln!("error: el plan '{plan_name}' no declara credenciales de base de datos");
-        eprintln!("  agrega una en [[credentials]] con kind = \"db\" (PostgreSQL) o \"sqlite\"");
+        eprintln!(
+            "{}",
+            tr!(
+                "error: el plan '{plan_name}' no declara credenciales de base de datos",
+                plan_name = plan_name
+            )
+        );
+        eprintln!(
+            "{}",
+            tr!("  agrega una en [[credentials]] con kind = \"db\" (PostgreSQL) o \"sqlite\"")
+        );
         return ExitCode::from(EXIT_USAGE);
     }
 
     let query = match read_query(&args) {
         Ok(q) => q,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -107,7 +119,7 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
             let cred = match pick_credential(&dbs, args.credential.as_deref()) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", tr!("error: {e}", e = e));
                     return ExitCode::from(EXIT_USAGE);
                 }
             };
@@ -117,50 +129,65 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     if args.interactive {
-        eprintln!("error: --interactivo no se combina con --consulta ni --archivo");
+        eprintln!(
+            "{}",
+            tr!("error: --interactivo no se combina con --consulta ni --archivo")
+        );
         return ExitCode::from(EXIT_USAGE);
     }
 
     let cred = match pick_credential(&dbs, args.credential.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_USAGE);
         }
     };
     match statement_count(&query) {
         0 => {
-            eprintln!("error: la consulta está vacía");
+            eprintln!("{}", tr!("error: la consulta está vacía"));
             return ExitCode::from(EXIT_USAGE);
         }
         1 => {}
         n => {
-            eprintln!("error: baton db ejecuta una sentencia por vez y la consulta trae {n}");
-            eprintln!("  para varias, ponlas en un archivo .sql y usa un paso sql del plan");
+            eprintln!(
+                "{}",
+                tr!(
+                    "error: baton db ejecuta una sentencia por vez y la consulta trae {n}",
+                    n = n
+                )
+            );
+            eprintln!(
+                "{}",
+                tr!("  para varias, ponlas en un archivo .sql y usa un paso sql del plan")
+            );
             return ExitCode::from(EXIT_USAGE);
         }
     }
     let risks = destructive_statements(&query);
     if args.write && !risks.is_empty() && !args.assume_yes {
-        eprintln!("error: la consulta es destructiva y no se ejecuta sin confirmar:");
+        eprintln!(
+            "{}",
+            tr!("error: la consulta es destructiva y no se ejecuta sin confirmar:")
+        );
         for r in &risks {
             eprintln!("  {} ({})", r.what, r.text);
         }
-        eprintln!("  repite con --assume-yes si es lo que quieres");
+        eprintln!("{}", tr!("  repite con --assume-yes si es lo que quieres"));
         return ExitCode::from(EXIT_USAGE);
     }
 
     let resolved = match resolve_fields(cred, &resolver, project) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_INVALID);
         }
     };
     let (invocation, secrets) = match invocation_for(cred, &resolved, project, args.write) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_INVALID);
         }
     };
@@ -172,18 +199,18 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
 /// quedaría esperando para siempre. `None` si no se dio ninguna.
 fn read_query(args: &Args) -> Result<Option<String>, String> {
     match (&args.query, &args.file) {
-        (Some(_), Some(_)) => Err("usa --consulta o --archivo, no los dos".to_string()),
+        (Some(_), Some(_)) => Err(tr!("usa --consulta o --archivo, no los dos")),
         (Some(q), None) => Ok(Some(q.clone())),
         (None, Some(f)) if f.as_os_str() == "-" => {
             let mut text = String::new();
             std::io::stdin()
                 .read_to_string(&mut text)
-                .map_err(|e| format!("no se pudo leer la entrada: {e}"))?;
+                .map_err(|e| tr!("no se pudo leer la entrada: {e}", e = e))?;
             Ok(Some(text))
         }
         (None, Some(f)) => std::fs::read_to_string(f)
             .map(Some)
-            .map_err(|e| format!("no se pudo leer {}: {e}", f.display())),
+            .map_err(|e| tr!("no se pudo leer {path}: {e}", path = f.display(), e = e)),
         (None, None) => Ok(None),
     }
 }
@@ -200,15 +227,17 @@ pub(crate) fn pick_credential<'a>(
             .join(", ")
     };
     match (wanted, dbs) {
-        (Some(id), _) => dbs
-            .iter()
-            .find(|c| c.id == id)
-            .copied()
-            .ok_or_else(|| format!("el plan no tiene una base '{id}' (hay: {})", ids())),
+        (Some(id), _) => dbs.iter().find(|c| c.id == id).copied().ok_or_else(|| {
+            tr!(
+                "el plan no tiene una base '{id}' (hay: {list})",
+                id = id,
+                list = ids()
+            )
+        }),
         (None, [only]) => Ok(only),
-        (None, _) => Err(format!(
-            "el plan tiene varias bases: elige una (baton db <base> ...): {}",
-            ids()
+        (None, _) => Err(tr!(
+            "el plan tiene varias bases: elige una (baton db <base> ...): {list}",
+            list = ids()
         )),
     }
 }
@@ -228,12 +257,12 @@ pub(crate) fn resolve_fields(
             None if spec.optional => {}
             None => {
                 let path = baton_store::credentials::env_path(project, None, &cred.reference.file);
-                return Err(format!(
-                    "base '{}': falta {} (se esperaba {} o la variable {})",
-                    cred.id,
-                    spec.label,
-                    project.display_path(&path),
-                    cred.reference.variable(spec.key)
+                return Err(tr!(
+                    "base '{id}': falta {label} (se esperaba {path} o la variable {var})",
+                    id = cred.id,
+                    label = tr_dyn(spec.label),
+                    path = project.display_path(&path),
+                    var = cred.reference.variable(spec.key)
                 ));
             }
         }
@@ -251,13 +280,13 @@ pub(crate) fn invocation_for(
     match cred.kind {
         CredentialKind::Sqlite => {
             let file = baton_core::sql::sqlite_conn(&cred.reference, resolved)
-                .ok_or("falta el archivo de la base")?
+                .ok_or_else(|| tr!("falta el archivo de la base"))?
                 .file;
             let path = sqlite_path(&project.root, &file);
             if !path.exists() && !write {
-                return Err(format!(
-                    "el archivo {} no existe (con --escribir se crearía)",
-                    path.display()
+                return Err(tr!(
+                    "el archivo {path} no existe (con --escribir se crearía)",
+                    path = path.display()
                 ));
             }
             Ok((
@@ -352,7 +381,7 @@ pub fn query_csv(
             .map(|l| l.trim_end().to_string())
             .collect();
         return Err(QueryError::Failed(if lines.is_empty() {
-            vec!["error: la consulta falló".to_string()]
+            vec![tr!("error: la consulta falló")]
         } else {
             lines
         }));
@@ -363,7 +392,7 @@ pub fn query_csv(
 /// Dibuja la salida CSV de un motor en el formato pedido.
 pub fn show(csv: &str, truncated: bool, tsv: bool, view: &View) -> Result<(), String> {
     if truncated {
-        eprintln!("aviso: la salida pasó de 64 MiB y se cortó");
+        eprintln!("{}", tr!("aviso: la salida pasó de 64 MiB y se cortó"));
     }
     let table = || {
         if tsv {
@@ -394,18 +423,27 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
         Ok((csv, truncated)) => match show(&csv, truncated, inv.tsv, &view) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("{}", tr!("error: {e}", e = e));
                 ExitCode::from(EXIT_RUN_FAILED)
             }
         },
         Err(QueryError::NotFound(program)) => {
-            eprintln!("error: no se encontró {program} en el PATH");
+            eprintln!(
+                "{}",
+                tr!(
+                    "error: no se encontró {program} en el PATH",
+                    program = program
+                )
+            );
             ExitCode::from(EXIT_INVALID)
         }
         Err(QueryError::TimedOut) => {
             eprintln!(
-                "error: la consulta no terminó en {} (--timeout para esperar más)",
-                baton_core::units::format_duration(args.timeout)
+                "{}",
+                tr!(
+                    "error: la consulta no terminó en {time} (--timeout para esperar más)",
+                    time = baton_core::units::format_duration(args.timeout)
+                )
             );
             ExitCode::from(EXIT_RUN_FAILED)
         }
@@ -416,7 +454,7 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
             ExitCode::from(EXIT_RUN_FAILED)
         }
         Err(QueryError::Other(e)) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             ExitCode::from(EXIT_RUN_FAILED)
         }
     }
@@ -426,11 +464,11 @@ fn print_table(t: &Table, view: &View) {
     let style = Style::detect();
     if t.columns.is_empty() {
         let what = if view.write {
-            "ok (la sentencia no devolvió filas)"
+            tr!("ok (la sentencia no devolvió filas)")
         } else {
-            "(la consulta no devolvió resultados)"
+            tr!("(la consulta no devolvió resultados)")
         };
-        println!("{}", style.dim(what));
+        println!("{}", style.dim(&what));
         return;
     }
     let limit = (view.limit > 0).then_some(view.limit);
@@ -443,8 +481,9 @@ fn print_table(t: &Table, view: &View) {
     {
         println!(
             "{}",
-            style.dim(&format!(
-                "(no cabe en {cols} columnas: un registro por bloque; con | less -S sigue la tabla)"
+            style.dim(&tr!(
+                "(no cabe en {cols} columnas: un registro por bloque; con | less -S sigue la tabla)",
+                cols = cols
             ))
         );
         print_records(t, view, cols as usize);
@@ -502,7 +541,7 @@ pub fn render_records(
     let total = t.rows.len();
     let mut out = Vec::new();
     for (n, row) in t.rows[..shown].iter().enumerate() {
-        let head = format!("─ fila {} de {total} ", n + 1);
+        let head = tr!("─ fila {n} de {total} ", n = n + 1, total = total);
         let fill = "─".repeat(rule_width.saturating_sub(width(&head)));
         out.push(style.dim(&format!("{head}{fill}")));
         for (c, name) in t.columns.iter().enumerate() {
@@ -517,10 +556,12 @@ pub fn render_records(
             out.push(format!("  {}{fill}  {text}", style.bold(name)));
         }
     }
-    let noun = |n: usize| if n == 1 { "fila" } else { "filas" };
+    let noun = |n: usize| tr_dyn(if n == 1 { tk!("fila") } else { tk!("filas") });
     out.push(if shown < total {
-        style.dim(&format!(
-            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)"
+        style.dim(&tr!(
+            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)",
+            shown = shown,
+            total = total
         ))
     } else {
         style.dim(&format!("({total} {})", noun(total)))
@@ -622,10 +663,12 @@ pub fn render_table(
     }
     out.push(rule("└", "┴", "┘"));
     let total = t.rows.len();
-    let noun = |n: usize| if n == 1 { "fila" } else { "filas" };
+    let noun = |n: usize| tr_dyn(if n == 1 { tk!("fila") } else { tk!("filas") });
     out.push(if shown < total {
-        style.dim(&format!(
-            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)"
+        style.dim(&tr!(
+            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)",
+            shown = shown,
+            total = total
         ))
     } else {
         style.dim(&format!("({total} {})", noun(total)))
@@ -650,10 +693,10 @@ fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, Str
     match c.kind {
         CredentialKind::Sqlite => (
             "sqlite",
-            get("FILE").unwrap_or_else(|| "(falta el archivo)".into()),
+            get("FILE").unwrap_or_else(|| tr!("(falta el archivo)")),
         ),
         kind => {
-            let user = get("USER").unwrap_or_else(|| "(falta el usuario)".into());
+            let user = get("USER").unwrap_or_else(|| tr!("(falta el usuario)"));
             let place = get("CONTAINER").map_or_else(
                 || {
                     format!(
@@ -662,7 +705,7 @@ fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, Str
                         get("PORT").map(|p| format!(":{p}")).unwrap_or_default()
                     )
                 },
-                |ct| format!("contenedor {ct}"),
+                |ct| tr!("contenedor {ct}", ct = ct),
             );
             let db = get("DATABASE").map(|d| format!("/{d}")).unwrap_or_default();
             let name = if kind == CredentialKind::Mysql {
@@ -678,7 +721,7 @@ fn describe_target(c: &CredentialReq, resolver: &Resolver) -> (&'static str, Str
 /// Las bases del plan y cómo llegar a cada una, sin mostrar secretos.
 pub(crate) fn describe(dbs: &[&CredentialReq], resolver: &Resolver, style: &Style) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{}\n", style.bold("bases del plan")));
+    out.push_str(&format!("{}\n", style.bold(&tr!("bases del plan"))));
     let id_w = dbs.iter().map(|c| c.id.chars().count()).max().unwrap_or(0);
     for c in dbs {
         let (kind, target) = describe_target(c, resolver);
@@ -687,7 +730,7 @@ pub(crate) fn describe(dbs: &[&CredentialReq], resolver: &Resolver, style: &Styl
     let first = dbs[0].id.as_str();
     out.push_str(&format!(
         "\n{}\n  baton db {first} -c \"select 1\"\n  baton db {first} -f consulta.sql --formato json\n  echo \"select 1\" | baton db {first} -f -\n",
-        style.bold("consultar")
+        style.bold(&tr!("consultar"))
     ));
     out
 }

@@ -692,7 +692,7 @@ fn editor_shows_the_step_form_as_designed() {
         "◆ auto por servicio · todos pasan",
         "configurar ›",
         "3 activos · 1 nuevo sin activar",
-        "recuperación · opcional",
+        "recuperación y prueba · opcional",
         "docker compose down",
         "( ) antes de este paso",
         "[ctrl g] configurar gate",

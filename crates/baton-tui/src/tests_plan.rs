@@ -749,3 +749,62 @@ fn monochrome_replaces_colors_with_attributes() {
         assert_eq!(buf[(x, 0)].bg, Color::Reset);
     }
 }
+
+// ------------------------------------------------------------------ elegir el ambiente
+
+fn app_with_ambientes(current: Option<&str>) -> App {
+    let p = plan();
+    let mut preview = PreviewState::from_plan(&p);
+    preview.ambientes = vec!["prod".into(), "qa".into()];
+    preview.ambiente = current.map(String::from);
+    App::new(preview)
+}
+
+#[test]
+fn the_ambiente_key_is_only_offered_when_there_are_known_ambientes() {
+    let mut none = app();
+    assert!(none.handle_key(key(KeyCode::Char('a'))).is_none());
+    assert!(!screen(&none, 100, 30).contains(" Ambiente "));
+    assert!(!screen(&none, 100, 30).contains("[a] ambiente"));
+
+    let with = app_with_ambientes(None);
+    assert!(screen(&with, 100, 30).contains("[a] ambiente"));
+}
+
+#[test]
+fn the_ambiente_picker_marks_the_current_one_and_chooses_without_remembering() {
+    let mut app = app_with_ambientes(Some("qa"));
+    assert!(app.handle_key(key(KeyCode::Char('a'))).is_none());
+    let shown = screen(&app, 100, 30);
+    assert!(shown.contains(" Ambiente "), "{shown}");
+    assert!(
+        shown.contains("(ninguno)") && shown.contains("prod"),
+        "{shown}"
+    );
+    // el cursor arranca en el vigente (qa, tercera fila); subir a prod y elegir
+    app.handle_key(key(KeyCode::Up));
+    let effect = app.handle_key(key(KeyCode::Enter));
+    assert!(
+        matches!(&effect, Some(Effect::SetAmbiente(Some(a))) if a == "prod"),
+        "{effect:?}"
+    );
+}
+
+#[test]
+fn choosing_the_current_ambiente_or_escaping_changes_nothing_and_none_is_an_option() {
+    let mut app = app_with_ambientes(Some("qa"));
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(app.handle_key(key(KeyCode::Enter)).is_none(), "el mismo");
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(!screen(&app, 100, 30).contains(" Ambiente "));
+
+    app.handle_key(key(KeyCode::Char('a')));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    let effect = app.handle_key(key(KeyCode::Enter));
+    assert!(
+        matches!(effect, Some(Effect::SetAmbiente(None))),
+        "{effect:?}"
+    );
+}
