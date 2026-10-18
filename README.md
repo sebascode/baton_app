@@ -103,7 +103,7 @@ baton last                    # cómo terminó la última ejecución y, si fall�
 baton history                 # las ejecuciones anteriores del plan, una por línea
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
 baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
-baton docs instalar -o docs/instalar.md   # documentación del plan en markdown con diagramas mermaid
+baton docs instalar -o docs/instalar.md   # documentación del plan: resumen, flujo mermaid, variables, destinos con su host, ambientes y mantención
 baton settings set ui.language en   # baton en inglés (también BATON_LANG=en)
 baton settings                  # configuración global (~/.config/baton/config.toml) y de dónde sale cada valor
 baton settings set defaults.engine podman   # para todos tus proyectos
