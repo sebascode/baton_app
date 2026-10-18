@@ -229,3 +229,46 @@ fn docs_follow_the_language_but_keep_the_commands_and_names_as_written() {
     let es = fx.run(None, &["docs", "demo"]);
     assert!(out(&es).contains("## Resumen"), "{}", out(&es));
 }
+
+#[test]
+fn overview_last_and_history_talk_english_too() {
+    let fx = Fx::new();
+    let o = fx.run(Some("en"), &["last", "demo"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("plan 'demo' has not run yet"),
+        "{}",
+        err(&o)
+    );
+
+    fs::write(
+        fx.root.join("proj/baton/plans/demo.toml"),
+        PLAN.replace("echo adios", "exit 3"),
+    )
+    .unwrap();
+    let o = fx.run(Some("en"), &["run", "demo", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(3));
+
+    let o = fx.run(Some("en"), &["last", "demo"]);
+    let t = out(&o);
+    assert!(t.contains("1 of 2 steps"), "{t}");
+    assert!(t.contains("what happened at «Dos»"), "{t}");
+    assert!(
+        t.contains("next") && t.contains("resumes from where it stopped"),
+        "{t}"
+    );
+    assert!(!t.contains("siguiente") && !t.contains("pasos"), "{t}");
+
+    let o = fx.run(Some("en"), &["history", "demo"]);
+    let t = out(&o);
+    assert!(t.contains("1 run") && t.contains("failed at «Dos»"), "{t}");
+    assert!(t.contains("the last one, in detail"), "{t}");
+
+    let o = fx.run(Some("en"), &[]);
+    let t = out(&o);
+    assert!(
+        t.contains("next") && t.contains("how the last run ended"),
+        "{t}"
+    );
+    assert!(!t.contains("siguiente") && !t.contains("orquesta"), "{t}");
+}

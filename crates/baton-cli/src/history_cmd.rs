@@ -3,6 +3,8 @@
 use std::process::ExitCode;
 
 use baton_core::events::{HistoryEntry, RunOutcome, StepStatus};
+use baton_core::tk;
+use baton_core::tr;
 use baton_store::history::{self, RunCounts};
 use baton_store::state::State;
 use baton_store::{Project, check_plan};
@@ -33,8 +35,20 @@ pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
     };
     let entries = history::entries(&state, &plan, history::now());
     if entries.is_empty() {
-        eprintln!("el plan '{plan_name}' todavía no se ejecutó");
-        eprintln!("  ejecútalo con: baton run {plan_name}");
+        eprintln!(
+            "{}",
+            tr!(
+                "el plan '{plan_name}' todavía no se ejecutó",
+                plan_name = plan_name
+            )
+        );
+        eprintln!(
+            "{}",
+            tr!(
+                "  ejecútalo con: baton run {plan_name}",
+                plan_name = plan_name
+            )
+        );
         return ExitCode::SUCCESS;
     }
     print!(
@@ -87,7 +101,7 @@ fn render(
     line(&format!(
         "{} · {} ({})",
         style.bold(plan),
-        crate::style::plural(counts.total, "ejecución", "ejecuciones"),
+        crate::style::plural(counts.total, tk!("ejecución"), tk!("ejecuciones")),
         parts.join("  ")
     ));
     line("");
@@ -107,12 +121,12 @@ fn render(
         let (mark, tone) = outcome_mark(e.outcome);
         let statuses: Vec<StepStatus> = e.steps.iter().map(|s| s.status).collect();
         let what = match (e.outcome, stopped_at(e)) {
-            (RunOutcome::Completed, _) => "completada".to_string(),
-            (RunOutcome::CompletedWithWarnings, _) => "completada con advertencias".to_string(),
-            (RunOutcome::Failed, Some(s)) => format!("falló en «{s}»"),
-            (RunOutcome::Failed, None) => "falló".to_string(),
-            (RunOutcome::Aborted, Some(s)) => format!("abortada en «{s}»"),
-            (RunOutcome::Aborted, None) => "abortada".to_string(),
+            (RunOutcome::Completed, _) => tr!("completada"),
+            (RunOutcome::CompletedWithWarnings, _) => tr!("completada con advertencias"),
+            (RunOutcome::Failed, Some(s)) => tr!("falló en «{s}»", s = s),
+            (RunOutcome::Failed, None) => tr!("falló"),
+            (RunOutcome::Aborted, Some(s)) => tr!("abortada en «{s}»", s = s),
+            (RunOutcome::Aborted, None) => tr!("abortada"),
         };
         let took = e.duration.map_or("-".to_string(), duration);
         line(&format!(
@@ -126,12 +140,15 @@ fn render(
     }
     if shown.len() < entries.len() {
         line("");
-        line(&style.dim(&format!(
-            "... y {} más (--limit para ver más)",
-            entries.len() - shown.len()
+        line(&style.dim(&tr!(
+            "... y {n} más (--limit para ver más)",
+            n = entries.len() - shown.len()
         )));
     }
     line("");
-    line(&style.dim(&format!("la última, en detalle: baton last {plan}")));
+    line(&style.dim(&tr!(
+        "la última, en detalle: baton last {plan}",
+        plan = plan
+    )));
     out
 }
