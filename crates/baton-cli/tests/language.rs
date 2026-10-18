@@ -308,3 +308,24 @@ fn db_talks_english_too() {
     assert!(t.contains("add one in [[credentials]]"), "{t}");
     assert!(!t.contains("no declara"), "{t}");
 }
+
+#[test]
+fn validate_diagnostics_are_in_english_too() {
+    let fx = Fx::new();
+    fs::write(
+        fx.root.join("proj/baton/plans/demo.toml"),
+        PLAN.replace("id = \"dos\"", "id = \"uno\""),
+    )
+    .unwrap();
+    let o = fx.run(Some("en"), &["validate", "demo"]);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    let t = format!("{}{}", out(&o), err(&o));
+    assert!(
+        t.contains("duplicate id 'uno' (already used in step 1)"),
+        "{t}"
+    );
+    assert!(!t.contains("id duplicado"), "{t}");
+    let o = fx.run(None, &["validate", "demo"]);
+    let t = format!("{}{}", out(&o), err(&o));
+    assert!(t.contains("id duplicado 'uno'"), "{t}");
+}
