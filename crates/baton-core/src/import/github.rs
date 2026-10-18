@@ -11,12 +11,12 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
     let jobs = doc
         .get("jobs")
         .and_then(Value::as_mapping)
-        .ok_or_else(|| ImportError::Shape("falta la sección 'jobs' del workflow".into()))?;
+        .ok_or_else(|| ImportError::Shape(crate::tr!("falta la sección 'jobs' del workflow")))?;
     if doc.get("on").is_some() {
         b.note(
             NoteLevel::Info,
             "on",
-            "los triggers (on:) no se importan: baton ejecuta el plan bajo demanda",
+            crate::tr!("los triggers (on:) no se importan: baton ejecuta el plan bajo demanda"),
         );
     }
     let wf_env = translated_env(doc.get("env"), b);
@@ -54,29 +54,33 @@ fn convert_job(
     let mut job_off = job
         .get("if")
         .and_then(text)
-        .map(|c| format!("condición if: {c}"));
+        .map(|c| crate::tr!("condición if: {c}", c = c));
     if job.get("strategy").and_then(|s| s.get("matrix")).is_some() && job_off.is_none() {
-        job_off = Some("strategy.matrix no se expande (correría una sola vez)".into());
+        job_off = Some(crate::tr!(
+            "strategy.matrix no se expande (correría una sola vez)"
+        ));
     }
     if job.get("services").is_some() {
         b.note(
             NoteLevel::Warning,
             &at,
-            "services: los contenedores de servicio no se levantan (usa un paso compose antes)",
+            crate::tr!(
+                "services: los contenedores de servicio no se levantan (usa un paso compose antes)"
+            ),
         );
     }
     if job.get("container").is_some() {
         b.note(
             NoteLevel::Warning,
             &at,
-            "container: los comandos corren en el destino, no dentro de esa imagen",
+            crate::tr!("container: los comandos corren en el destino, no dentro de esa imagen"),
         );
     }
     if job.get("continue-on-error").is_some() {
         b.note(
             NoteLevel::Info,
             &at,
-            "continue-on-error no se importa: un fallo detiene el plan",
+            crate::tr!("continue-on-error no se importa: un fallo detiene el plan"),
         );
     }
 
@@ -86,12 +90,13 @@ fn convert_job(
             name: label.clone(),
             id_hint: jid.to_string(),
             at: at.clone(),
-            script: commented(&format!(
-                "pendiente de migrar: workflow reutilizable {uses}"
+            script: commented(&crate::tr!(
+                "pendiente de migrar: workflow reutilizable {uses}",
+                uses = uses
             )),
             env: Vec::new(),
             workdir: None,
-            disabled: Some("workflow reutilizable sin equivalente".into()),
+            disabled: Some(crate::tr!("workflow reutilizable sin equivalente")),
             timeout: None,
             retries: 0,
         };
@@ -111,9 +116,10 @@ fn convert_job(
         b.note(
             NoteLevel::Info,
             &at,
-            format!(
-                "environment {env_name}: gate manual antes del job ({})",
-                if enabled {
+            crate::tr!(
+                "environment {env_name}: gate manual antes del job ({a0})",
+                env_name = env_name,
+                a0 = if enabled {
                     "activo"
                 } else {
                     "desactivado, actívalo si ese ambiente exige aprobación"
@@ -146,10 +152,14 @@ fn convert_job(
 
         if let Some(uses) = st.get("uses").and_then(text) {
             if let Some(why) = ignorable_action(&uses) {
-                b.note(NoteLevel::Skipped, &sat, format!("uses: {uses} ({why})"));
+                b.note(
+                    NoteLevel::Skipped,
+                    &sat,
+                    crate::tr!("uses: {uses} ({why})", uses = uses, why = why),
+                );
                 continue;
             }
-            let mut original = format!("pendiente de migrar: uses: {uses}");
+            let mut original = crate::tr!("pendiente de migrar: uses: {uses}", uses = uses);
             if let Some(with) = st.get("with").and_then(Value::as_mapping) {
                 for (wk, wv) in with {
                     if let (Some(wk), Some(wv)) = (text(wk), text(wv)) {
@@ -165,7 +175,7 @@ fn convert_job(
                 script: commented(&original),
                 env: Vec::new(),
                 workdir: None,
-                disabled: Some("acción sin equivalente en baton".into()),
+                disabled: Some(crate::tr!("acción sin equivalente en baton")),
                 timeout: None,
                 retries: 0,
             };
@@ -174,7 +184,7 @@ fn convert_job(
         }
 
         let Some(run) = st.get("run").and_then(text) else {
-            b.note(NoteLevel::Skipped, &sat, "paso sin run ni uses");
+            b.note(NoteLevel::Skipped, &sat, crate::tr!("paso sin run ni uses"));
             continue;
         };
         let script = translate(&run, b);
@@ -191,18 +201,18 @@ fn convert_job(
             .or_else(|| {
                 st.get("if")
                     .and_then(text)
-                    .map(|c| format!("condición if: {c}"))
+                    .map(|c| crate::tr!("condición if: {c}", c = c))
             })
             .or_else(|| {
                 shell
                     .filter(|s| !matches!(s.as_str(), "bash" | "sh"))
-                    .map(|s| format!("shell: {s} no está soportado"))
+                    .map(|s| crate::tr!("shell: {s} no está soportado", s = s))
             });
         if st.get("continue-on-error").is_some() {
             b.note(
                 NoteLevel::Info,
                 &sat,
-                "continue-on-error no se importa: un fallo detiene el plan",
+                crate::tr!("continue-on-error no se importa: un fallo detiene el plan"),
             );
         }
         let name = sname.unwrap_or_else(|| first_line(&run, 50));
@@ -223,26 +233,38 @@ fn convert_job(
 }
 
 /// Acciones que solo preparan el runner de GitHub y no aportan nada aquí.
-fn ignorable_action(uses: &str) -> Option<&'static str> {
+fn ignorable_action(uses: &str) -> Option<String> {
     const IGNORED: [(&str, &str); 7] = [
         (
             "actions/checkout",
-            "baton trabaja sobre la carpeta del proyecto",
+            crate::tk!("baton trabaja sobre la carpeta del proyecto"),
         ),
-        ("actions/cache", "baton no tiene caché"),
-        ("actions/upload-artifact", "baton no maneja artifacts"),
-        ("actions/download-artifact", "baton no maneja artifacts"),
+        ("actions/cache", crate::tk!("baton no tiene caché")),
+        (
+            "actions/upload-artifact",
+            crate::tk!("baton no maneja artifacts"),
+        ),
+        (
+            "actions/download-artifact",
+            crate::tk!("baton no maneja artifacts"),
+        ),
         (
             "actions/setup-",
-            "las herramientas deben existir en el destino",
+            crate::tk!("las herramientas deben existir en el destino"),
         ),
-        ("docker/setup-", "docker debe existir en el destino"),
-        ("docker/login-action", "usa una credencial docker de baton"),
+        (
+            "docker/setup-",
+            crate::tk!("docker debe existir en el destino"),
+        ),
+        (
+            "docker/login-action",
+            crate::tk!("usa una credencial docker de baton"),
+        ),
     ];
     IGNORED
         .iter()
         .find(|(prefix, _)| uses.starts_with(prefix))
-        .map(|(_, why)| *why)
+        .map(|(_, why)| crate::i18n::tr_dyn(why).into_owned())
 }
 
 fn default_run(v: &Value, key: &str) -> Option<String> {

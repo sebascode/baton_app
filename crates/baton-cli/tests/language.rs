@@ -329,3 +329,23 @@ fn validate_diagnostics_are_in_english_too() {
     let t = format!("{}{}", out(&o), err(&o));
     assert!(t.contains("id duplicado 'uno'"), "{t}");
 }
+
+#[test]
+fn import_notes_from_the_converter_are_in_english_too() {
+    let fx = Fx::new();
+    fs::write(
+        fx.root.join("proj/ci.yml"),
+        "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: echo hi\n",
+    )
+    .unwrap();
+    let o = fx.run(
+        Some("en"),
+        &["import", "ci.yml", "--from", "github", "--dry-run"],
+    );
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(t.contains("baton works on the project folder"), "{t}");
+    assert!(!t.contains("baton trabaja"), "{t}");
+    let o = fx.run(None, &["import", "ci.yml", "--from", "github", "--dry-run"]);
+    assert!(out(&o).contains("baton trabaja sobre la carpeta del proyecto"));
+}
