@@ -56,6 +56,11 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
         &Options {
             no_mermaid: flags.no_mermaid,
             project: Some(project_info(project, config.value.as_ref(), &plan)),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            source_hash: std::fs::read(project.plan_path(plan_name))
+                .ok()
+                .map(|b| baton_core::hash::sha256_hex(&b)[..7].to_string()),
+            past_runs_ms: past_runs_ms(project, &plan),
         },
     );
     match flags.output {
@@ -64,27 +69,60 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
             println!();
             ExitCode::SUCCESS
         }
-        Some(path) => match std::fs::write(path, format!("{text}\n")) {
-            Ok(()) => {
-                eprintln!(
-                    "{}",
-                    tr!("documentación escrita en {path}", path = path.display())
-                );
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!(
-                    "{}",
-                    tr!(
-                        "error: no se pudo escribir {path}: {e}",
-                        path = path.display(),
-                        e = e
-                    )
-                );
-                ExitCode::from(EXIT_USAGE)
-            }
-        },
+        Some(path) => {
+            // lo escrito a mano entre las marcas del documento anterior se conserva
+            let text = match std::fs::read_to_string(path) {
+                Ok(old) => baton_core::docs::keep_notes(&text, &old),
+                Err(_) => text,
+            };
+            write_out(path, &text)
+        }
     }
+}
+
+fn write_out(path: &Path, text: &str) -> ExitCode {
+    match std::fs::write(path, format!("{text}\n")) {
+        Ok(()) => {
+            eprintln!(
+                "{}",
+                tr!("documentación escrita en {path}", path = path.display())
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                tr!(
+                    "error: no se pudo escribir {path}: {e}",
+                    path = path.display(),
+                    e = e
+                )
+            );
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+/// Duración total de las últimas ejecuciones completadas (hasta 5), la más reciente primero.
+fn past_runs_ms(project: &Project, plan: &Plan) -> Vec<u64> {
+    let Ok(state) = State::load(project) else {
+        return Vec::new();
+    };
+    let Some(ps) = state.plans.get(&plan.name) else {
+        return Vec::new();
+    };
+    ps.last_run
+        .iter()
+        .chain(&ps.history)
+        .filter(|r| {
+            matches!(
+                r.status,
+                RunStatus::Completed | RunStatus::CompletedWithWarnings
+            )
+        })
+        .take(5)
+        .map(|r| r.steps.values().map(|s| s.duration_ms).sum())
+        .collect()
 }
 
 /// Lo que `baton docs` sabe del proyecto: otros planes, ambientes, servicios y scripts. Todo se
