@@ -18,7 +18,7 @@ Un plan es una lista ordenada de pasos. Cada paso apunta a archivos de tu proyec
 | `sql` | ejecuta archivos `.sql` contra PostgreSQL, MySQL o MariaDB, o un archivo SQLite |
 | `comando`, `check`, `backup`, `gate` | un comando suelto, una verificación, un respaldo, o una pausa |
 
-Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un docker context.
+Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un docker context. Funciona con docker o podman (se elige solo, o con `BATON_ENGINE`), y la interfaz habla español o inglés (`BATON_LANG=en`).
 
 ## Cómo lo hace
 
@@ -27,6 +27,7 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 - **Gates**: un paso puede esperar una confirmación manual o verificaciones automáticas (healthcheck de Docker, HTTP, comando, contenedor corriendo) antes de seguir.
 - **Fallos**: si algo falla, puedes reintentar, ver el log completo, abrir una shell, hacer rollback o abortar, y luego reanudar desde donde quedó.
 - **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. Las variables de entorno se filtran con más facilidad que un archivo (listados de procesos, `docker inspect`, logs de CI): para secretos de larga vida conviene un archivo en `.baton/` o un gestor; ver [SECURITY.md](SECURITY.md). `.baton/` nunca sale de tu máquina.
+- **Ambientes**: `baton run --ambiente qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
 - **Sin terminal** (CI): no pregunta nada; si falta algo, falla diciendo qué.
 
 ## Instalación
@@ -193,6 +194,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-15 | **0.10.3.** Los scripts `.sh` ya no se cargan como pasos al hacer `baton init`: quedan en la mantención (`baton ops`, `--script`, tecla `m`), elegidos por carpeta (`a > b > c`) y siempre con confirmación. `baton init` ofrece iniciar git (o crear el proyecto en la raíz del repositorio) y siempre agrega `.baton/` al `.gitignore`. |
 | 2026-10-17 | **0.10.4.** Opción global `--quiet` / `-q` para callar los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`), alias `-n` para `--dry-run`, `NO_COLOR` en la TUI y un solo formato para errores de plan inexistente. |
 | 2026-10-18 | **0.10.5.** `baton docs` más completo: índice, resumen en tabla, cómo se usa, variables, destinos con su host (sin usuarios), planes y ambientes del proyecto y la mantención de `baton ops`. Cada ejecución registra con qué ambiente corrió (`last`, `history`, la TUI) y `--resume` y `rollback` avisan si fue otro; tecla `a` para elegirlo en la TUI. `baton plugin add <nombre>` copia al proyecto un plugin global sin volver a bajarlo, y el editor tiene el campo `dry-run`. Más textos en inglés (`last`, `history`, `update`, `import`, `db`, `validate`). |
+| 2026-10-18 | **0.11.0.** `baton docs` más completo: cabecera con la versión de baton y el hash del plan, notas manuales que se conservan al regenerar con `-o` (entre `<!-- baton:notas-manuales -->` y su cierre), duración estimada, y secciones de requisitos (programas que necesita el plan), resultados (dónde quedan logs, estado y respaldos) y qué hacer si algo falla. |
 
 ## Desarrollo
 

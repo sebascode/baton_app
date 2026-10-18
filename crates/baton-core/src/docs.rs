@@ -30,6 +30,30 @@ pub struct Options {
     pub no_mermaid: bool,
     /// Lo que se sabe del proyecto más allá del plan (otros planes, ambientes, servicios...).
     pub project: Option<ProjectInfo>,
+    /// Versión de baton que genera el documento (va en el comentario de cabecera).
+    pub version: Option<String>,
+    /// Hash corto del archivo del plan, para saber si el documento quedó desactualizado.
+    pub source_hash: Option<String>,
+    /// Duración de las últimas ejecuciones completadas, en ms (la más reciente primero).
+    pub past_runs_ms: Vec<u64>,
+}
+
+/// Marcas entre las que lo escrito a mano sobrevive a regenerar el documento.
+pub const NOTES_START: &str = "<!-- baton:notas-manuales -->";
+pub const NOTES_END: &str = "<!-- /baton:notas-manuales -->";
+
+/// Pasa al documento nuevo lo que había escrito a mano entre las marcas del anterior. Si el
+/// anterior no tiene las marcas (o están rotas), el nuevo queda como salió.
+pub fn keep_notes(new: &str, old: &str) -> String {
+    let notes = |t: &str| {
+        let a = t.find(NOTES_START)? + NOTES_START.len();
+        let b = a + t[a..].find(NOTES_END)?;
+        Some((a, b))
+    };
+    match (notes(new), notes(old)) {
+        (Some((na, nb)), Some((oa, ob))) => format!("{}{}{}", &new[..na], &old[oa..ob], &new[nb..]),
+        _ => new.to_string(),
+    }
 }
 
 /// Un plan del proyecto, en una línea.
@@ -79,7 +103,8 @@ pub fn render(
     let info = opts.project.as_ref();
     // el cuerpo primero: el índice se arma con los títulos que de verdad salieron
     let mut body = String::new();
-    summary(&mut body, plan, config, info);
+    summary(&mut body, plan, config, info, &opts.past_runs_ms);
+    requirements(&mut body, plan, config);
     usage(&mut body, plan, info);
     if !opts.no_mermaid && !plan.steps.is_empty() {
         flow(&mut body, plan);
@@ -90,11 +115,30 @@ pub fn render(
     targets(&mut body, plan, config);
     project(&mut body, plan, info);
     maintenance(&mut body, plan, config, info);
+    results(&mut body, plan, config);
     if let Some(run) = last_run {
         last(&mut body, plan, run);
     }
+    when_it_fails(&mut body, plan);
 
     let mut out = String::new();
+    if let Some(v) = &opts.version {
+        let hash = opts
+            .source_hash
+            .as_ref()
+            .map(|h| format!(" · hash {h}"))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "<!-- {} -->\n",
+            crate::tr!(
+                "Generado por baton {version} desde baton/plans/{plan}.toml{hash}. Regenerar con `baton docs {plan}`",
+                version = v,
+                plan = plan.name,
+                hash = hash
+            )
+        );
+    }
     let _ = writeln!(
         out,
         "{}\n",
@@ -116,6 +160,13 @@ pub fn render(
     while out.ends_with("\n\n") {
         out.pop();
     }
+    let _ = write!(
+        out,
+        "\n\n{}\n<!-- {} -->\n{}",
+        NOTES_START,
+        crate::tr!("Lo que escribas entre estas marcas se conserva al regenerar con -o"),
+        NOTES_END
+    );
     out
 }
 
@@ -152,7 +203,13 @@ fn anchor(title: &str) -> String {
 
 // ------------------------------------------------------------------------------ secciones
 
-fn summary(out: &mut String, plan: &Plan, config: Option<&Config>, info: Option<&ProjectInfo>) {
+fn summary(
+    out: &mut String,
+    plan: &Plan,
+    config: Option<&Config>,
+    info: Option<&ProjectInfo>,
+    past_runs_ms: &[u64],
+) {
     let active = plan.active_steps().count();
     let gates = plan.steps.iter().filter(|s| s.gate.is_some()).count();
     out.push_str(&crate::tr!("## Resumen\n\n"));
@@ -218,6 +275,18 @@ fn summary(out: &mut String, plan: &Plan, config: Option<&Config>, info: Option<
             dry = yn(plan.options.dry_run)
         ),
     );
+    if let Some(ms) = median(past_runs_ms) {
+        row(
+            out,
+            crate::tr!("Duración estimada"),
+            crate::tr!(
+                "~{dur} (mediana de las últimas {n} ejecuciones)",
+                dur =
+                    humantime::format_duration(std::time::Duration::from_secs((ms / 1000).max(1))),
+                n = past_runs_ms.len()
+            ),
+        );
+    }
     if !plan.credentials.is_empty() {
         row(
             out,
@@ -968,6 +1037,188 @@ fn last(out: &mut String, plan: &Plan, run: &RunSummary) {
     out.push('\n');
 }
 
+/// Mediana de las duraciones (ms); `None` sin ejecuciones.
+fn median(ms: &[u64]) -> Option<u64> {
+    let mut v = ms.to_vec();
+    v.sort_unstable();
+    (!v.is_empty()).then(|| v[v.len() / 2])
+}
+
+/// Programas que tienen que existir donde corre el plan, deducidos de sus pasos activos.
+fn programs(plan: &Plan, config: Option<&Config>) -> Vec<(String, String)> {
+    use crate::credential_kind::CredentialKind;
+    use crate::kind::StepKind;
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |name: &str, why: String| {
+        if !out.iter().any(|(n, _)| n == name) {
+            out.push((name.to_string(), why));
+        }
+    };
+    for s in plan.active_steps() {
+        match s.kind {
+            StepKind::Compose => add(
+                "docker compose",
+                crate::tr!("pasos `compose` (o podman, ver `BATON_ENGINE`)"),
+            ),
+            StepKind::Dockerfile => add(
+                "docker",
+                crate::tr!("pasos `dockerfile` (o podman, ver `BATON_ENGINE`)"),
+            ),
+            StepKind::Sql => {
+                if let Some(c) = plan.db_for_step(s) {
+                    let prog = match c.kind {
+                        CredentialKind::Sqlite => "sqlite3",
+                        CredentialKind::Mysql => "mysql",
+                        _ => "psql",
+                    };
+                    add(prog, crate::tr!("pasos `sql` (o el contenedor de la base)"));
+                }
+            }
+            StepKind::Backup if plan.backup.as_ref().is_some_and(|b| !b.volumes.is_empty()) => {
+                add("docker", crate::tr!("respaldo de volúmenes"))
+            }
+            k => {
+                for b in k.binaries() {
+                    add(b, crate::tr!("pasos `{kind}`", kind = k.label()));
+                }
+            }
+        }
+        if let Some(g) = &s.gate
+            && g.checks.iter().any(|c| c.kind == CheckKind::Http)
+        {
+            add("curl", crate::tr!("checks `http` de los gates"));
+        }
+    }
+    for c in plan.backup_dbs() {
+        let prog = match c.kind {
+            CredentialKind::Sqlite => "sqlite3",
+            CredentialKind::Mysql => "mysqldump",
+            _ => "pg_dump",
+        };
+        add(prog, crate::tr!("respaldo de la base"));
+    }
+    for t in used_targets(plan, config) {
+        if let Some(Target::Ssh(ssh)) = config.and_then(|c| c.targets.get(&t)) {
+            add("ssh", crate::tr!("destinos ssh"));
+            if ssh.sync {
+                add(
+                    "rsync",
+                    crate::tr!("sincronizar las carpetas a destinos ssh"),
+                );
+            }
+        }
+    }
+    out
+}
+
+fn requirements(out: &mut String, plan: &Plan, config: Option<&Config>) {
+    let progs = programs(plan, config);
+    if progs.is_empty() && plan.credentials.is_empty() {
+        return;
+    }
+    out.push_str(&crate::tr!("## Requisitos\n\n"));
+    if !progs.is_empty() {
+        out.push_str(&crate::tr!(
+            "Programas que tienen que estar en el PATH de donde corre cada paso:\n\n"
+        ));
+        out.push_str(&crate::tr!("| Programa | Para qué |\n|---|---|\n"));
+        for (name, why) in &progs {
+            let _ = writeln!(out, "| {} | {} |", code(name), cell(why));
+        }
+        out.push('\n');
+    }
+    if !plan.credentials.is_empty() {
+        out.push_str(&crate::tr!(
+            "Credenciales: se piden o confirman al ejecutar; en CI se leen de las variables de la sección [Credenciales](#credenciales).\n\n"
+        ));
+    }
+}
+
+fn results(out: &mut String, plan: &Plan, config: Option<&Config>) {
+    // lo configurado por la persona se muestra; lo que está bajo `.baton/` no (ver el encabezado)
+    let own = |p: &str| (!p.contains(".baton")).then(|| code(p));
+    let logs = config.map(|c| &c.logs);
+    out.push_str(&crate::tr!("## Resultados\n\n"));
+    out.push_str(&crate::tr!("| Qué | Dónde |\n|---|---|\n"));
+    let row = |out: &mut String, k: String, v: String| {
+        let _ = writeln!(out, "| {} | {} |", k, v);
+    };
+    let local = logs
+        .and_then(|l| l.local.as_deref())
+        .and_then(own)
+        .unwrap_or_else(|| crate::tr!("la carpeta de logs del proyecto (no versionada)"));
+    row(out, crate::tr!("Log de cada ejecución"), local);
+    if let Some(r) = logs.and_then(|l| l.remote.as_deref()) {
+        row(
+            out,
+            crate::tr!("Copia del log en los destinos ssh"),
+            code(r),
+        );
+    }
+    row(
+        out,
+        crate::tr!("Estado y reanudación"),
+        crate::tr!(
+            "`baton last {plan}`, `baton history {plan}` y `baton run {plan} --resume`",
+            plan = plan.name
+        ),
+    );
+    let has_backup = plan.backup.is_some()
+        && (plan.options.backup
+            || plan
+                .steps
+                .iter()
+                .any(|s| s.kind == crate::kind::StepKind::Backup || s.backup_before));
+    if has_backup {
+        let dir = plan
+            .backup
+            .as_ref()
+            .and_then(|b| b.dir.as_deref())
+            .and_then(own)
+            .unwrap_or_else(|| crate::tr!("la carpeta de respaldos del proyecto (no versionada)"));
+        row(out, crate::tr!("Respaldos"), dir);
+    }
+    out.push('\n');
+}
+
+fn when_it_fails(out: &mut String, plan: &Plan) {
+    let n = &plan.name;
+    out.push_str(&crate::tr!("## Si algo falla\n\n"));
+    out.push_str(&crate::tr!("| Síntoma | Qué hacer |\n|---|---|\n"));
+    let mut row = |a: String, b: String| {
+        let _ = writeln!(out, "| {} | {} |", a, b);
+    };
+    row(
+        crate::tr!("Error de autenticación"),
+        crate::tr!(
+            "Elige «Actualizar credencial y reintentar» en la pantalla de fallo, o corrige la credencial y corre `baton run {plan} --resume`",
+            plan = n
+        ),
+    );
+    row(
+        crate::tr!("Un paso falló a la mitad"),
+        crate::tr!(
+            "`baton last {plan}` muestra el error; corrígelo y `baton run {plan} --resume` retoma desde ahí",
+            plan = n
+        ),
+    );
+    row(
+        crate::tr!("Un gate expira"),
+        crate::tr!(
+            "Revisa el log del servicio (`baton ops {plan} -a logs`) y reanuda con `--resume`",
+            plan = n
+        ),
+    );
+    row(
+        crate::tr!("Quedó algo a medias"),
+        crate::tr!(
+            "`baton rollback {plan}` deshace la última ejecución",
+            plan = n
+        ),
+    );
+    out.push('\n');
+}
+
 // ------------------------------------------------------------------------------ ayudas
 
 fn yes_no(b: bool) -> String {
@@ -1356,10 +1607,45 @@ confirm = true
 
     #[test]
     fn the_output_has_no_long_dashes_or_exclamations() {
-        let d = doc();
+        // `<!--` abre un comentario HTML: no cuenta como exclamación
+        let d = doc().replace("<!--", "");
         assert!(
             !d.contains('—') && !d.contains('–') && !d.contains('!'),
             "{d}"
         );
+    }
+
+    #[test]
+    fn it_estimates_the_duration_lists_requirements_and_keeps_manual_notes() {
+        let plan = Plan::parse(PLAN).unwrap();
+        let opts = Options {
+            past_runs_ms: vec![60_000, 360_000, 420_000],
+            ..Options::default()
+        };
+        let d = render(&plan, None, None, &opts);
+        assert!(
+            d.contains("| Duración estimada | ~6m (mediana de las últimas 3 ejecuciones) |"),
+            "{d}"
+        );
+        assert!(
+            d.contains("## Requisitos") && d.contains("| `docker compose` |"),
+            "{d}"
+        );
+        assert!(
+            d.contains("## Resultados") && d.contains("## Si algo falla"),
+            "{d}"
+        );
+        assert!(!d.contains(".baton"), "{d}");
+        // sin ejecuciones no hay estimación
+        assert!(!doc().contains("Duración estimada"));
+
+        let old = format!("x\n{NOTES_START}\nmi nota\n{NOTES_END}\n");
+        let kept = keep_notes(&d, &old);
+        assert!(
+            kept.contains("mi nota") && kept.contains("## Requisitos"),
+            "{kept}"
+        );
+        // sin marcas en el anterior, queda el nuevo tal cual
+        assert_eq!(keep_notes(&d, "sin marcas"), d);
     }
 }

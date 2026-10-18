@@ -66,7 +66,7 @@ fn it_prints_markdown_with_a_mermaid_flow_to_stdout() {
     let o = fx.baton(&["docs", "instalar"]);
     assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
-    assert!(t.starts_with("# Plan instalar\n"), "{t}");
+    assert!(t.contains("\n# Plan instalar\n"), "{t}");
     assert!(t.contains("```mermaid\nflowchart TD\n"), "{t}");
     assert!(t.contains("s1 --> s2"), "{t}");
     assert!(t.contains("| 2 | Desplegar | comando |"), "{t}");
@@ -127,7 +127,7 @@ fn an_unknown_plan_is_a_usage_error_and_the_only_plan_is_picked_alone() {
     assert_eq!(o.status.code(), Some(2), "{}", err(&o));
     let o = fx.baton(&["docs"]);
     assert!(o.status.success(), "{}", err(&o));
-    assert!(out(&o).starts_with("# Plan instalar"));
+    assert!(out(&o).contains("# Plan instalar"));
 }
 
 #[test]
@@ -219,4 +219,47 @@ fn the_docs_talk_english_too() {
         !t.contains("## Cómo se usa") && !t.contains("Resumen"),
         "{t}"
     );
+}
+
+#[test]
+fn the_header_carries_version_and_plan_hash_and_regenerating_keeps_the_manual_notes() {
+    let fx = Fx::new();
+    let file = fx.root.join("instalar.md");
+    let o = fx.baton(&["docs", "instalar", "-o", file.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+    let first = fs::read_to_string(&file).unwrap();
+    assert!(
+        first.starts_with(&format!(
+            "<!-- Generado por baton {}",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{first}"
+    );
+    assert!(
+        first.lines().next().unwrap().contains(" · hash "),
+        "{first}"
+    );
+    assert!(
+        first.contains("## Si algo falla") && first.contains("## Resultados"),
+        "{first}"
+    );
+
+    // lo escrito entre las marcas sobrevive; el resto se regenera
+    let edited = first.replace(
+        "<!-- /baton:notas-manuales -->",
+        "Ojo: avisar a operaciones antes de correr.\n<!-- /baton:notas-manuales -->",
+    );
+    fs::write(&file, edited).unwrap();
+    fs::write(
+        fx.root.join("baton/plans/instalar.toml"),
+        PLAN.replace("Despliega el stack", "Otra descripción"),
+    )
+    .unwrap();
+    let o = fx.baton(&["docs", "instalar", "-o", file.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+    let second = fs::read_to_string(&file).unwrap();
+    assert!(second.contains("Ojo: avisar a operaciones"), "{second}");
+    assert!(second.contains("Otra descripción"), "{second}");
+    // el hash cambió porque el plan cambió
+    assert_ne!(first.lines().next(), second.lines().next());
 }
