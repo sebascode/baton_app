@@ -160,6 +160,7 @@ baton plugin new mi-plugin        # crea un manifiesto para empezar
 baton plugin validate mi-plugin   # lo revisa y muestra lo que ejecutaría
 baton plugin add ./mi-plugin      # lo instala en el proyecto, en baton/plugins/ (o github:dueño/repo@v1.0.0, con commit firmado)
 baton plugin add -g ./mi-plugin   # o en toda tu máquina
+baton plugin add mi-plugin      # copia al proyecto uno ya instalado en tu máquina, sin descargar
 baton plugin list                 # los instalados, de los dos ámbitos
 ```
 
