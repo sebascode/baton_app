@@ -4,7 +4,10 @@ use baton_core::tr;
 use std::path::Path;
 use std::process::ExitCode;
 
-use baton_core::docs::{Options, RunSummary, render};
+use baton_core::config::Config;
+use baton_core::docs::{
+    AmbienteBrief, Options, PlanBrief, ProjectInfo, RunSummary, ServiceBrief, render,
+};
 use baton_core::plan::Plan;
 use baton_store::state::{RunStatus, State, StepState};
 use baton_store::{Project, check_config, check_plan};
@@ -52,6 +55,7 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
         summary.as_ref(),
         &Options {
             no_mermaid: flags.no_mermaid,
+            project: Some(project_info(project, config.value.as_ref(), &plan)),
         },
     );
     match flags.output {
@@ -83,16 +87,90 @@ pub fn run(project: &Project, plan_name: &str, flags: &Flags<'_>) -> ExitCode {
     }
 }
 
-fn last_run(project: &Project, plan: &Plan) -> Option<RunSummary> {
-    let state = State::load(project).ok()?;
-    let run = state.last_run(&plan.name)?;
-    let status = match run.status {
+/// Lo que `baton docs` sabe del proyecto: otros planes, ambientes, servicios y scripts. Todo se
+/// lee del disco sin ejecutar nada; los nombres de archivos de credenciales sí, su contenido no.
+fn project_info(project: &Project, config: Option<&Config>, plan: &Plan) -> ProjectInfo {
+    let state = State::load(project).unwrap_or_default();
+    let plans = project
+        .list_plans()
+        .into_iter()
+        .map(|name| {
+            let steps = check_plan(project, &name, config)
+                .value
+                .map(|p| p.steps.len());
+            let last = state.last_run(&name).map(|r| status_label(r.status));
+            PlanBrief { name, steps, last }
+        })
+        .collect();
+
+    let mut names: Vec<String> = std::fs::read_dir(project.credentials_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.extend(config.iter().flat_map(|c| c.ambientes.keys().cloned()));
+    names.retain(|n| baton_core::secrets::is_safe_ambiente(n));
+    names.sort();
+    names.dedup();
+    let ambientes = names
+        .into_iter()
+        .map(|name| {
+            let mut files: Vec<String> = std::fs::read_dir(project.credentials_dir().join(&name))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|f| f.ends_with(".env"))
+                .collect();
+            files.sort();
+            AmbienteBrief {
+                protected: config.is_some_and(|c| c.is_protected(&name)),
+                name,
+                files,
+            }
+        })
+        .collect();
+
+    let services = config.map_or_else(Vec::new, |c| {
+        crate::ops::inventory(project, c, plan)
+            .0
+            .into_iter()
+            .map(|(unit, step)| ServiceBrief {
+                service: unit.service.unwrap_or_default(),
+                file: unit.file.display().to_string(),
+                target: unit.target,
+                step,
+            })
+            .collect()
+    });
+    let scripts = baton_store::discover::maintenance_scripts(&project.root)
+        .iter()
+        .map(|p| project.display_path(p))
+        .collect();
+    ProjectInfo {
+        plans,
+        ambientes,
+        services,
+        scripts,
+    }
+}
+
+fn status_label(status: RunStatus) -> String {
+    match status {
         RunStatus::Running => tr!("en curso"),
         RunStatus::Completed => tr!("completada"),
         RunStatus::CompletedWithWarnings => tr!("completada con advertencias"),
         RunStatus::Failed => tr!("falló"),
         RunStatus::Aborted => tr!("abortada"),
-    };
+    }
+}
+
+fn last_run(project: &Project, plan: &Plan) -> Option<RunSummary> {
+    let state = State::load(project).ok()?;
+    let run = state.last_run(&plan.name)?;
+    let status = status_label(run.status);
     // en el orden del plan; los pasos que ya no existen quedan al final
     let mut ids: Vec<&String> = plan
         .steps

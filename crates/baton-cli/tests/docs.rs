@@ -100,7 +100,7 @@ fn estado_adds_the_last_run_only_when_there_is_one() {
     let fx = Fx::new();
     let o = fx.baton(&["docs", "instalar", "--estado"]);
     assert!(o.status.success());
-    assert!(!out(&o).contains("Última ejecución"));
+    assert!(!out(&o).contains("## Última ejecución"));
     assert!(err(&o).contains("todavía no se ejecutó"), "{}", err(&o));
     let run = Command::new(env!("CARGO_BIN_EXE_baton"))
         .arg("-C")
@@ -128,4 +128,95 @@ fn an_unknown_plan_is_a_usage_error_and_the_only_plan_is_picked_alone() {
     let o = fx.baton(&["docs"]);
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).starts_with("# Plan instalar"));
+}
+
+#[test]
+fn it_documents_the_project_ambientes_services_hosts_and_scripts_without_secrets() {
+    let fx = Fx::new();
+    let write = |rel: &str, text: &str| {
+        let p = fx.root.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    };
+    write(
+        "baton/plans/instalar.toml",
+        &format!(
+            "{PLAN}\n[[steps]]\nid = \"stack\"\nname = \"Stack\"\ntype = \"compose\"\ntarget = \"nube\"\nsource = \"web/docker-compose.yml\"\n"
+        ),
+    );
+    write(
+        "baton/plans/otro.toml",
+        "name = \"otro\"\n\n[[steps]]\nid = \"a\"\nname = \"A\"\ntype = \"comando\"\ncommand = \"true\"\n",
+    );
+    write(
+        "web/docker-compose.yml",
+        "services:\n  web:\n    image: nginx\n  cache:\n    image: redis\n",
+    );
+    write("scripts/limpiar.sh", "#!/bin/sh\necho x\n");
+    // los valores nunca se leen: solo se listan los nombres de los archivos
+    write(
+        ".baton/credentials/dev/docker.env",
+        "GHCR_TOKEN=supersecreto\n",
+    );
+    write(
+        ".baton/credentials/prod/servers.env",
+        "NUBE_KEY=/home/yo/.ssh/id\n",
+    );
+    write(
+        ".baton/config.toml",
+        "[targets.nube]\ntype = \"ssh\"\nhost = \"app.example.com\"\nuser = \"deploy\"\nremote_dir = \"/srv/app\"\n\n[ambientes.prod]\nprotegido = true\n",
+    );
+    let o = fx.baton(&["docs", "instalar"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    for want in [
+        "| Ambientes | `dev`, `prod` (protegido) |",
+        "baton run instalar --ambiente prod",
+        "| `dev` | no | `docker.env` |",
+        "| `prod` | sí | `servers.env` |",
+        "| `instalar` (este) | 3 | sin ejecutar |",
+        "| `otro` | 1 | sin ejecutar |",
+        "| `web` | `web/docker-compose.yml` | `nube` | Stack |",
+        "| `cache` | `web/docker-compose.yml` | `nube` | Stack |",
+        "| nube | ssh | app.example.com:22 | /srv/app |",
+        "- `scripts/limpiar.sh`",
+        "baton ops instalar -a logs -s web",
+        "| ghcr | `GHCR_TOKEN` | token | sí | no |",
+    ] {
+        assert!(t.contains(want), "falta {want:?} en:\n{t}");
+    }
+    for secret in ["supersecreto", "deploy", "id_rsa", "/home/yo", ".baton"] {
+        assert!(!t.contains(secret), "{secret:?} no debe aparecer:\n{t}");
+    }
+    assert!(!t.contains('—') && !t.contains('–'), "{t}");
+}
+
+#[test]
+fn the_docs_talk_english_too() {
+    let fx = Fx::new();
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&fx.root)
+        .args(["docs", "instalar"])
+        .env("BATON_CONFIG", fx.root.join("_sin_global.toml"))
+        .env("BATON_LANG", "en")
+        .env("CI", "1")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    for want in [
+        "## How to use it",
+        "**Contents:**",
+        "| Item | Value |",
+        "## Variables",
+        "Variables each credential reads:",
+        "# resumes what was left half done",
+    ] {
+        assert!(t.contains(want), "falta {want:?} en:\n{t}");
+    }
+    assert!(
+        !t.contains("## Cómo se usa") && !t.contains("Resumen"),
+        "{t}"
+    );
 }
