@@ -622,7 +622,7 @@ fn remove_without_yes_and_without_a_terminal_asks_for_it_and_removes_nothing() {
     fx.install_locked("terraform", TERRAFORM);
     let o = fx.baton(&["plugin", "remove", "terraform", "--global"]);
     assert_eq!(code(&o), 2);
-    assert!(err(&o).contains("--yes"), "{}", err(&o));
+    assert!(err(&o).contains("--assume-yes"), "{}", err(&o));
     assert!(fx.plugins.join("terraform").exists());
     let o = fx.baton(&["plugin", "remove", "no-existe", "--yes", "--global"]);
     assert_eq!(code(&o), 2);

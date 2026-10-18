@@ -31,6 +31,12 @@ Garantías que el código mantiene y que una revisión debe proteger:
 - Los valores de campos secretos se tachan en todo lo que se muestra o se guarda.
 - Un comando solo recibe las credenciales que menciona.
 
+Credenciales por variables de entorno: baton las acepta (es lo natural en CI), pero el entorno de
+un proceso se filtra con más facilidad que un archivo: aparece en volcados de diagnóstico,
+`docker inspect`, `systemctl show` y logs de CI que imprimen el entorno. Para secretos de larga
+vida prefiere un archivo en `.baton/credentials/` (permisos 600) o un gestor (Vault, Azure Key
+Vault). En CI, usa los secretos del sistema de CI y no imprimas el entorno.
+
 Plugins (`baton plugin add`):
 
 - Solo se instala el commit de un repositorio de GitHub cuya firma GitHub haya verificado, y el

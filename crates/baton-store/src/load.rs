@@ -30,7 +30,9 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Sin archivo (un plan que no existe) no hay ubicación que mostrar.
         match self.position {
+            _ if self.file.is_empty() => {}
             Some(p) => write!(f, "{}:{}:{}: ", self.file, p.line, p.col)?,
             None => write!(f, "{}: ", self.file)?,
         }
@@ -144,10 +146,10 @@ pub fn check_plan(project: &Project, name: &str, config: Option<&Config>) -> Che
                 format!("planes disponibles: {}", available.join(", "))
             };
             return Checked::failed(Diagnostic {
-                file: project.display_path(&path),
+                file: String::new(),
                 position: None,
                 severity: Severity::Error,
-                message: format!("el plan '{name}' no existe ({hint})"),
+                message: format!("el plan '{name}' no existe\n  {hint}"),
             });
         }
         Err(e) => return Checked::failed(io_error(project, &path, &e)),

@@ -33,7 +33,7 @@ use std::process::ExitCode;
 
 use baton_store::Project;
 use baton_tui::{ConfigState, Screen};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 /// Códigos de salida: 0 todo bien, 1 el proyecto o el plan tienen errores, 2 no se pudo ni empezar
 /// (uso, no hay proyecto, plan inexistente), 3 la ejecución falló o se abortó.
@@ -55,6 +55,10 @@ struct Cli {
     /// Carpeta del proyecto (por defecto, la actual o la primera superior que sea un proyecto baton)
     #[arg(short = 'C', long = "dir", global = true, value_name = "CARPETA")]
     dir: Option<PathBuf>,
+
+    /// Calla los avisos de contexto (proyecto, plan y ambiente elegidos); los errores se muestran
+    #[arg(short = 'q', long, global = true)]
+    quiet: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -121,7 +125,7 @@ enum Command {
         #[arg(long)]
         target: Option<String>,
         /// Muestra lo que se importaría sin escribir nada
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         dry_run: bool,
     },
     /// Pregunta y elige una opción; imprime la elegida (para scripts: `env=$(baton select ...)`)
@@ -230,7 +234,7 @@ enum Command {
         /// Plan a eliminar
         plan: String,
         /// No pregunta (necesario sin terminal)
-        #[arg(long)]
+        #[arg(long = "assume-yes", alias = "yes")]
         yes: bool,
     },
     /// Deshace lo que hizo la última ejecución de un plan (corre los `rollback` de sus pasos)
@@ -289,7 +293,7 @@ enum Command {
         #[arg(long)]
         escribir: bool,
         /// Ejecuta una consulta destructiva sin pedir más
-        #[arg(long)]
+        #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
         #[arg(long)]
@@ -324,7 +328,7 @@ enum Command {
         #[arg(long, default_value_t = 100, value_name = "N")]
         lineas: u32,
         /// Ejecuta sin pedir confirmación
-        #[arg(long)]
+        #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
         #[arg(long)]
@@ -401,7 +405,7 @@ enum PluginAction {
         /// Nombre del plugin
         nombre: String,
         /// No pregunta (necesario sin terminal)
-        #[arg(long)]
+        #[arg(long = "assume-yes", alias = "yes")]
         yes: bool,
         /// Quita el de esta máquina en vez del del proyecto
         #[arg(short, long)]
@@ -422,13 +426,13 @@ struct RunArgs {
     #[arg(long)]
     no_tui: bool,
     /// No ejecuta nada: muestra lo que haría
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     dry_run: bool,
     /// Salta los pasos que terminaron bien en la última ejecución
     #[arg(long)]
     resume: bool,
     /// Responde que sí a los gates manuales cuando no hay terminal
-    #[arg(long)]
+    #[arg(long, alias = "yes")]
     assume_yes: bool,
     /// Hace backup aunque el plan no lo pida
     #[arg(long, conflicts_with = "no_backup")]
@@ -446,6 +450,9 @@ struct RunArgs {
 #[derive(Parser)]
 #[command(name = "baton", no_binary_name = false)]
 struct ExternalRun {
+    /// Calla los avisos de contexto
+    #[arg(short = 'q', long)]
+    quiet: bool,
     #[command(flatten)]
     args: RunArgs,
 }
@@ -539,6 +546,7 @@ fn main() -> ExitCode {
         return askpass(&keys.to_string_lossy());
     }
     let cli = Cli::parse();
+    style::set_quiet(cli.quiet);
     // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
     baton_core::i18n::set(baton_store::global::language(
         &cli.dir
@@ -755,6 +763,12 @@ fn main() -> ExitCode {
     }
 
     let Some(project) = open_project(&start) else {
+        if let Command::External(args) = &command
+            && let Some(near) = near_subcommand(args)
+        {
+            report_near(&near);
+            return ExitCode::from(EXIT_USAGE);
+        }
         eprintln!(
             "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
             start.display()
@@ -877,9 +891,18 @@ fn main() -> ExitCode {
             Err(code) => code,
         },
         Command::External(args) => {
+            if let Some(near) = near_subcommand(&args)
+                && !project.list_plans().contains(&near.word)
+            {
+                report_near(&near);
+                return ExitCode::from(EXIT_USAGE);
+            }
             let parsed =
                 ExternalRun::try_parse_from(std::iter::once(OsString::from("baton")).chain(args))
                     .unwrap_or_else(|e| e.exit());
+            if parsed.quiet {
+                style::set_quiet(true);
+            }
             let (plan, flags) = parsed.args.into();
             match pick::resolve(&project, plan, "run", "ejecutar") {
                 Ok(plan) => run::run(&project, &plan, flags),
@@ -903,6 +926,53 @@ fn main() -> ExitCode {
     }
 }
 
+/// Una palabra que no es subcomando ni plan y que se parece a un subcomando (un typo).
+struct NearSubcommand {
+    word: String,
+    suggestion: String,
+}
+
+/// Distancia de edición entre dos palabras cortas.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// El subcomando más parecido a la primera palabra de `baton <palabra> ...`, si es un typo
+/// probable (distancia 1, o 2 en palabras de 6 letras o más).
+fn near_subcommand(args: &[OsString]) -> Option<NearSubcommand> {
+    let word = args.first()?.to_str()?;
+    if word.starts_with('-') {
+        return None;
+    }
+    let cmd = Cli::command();
+    let (dist, name) = cmd
+        .get_subcommands()
+        .filter(|c| !c.is_hide_set())
+        .map(|c| (edit_distance(word, c.get_name()), c.get_name().to_string()))
+        .min_by_key(|(d, _)| *d)?;
+    let limit = if word.chars().count() >= 6 { 2 } else { 1 };
+    (dist >= 1 && dist <= limit && name.chars().count() > 2).then(|| NearSubcommand {
+        word: word.to_string(),
+        suggestion: name,
+    })
+}
+
+fn report_near(near: &NearSubcommand) {
+    eprintln!("error: '{}' no es un comando de baton", near.word);
+    eprintln!("  ¿quisiste decir `baton {}`?", near.suggestion);
+    eprintln!("  si es un plan, ejecútalo con: baton run {}", near.word);
+}
+
 /// Busca el proyecto desde `start` hacia arriba. Si lo encuentra en una carpeta superior (se está
 /// dentro de una subcarpeta), lo dice en stderr: así no queda duda de qué proyecto se usa.
 fn open_project(start: &Path) -> Option<Project> {
@@ -910,11 +980,11 @@ fn open_project(start: &Path) -> Option<Project> {
     let configured = baton_store::check_config(&project).value;
     proc::set_engine(baton_exec::local_engine(&configured.unwrap_or_default()));
     if let Some(rel) = project.subfolder_of(start) {
-        eprintln!(
+        style::note(&format!(
             "proyecto: {} (una carpeta superior; estás en {}/)",
             project.root.display(),
             rel.display()
-        );
+        ));
     }
     Some(project)
 }

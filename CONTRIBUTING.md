@@ -68,3 +68,8 @@ repositorio y se revisan con el mismo rigor que el resto de las rutas sensibles.
 Textos de interfaz en español, en sentence case y sin signos de exclamación. En textos y
 comentarios no se usan guiones largos: usa `-` o paréntesis. Los mensajes de commit describen el
 cambio de forma directa, sin prefijos como `feat:`.
+
+Mensajes de error y aviso por stderr: una primera línea `error: qué pasó` (o `aviso: ...`) y, debajo,
+las líneas de ayuda con dos espacios de sangría (`  para arreglarlo: ...`). Lo accionable va al
+final. Los diagnósticos de archivos de configuración llevan por delante `archivo:línea:col:`. Un
+error de uso sale con código 2.

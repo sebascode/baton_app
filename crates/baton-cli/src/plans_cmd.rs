@@ -16,12 +16,11 @@ fn existing(project: &Project, name: &str) -> Result<(), ExitCode> {
     }
     let plans = project.list_plans();
     if plans.is_empty() {
-        eprintln!("error: no existe el plan '{name}' (este proyecto no tiene planes)");
+        eprintln!("error: el plan '{name}' no existe");
+        eprintln!("  este proyecto no tiene planes");
     } else {
-        eprintln!(
-            "error: no existe el plan '{name}' (planes disponibles: {})",
-            plans.join(", ")
-        );
+        eprintln!("error: el plan '{name}' no existe");
+        eprintln!("  planes disponibles: {}", plans.join(", "));
     }
     Err(ExitCode::from(EXIT_USAGE))
 }
@@ -84,7 +83,7 @@ pub fn delete(project: &Project, plan: &str, yes: bool) -> ExitCode {
     if !yes {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             eprintln!(
-                "error: eliminar '{plan}' pide confirmación y no hay terminal: usa --yes para confirmar"
+                "error: eliminar '{plan}' pide confirmación y no hay terminal: usa --assume-yes para confirmar"
             );
             return ExitCode::from(EXIT_USAGE);
         }

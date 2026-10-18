@@ -86,7 +86,7 @@ fn delete_needs_yes_without_a_terminal_and_then_removes_plan_and_state() {
     baton(tmp.path(), &["run", "app", "--no-tui"]);
     let o = baton(tmp.path(), &["delete", "app"]);
     assert_eq!(o.status.code(), Some(2), "{}\n{}", out(&o), err(&o));
-    assert!(err(&o).contains("--yes"), "{}", err(&o));
+    assert!(err(&o).contains("--assume-yes"), "{}", err(&o));
     assert!(plan_file(tmp.path(), "app").exists());
 
     let o = baton(tmp.path(), &["delete", "app", "--yes"]);
@@ -110,10 +110,10 @@ fn errors_are_usage_errors_that_say_what_is_wrong() {
     let cases: [(&[&str], &str); 6] = [
         (
             &["copy", "nada", "x"],
-            "no existe el plan 'nada' (planes disponibles: app, otro)",
+            "el plan 'nada' no existe\n  planes disponibles: app, otro",
         ),
-        (&["rename", "nada", "x"], "no existe el plan 'nada'"),
-        (&["delete", "nada", "--yes"], "no existe el plan 'nada'"),
+        (&["rename", "nada", "x"], "el plan 'nada' no existe"),
+        (&["delete", "nada", "--yes"], "el plan 'nada' no existe"),
         (&["copy", "app", "otro"], "ya existe un plan 'otro'"),
         (&["rename", "app", "run"], "'run' es un comando de baton"),
         (&["rename", "app", "app"], "es el mismo que el actual"),
@@ -144,4 +144,78 @@ fn a_new_name_is_normalized_like_in_create() {
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert!(err(&o).contains("usando 'mi-plan-nuevo'"), "{}", err(&o));
     assert!(plan_file(tmp.path(), "mi-plan-nuevo").exists());
+}
+
+#[test]
+fn a_typo_of_a_command_is_suggested_instead_of_run_as_a_plan() {
+    let tmp = project();
+    let o = baton(tmp.path(), &["valdiate"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        err(&o).contains("¿quisiste decir `baton validate`?"),
+        "{}",
+        err(&o)
+    );
+    assert!(err(&o).contains("baton run valdiate"), "{}", err(&o));
+    assert!(out(&o).is_empty());
+
+    // Fuera de un proyecto también se sugiere.
+    let empty = tempfile::tempdir().unwrap();
+    let o = baton(empty.path(), &["valdiate"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("baton validate"), "{}", err(&o));
+}
+
+#[test]
+fn a_plan_named_like_a_typo_still_runs_and_unrelated_words_keep_the_old_error() {
+    let tmp = project();
+    // 'app' es un plan real aunque se parezca a algo: se ejecuta.
+    let o = baton(tmp.path(), &["app", "--no-tui"]);
+    assert_ne!(o.status.code(), Some(2), "{}", err(&o));
+
+    let o = baton(tmp.path(), &["zzzzzz"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!err(&o).contains("quisiste decir"), "{}", err(&o));
+}
+
+#[test]
+fn a_missing_plan_has_the_same_error_in_every_command() {
+    let tmp = project();
+    for args in [
+        &["run", "nada"][..],
+        &["validate", "nada"],
+        &["last", "nada"],
+    ] {
+        let o = baton(tmp.path(), args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(
+            err(&o).contains("error: el plan 'nada' no existe\n  planes disponibles: app"),
+            "{args:?}: {}",
+            err(&o)
+        );
+    }
+}
+
+#[test]
+fn quiet_silences_context_notes_and_dry_run_has_a_short_flag() {
+    let tmp = project();
+    // Con un único plan, `run` dice cuál eligió (stderr); con -q no.
+    let o = baton(tmp.path(), &["run", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert!(
+        err(&o).contains("plan: app (es el único del proyecto)"),
+        "{}",
+        err(&o)
+    );
+
+    let o = baton(tmp.path(), &["-q", "run", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert!(!err(&o).contains("es el único del proyecto"), "{}", err(&o));
+
+    // También en el atajo `baton <plan>` y con los errores intactos.
+    let o = baton(tmp.path(), &["app", "-q", "-n", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let o = baton(tmp.path(), &["-q", "run", "nada"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("el plan 'nada' no existe"), "{}", err(&o));
 }
