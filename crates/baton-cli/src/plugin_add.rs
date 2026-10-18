@@ -603,6 +603,13 @@ pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut
 
 /// El manifiesto con el que empieza quien escribe un plugin. Tiene que pasar `plugin validate`.
 pub fn template(name: &str) -> String {
+    match baton_core::i18n::lang() {
+        baton_core::i18n::Lang::En => template_en(name),
+        _ => template_es(name),
+    }
+}
+
+fn template_es(name: &str) -> String {
     format!(
         r#"# Plugin de baton: un tipo de paso nuevo, descrito con datos.
 # Revisa lo que hace con:  baton plugin validate .
@@ -631,6 +638,48 @@ dry_run = "echo planificando {{name}}"
 # El plan la declara con [[credentials]] (kind = "mi-nube", ref = "servers.env#PREFIJO"); si no la
 # declara, el comando usa lo que ya haya en el entorno. Un tipo de baton (docker, git...) se usa
 # sin `fields`, solo con `env`.
+# [[credentials]]
+# kind = "mi-nube"
+# fields = [
+#   {{ key = "TOKEN", secret = true }},
+#   {{ key = "REGION", optional = true }},
+# ]
+# [credentials.env]
+# MI_NUBE_TOKEN = "{{TOKEN}}"
+# MI_NUBE_REGION = "{{REGION}}"
+"#
+    )
+}
+
+fn template_en(name: &str) -> String {
+    format!(
+        r#"# baton plugin: a new step type, described with data.
+# Check what it does with:  baton plugin validate .
+api = 1
+name = "{name}"
+version = "0.1.0"
+description = "What this step type does"
+
+# Programs that must exist where the step runs (checked before running).
+requires = []
+
+[type]
+# true: the step source is a glob and the command runs once per file, in its folder.
+scanned = true
+# What `baton init` uses to suggest steps of this type (always disabled).
+detect = ["**/{name}.txt"]
+# The default command of the type ({{name}}, {{dir}}, {{file}}, {{ambiente}}...). A step can
+# declare its own.
+command = "echo running {{name}}"
+# With --dry-run it really runs: it must be READ-ONLY (plan, what-if, validate...).
+dry_run = "echo planning {{name}}"
+# Phrases that, if they appear in the dry_run output, ask for confirmation before running.
+# destructive = ["will be destroyed"]
+
+# Credentials: a new type (its fields) and the variables your tool expects them in.
+# The plan declares it with [[credentials]] (kind = "mi-nube", ref = "servers.env#PREFIX"); if it
+# does not, the command uses whatever is already in the environment. A baton type (docker, git...)
+# is used without `fields`, only with `env`.
 # [[credentials]]
 # kind = "mi-nube"
 # fields = [

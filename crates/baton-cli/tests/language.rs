@@ -349,3 +349,26 @@ fn import_notes_from_the_converter_are_in_english_too() {
     let o = fx.run(None, &["import", "ci.yml", "--from", "github", "--dry-run"]);
     assert!(out(&o).contains("baton trabaja sobre la carpeta del proyecto"));
 }
+
+#[test]
+fn the_plugin_template_is_in_english_and_still_validates() {
+    let fx = Fx::new();
+    let dir = fx.root.join("work");
+    fs::create_dir_all(&dir).unwrap();
+    let mut c = fx.cmd(&["plugin", "new", "demo-type"]);
+    c.current_dir(&dir).env("BATON_LANG", "en");
+    let o = c.output().unwrap();
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+    let manifest = dir.join("demo-type/baton-plugin.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    assert!(
+        text.contains("a new step type, described with data"),
+        "{text}"
+    );
+    assert!(!text.contains("tipo de paso nuevo"), "{text}");
+    let o = fx.run(
+        Some("en"),
+        &["plugin", "validate", manifest.to_str().unwrap()],
+    );
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+}
