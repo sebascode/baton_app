@@ -30,27 +30,35 @@ const DROPPED: [(&str, NoteLevel, &str); 6] = [
     (
         "image",
         NoteLevel::Warning,
-        "image: los comandos corren en el destino, no dentro de esa imagen",
+        crate::tk!("image: los comandos corren en el destino, no dentro de esa imagen"),
     ),
     (
         "services",
         NoteLevel::Warning,
-        "services: no se levantan (usa un paso compose antes)",
+        crate::tk!("services: no se levantan (usa un paso compose antes)"),
     ),
-    ("artifacts", NoteLevel::Info, "artifacts no se importa"),
-    ("cache", NoteLevel::Info, "cache no se importa"),
-    ("coverage", NoteLevel::Info, "coverage no se importa"),
+    (
+        "artifacts",
+        NoteLevel::Info,
+        crate::tk!("artifacts no se importa"),
+    ),
+    ("cache", NoteLevel::Info, crate::tk!("cache no se importa")),
+    (
+        "coverage",
+        NoteLevel::Info,
+        crate::tk!("coverage no se importa"),
+    ),
     (
         "allow_failure",
         NoteLevel::Info,
-        "allow_failure no se importa: un fallo detiene el plan",
+        crate::tk!("allow_failure no se importa: un fallo detiene el plan"),
     ),
 ];
 
 pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
     let root = doc
         .as_mapping()
-        .ok_or_else(|| ImportError::Shape("el archivo debe ser un mapa YAML".into()))?;
+        .ok_or_else(|| ImportError::Shape(crate::tr!("el archivo debe ser un mapa YAML")))?;
 
     let stages: Vec<String> = match doc.get("stages") {
         Some(s) => list(Some(s)),
@@ -60,11 +68,17 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
         b.note(
             NoteLevel::Warning,
             "include",
-            "include: no se sigue (los jobs de archivos o plantillas externas no se importan)",
+            crate::tr!(
+                "include: no se sigue (los jobs de archivos o plantillas externas no se importan)"
+            ),
         );
     }
     if doc.get("workflow").is_some() {
-        b.note(NoteLevel::Info, "workflow", "workflow:rules no se importa");
+        b.note(
+            NoteLevel::Info,
+            "workflow",
+            crate::tr!("workflow:rules no se importa"),
+        );
     }
 
     let default = doc.get("default");
@@ -101,7 +115,10 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
             b.note(
                 NoteLevel::Warning,
                 &at,
-                format!("stage '{stage}' no está en stages: el job se ordena al final"),
+                crate::tr!(
+                    "stage '{stage}' no está en stages: el job se ordena al final",
+                    stage = stage
+                ),
             );
             stages.len()
         });
@@ -114,7 +131,7 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
 
         for (field, level, why) in DROPPED {
             if job.contains_key(field) {
-                b.note(level, &at, why);
+                b.note(level, &at, crate::i18n::tr_dyn(why).into_owned());
             }
         }
 
@@ -124,13 +141,13 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
                 name: name.clone(),
                 id_hint: name.clone(),
                 at: at.clone(),
-                script: commented(&format!(
-                    "pendiente de migrar: trigger: {}",
-                    trigger_text(trigger)
+                script: commented(&crate::tr!(
+                    "pendiente de migrar: trigger: {a0}",
+                    a0 = trigger_text(trigger)
                 )),
                 env: Vec::new(),
                 workdir: None,
-                disabled: Some("trigger de otro pipeline sin equivalente".into()),
+                disabled: Some(crate::tr!("trigger de otro pipeline sin equivalente")),
                 timeout: None,
                 retries: 0,
             };
@@ -142,7 +159,7 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
             b.note(
                 NoteLevel::Skipped,
                 &at,
-                "job sin script (solo extends o configuración)",
+                crate::tr!("job sin script (solo extends o configuración)"),
             );
             continue;
         }
@@ -153,23 +170,30 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
             .iter()
             .any(|k| job.contains_key(*k))
         {
-            disabled = Some("tiene rules/only/except: decide tú cuándo corre".to_string());
+            disabled = Some(crate::tr!(
+                "tiene rules/only/except: decide tú cuándo corre"
+            ));
         }
         if job.contains_key("parallel") {
-            disabled.get_or_insert("parallel/matrix no se expande (correría una sola vez)".into());
+            disabled.get_or_insert(crate::tr!(
+                "parallel/matrix no se expande (correría una sola vez)"
+            ));
         }
         match when.as_deref() {
             Some("never") => {
                 disabled.get_or_insert("when: never".into());
             }
             Some("on_failure") => {
-                disabled.get_or_insert("when: on_failure (corre solo si algo falla)".into());
+                disabled.get_or_insert(crate::tr!("when: on_failure (corre solo si algo falla)"));
             }
             Some("always" | "delayed") => {
                 b.note(
                     NoteLevel::Info,
                     &at,
-                    format!("when: {} no se importa", when.as_deref().unwrap_or("")),
+                    crate::tr!(
+                        "when: {a0} no se importa",
+                        a0 = when.as_deref().unwrap_or("")
+                    ),
                 );
             }
             _ => {}
@@ -224,9 +248,9 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
                 script: after.join("\n"),
                 env: Vec::new(),
                 workdir: None,
-                disabled: Some(
-                    "after_script corre siempre en GitLab, también si el job falla".into(),
-                ),
+                disabled: Some(crate::tr!(
+                    "after_script corre siempre en GitLab, también si el job falla"
+                )),
                 timeout: None,
                 retries: 0,
             };
@@ -236,9 +260,9 @@ pub(super) fn convert(doc: &Value, b: &mut Builder) -> Result<(), ImportError> {
     }
 
     if b.units.is_empty() {
-        return Err(ImportError::Shape(
-            "no se encontró ningún job con script en el archivo".into(),
-        ));
+        return Err(ImportError::Shape(crate::tr!(
+            "no se encontró ningún job con script en el archivo"
+        )));
     }
     Ok(())
 }
