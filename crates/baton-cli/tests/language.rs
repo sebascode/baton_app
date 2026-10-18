@@ -229,3 +229,103 @@ fn docs_follow_the_language_but_keep_the_commands_and_names_as_written() {
     let es = fx.run(None, &["docs", "demo"]);
     assert!(out(&es).contains("## Resumen"), "{}", out(&es));
 }
+
+#[test]
+fn overview_last_and_history_talk_english_too() {
+    let fx = Fx::new();
+    let o = fx.run(Some("en"), &["last", "demo"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("plan 'demo' has not run yet"),
+        "{}",
+        err(&o)
+    );
+
+    fs::write(
+        fx.root.join("proj/baton/plans/demo.toml"),
+        PLAN.replace("echo adios", "exit 3"),
+    )
+    .unwrap();
+    let o = fx.run(Some("en"), &["run", "demo", "--no-tui"]);
+    assert_eq!(o.status.code(), Some(3));
+
+    let o = fx.run(Some("en"), &["last", "demo"]);
+    let t = out(&o);
+    assert!(t.contains("1 of 2 steps"), "{t}");
+    assert!(t.contains("what happened at «Dos»"), "{t}");
+    assert!(
+        t.contains("next") && t.contains("resumes from where it stopped"),
+        "{t}"
+    );
+    assert!(!t.contains("siguiente") && !t.contains("pasos"), "{t}");
+
+    let o = fx.run(Some("en"), &["history", "demo"]);
+    let t = out(&o);
+    assert!(t.contains("1 run") && t.contains("failed at «Dos»"), "{t}");
+    assert!(t.contains("the last one, in detail"), "{t}");
+
+    let o = fx.run(Some("en"), &[]);
+    let t = out(&o);
+    assert!(
+        t.contains("next") && t.contains("how the last run ended"),
+        "{t}"
+    );
+    assert!(!t.contains("siguiente") && !t.contains("orquesta"), "{t}");
+}
+
+#[test]
+fn import_report_talks_english_too() {
+    let fx = Fx::new();
+    let wf = fx.root.join("proj/ci.yml");
+    fs::write(
+        &wf,
+        "name: ci\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+    )
+    .unwrap();
+    let o = fx.run(
+        Some("en"),
+        &["import", "ci.yml", "--from", "github", "--dry-run"],
+    );
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(t.contains("imported from"), "{t}");
+    assert!(t.contains("dry run: nothing is written"), "{t}");
+    assert!(t.contains("step(s)") && t.contains("active"), "{t}");
+    assert!(!t.contains("importado") && !t.contains("simulacro"), "{t}");
+
+    let o = fx.run(Some("en"), &["import", "nope.yml"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("error: could not read"), "{}", err(&o));
+}
+
+#[test]
+fn db_talks_english_too() {
+    let fx = Fx::new();
+    let o = fx.run(Some("en"), &["db", "-c", "select 1"]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    let t = err(&o);
+    assert!(t.contains("declares no database credentials"), "{t}");
+    assert!(t.contains("add one in [[credentials]]"), "{t}");
+    assert!(!t.contains("no declara"), "{t}");
+}
+
+#[test]
+fn validate_diagnostics_are_in_english_too() {
+    let fx = Fx::new();
+    fs::write(
+        fx.root.join("proj/baton/plans/demo.toml"),
+        PLAN.replace("id = \"dos\"", "id = \"uno\""),
+    )
+    .unwrap();
+    let o = fx.run(Some("en"), &["validate", "demo"]);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    let t = format!("{}{}", out(&o), err(&o));
+    assert!(
+        t.contains("duplicate id 'uno' (already used in step 1)"),
+        "{t}"
+    );
+    assert!(!t.contains("id duplicado"), "{t}");
+    let o = fx.run(None, &["validate", "demo"]);
+    let t = format!("{}{}", out(&o), err(&o));
+    assert!(t.contains("id duplicado 'uno'"), "{t}");
+}

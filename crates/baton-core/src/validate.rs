@@ -29,7 +29,10 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     if config.version != 1 {
         out.push(Issue::error(
             path!["version"],
-            format!("versión {} no soportada (se espera 1)", config.version),
+            crate::tr!(
+                "versión {version} no soportada (se espera 1)",
+                version = config.version
+            ),
         ));
     }
     if let Some(t) = &config.defaults.target
@@ -37,7 +40,7 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     {
         out.push(Issue::error(
             path!["defaults", "target"],
-            format!("el destino por defecto '{t}' no existe en [targets]"),
+            crate::tr!("el destino por defecto '{t}' no existe en [targets]", t = t),
         ));
     }
 
@@ -52,9 +55,10 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     {
         out.push(Issue::error(
             path!["ui", "language"],
-            format!(
-                "el idioma '{l}' no existe (opciones: {})",
-                crate::i18n::SETTING_VALUES.join(", ")
+            crate::tr!(
+                "el idioma '{l}' no existe (opciones: {a0})",
+                l = l,
+                a0 = crate::i18n::SETTING_VALUES.join(", ")
             ),
         ));
     }
@@ -64,7 +68,10 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     {
         out.push(Issue::error(
             path!["defaults", "ambiente"],
-            format!("el ambiente por defecto '{a}' no es válido (solo letras, números, . - _)"),
+            crate::tr!(
+                "el ambiente por defecto '{a}' no es válido (solo letras, números, . - _)",
+                a = a
+            ),
         ));
     }
 
@@ -72,7 +79,10 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         if !crate::secrets::is_safe_ambiente(name) {
             out.push(Issue::error(
                 path!["ambientes", name.as_str()],
-                format!("el ambiente '{name}' no es válido (solo letras, números, . - _)"),
+                crate::tr!(
+                    "el ambiente '{name}' no es válido (solo letras, números, . - _)",
+                    name = name
+                ),
             ));
         }
     }
@@ -88,26 +98,38 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         {
             out.push(Issue::error(
                 path!["targets", name.as_str()],
-                format!("nombre de destino inválido '{name}' (usa letras, números, - y _)"),
+                crate::tr!(
+                    "nombre de destino inválido '{name}' (usa letras, números, - y _)",
+                    name = name
+                ),
             ));
         }
         if name == LOCAL_TARGET && !matches!(target, Target::Local(_)) {
             out.push(Issue::error(
                 path!["targets", name.as_str(), "type"],
-                "el nombre 'local' está reservado para el destino de esta máquina",
+                crate::tr!("el nombre 'local' está reservado para el destino de esta máquina"),
             ));
         }
         match target {
             Target::Local(_) => {}
             Target::Ssh(ssh) => {
                 if ssh.host.trim().is_empty() {
-                    out.push(Issue::error(p("host"), "el host no puede estar vacío"));
+                    out.push(Issue::error(
+                        p("host"),
+                        crate::tr!("el host no puede estar vacío"),
+                    ));
                 }
                 if ssh.user.trim().is_empty() {
-                    out.push(Issue::error(p("user"), "el usuario no puede estar vacío"));
+                    out.push(Issue::error(
+                        p("user"),
+                        crate::tr!("el usuario no puede estar vacío"),
+                    ));
                 }
                 if ssh.port == 0 {
-                    out.push(Issue::error(p("port"), "el puerto debe ser mayor que 0"));
+                    out.push(Issue::error(
+                        p("port"),
+                        crate::tr!("el puerto debe ser mayor que 0"),
+                    ));
                 }
                 if ssh.sync
                     && ssh
@@ -117,7 +139,9 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
                 {
                     out.push(Issue::error(
                         p("remote_dir"),
-                        "sync = true necesita remote_dir (dónde copiar las carpetas del plan)",
+                        crate::tr!(
+                            "sync = true necesita remote_dir (dónde copiar las carpetas del plan)"
+                        ),
                     ));
                 }
                 if let Some(b) = &ssh.bastion {
@@ -128,7 +152,7 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
                 if c.context.trim().is_empty() {
                     out.push(Issue::error(
                         p("context"),
-                        "el nombre del contexto no puede estar vacío",
+                        crate::tr!("el nombre del contexto no puede estar vacío"),
                     ));
                 }
             }
@@ -140,7 +164,7 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     if config.logs.retention.days == Some(0) {
         out.push(Issue::error(
             path!["logs", "retention", "days"],
-            "los días de retención deben ser al menos 1",
+            crate::tr!("los días de retención deben ser al menos 1"),
         ));
     }
     if config
@@ -151,7 +175,7 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
     {
         out.push(Issue::error(
             path!["logs", "retention", "max_size"],
-            "el tamaño máximo debe ser mayor que 0",
+            crate::tr!("el tamaño máximo debe ser mayor que 0"),
         ));
     }
     let export = &config.logs.export;
@@ -159,17 +183,17 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         if export.kind.is_none() {
             out.push(Issue::error(
                 path!["logs", "export", "kind"],
-                "la exportación está activa pero falta kind (otlp o syslog)",
+                crate::tr!("la exportación está activa pero falta kind (otlp o syslog)"),
             ));
         }
         match (export.kind, export.endpoint.as_deref()) {
             (_, None) => out.push(Issue::error(
                 path!["logs", "export", "endpoint"],
-                "la exportación está activa pero falta endpoint",
+                crate::tr!("la exportación está activa pero falta endpoint"),
             )),
             (_, Some(e)) if e.trim().is_empty() => out.push(Issue::error(
                 path!["logs", "export", "endpoint"],
-                "la exportación está activa pero falta endpoint",
+                crate::tr!("la exportación está activa pero falta endpoint"),
             )),
             (Some(kind), Some(e)) => {
                 if let Err(why) = crate::export::parse_endpoint(kind, e) {
@@ -187,7 +211,10 @@ fn check_bastion(config: &Config, name: &str, bastion: &str, out: &mut Vec<Issue
     match config.targets.get(bastion) {
         None => out.push(Issue::error(
             here,
-            format!("el bastion '{bastion}' no existe en [targets]"),
+            crate::tr!(
+                "el bastion '{bastion}' no existe en [targets]",
+                bastion = bastion
+            ),
         )),
         Some(Target::Ssh(_)) => {
             // Recorre la cadena de bastions buscando un ciclo (incluye apuntarse a sí mismo).
@@ -195,7 +222,10 @@ fn check_bastion(config: &Config, name: &str, bastion: &str, out: &mut Vec<Issue
             let mut cur = bastion;
             loop {
                 if !seen.insert(cur) {
-                    out.push(Issue::error(here, "los bastions forman un ciclo"));
+                    out.push(Issue::error(
+                        here,
+                        crate::tr!("los bastions forman un ciclo"),
+                    ));
                     break;
                 }
                 match config.targets.get(cur) {
@@ -209,7 +239,10 @@ fn check_bastion(config: &Config, name: &str, bastion: &str, out: &mut Vec<Issue
         }
         Some(_) => out.push(Issue::error(
             here,
-            format!("el bastion '{bastion}' debe ser un destino de tipo ssh"),
+            crate::tr!(
+                "el bastion '{bastion}' debe ser un destino de tipo ssh",
+                bastion = bastion
+            ),
         )),
     }
 }
@@ -219,7 +252,11 @@ fn check_log_template(value: &Option<String>, field: &str, out: &mut Vec<Issue>)
         for u in unknown_placeholders(t, LOG_VARS) {
             out.push(Issue::warning(
                 path!["logs", field],
-                format!("placeholder desconocido {{{u}}} (disponibles: {{plan}}, {{fecha}}, {{destino}})"),
+                crate::tr!(
+                    "placeholder desconocido {name} (disponibles: {list})",
+                    name = format!("{{{u}}}"),
+                    list = "{plan}, {fecha}, {destino}"
+                ),
             ));
         }
     }
@@ -232,24 +269,30 @@ pub fn validate_plan(plan: &Plan, config: Option<&Config>) -> Vec<Issue> {
     if plan.version != 1 {
         out.push(Issue::error(
             path!["version"],
-            format!("versión {} no soportada (se espera 1)", plan.version),
+            crate::tr!(
+                "versión {version} no soportada (se espera 1)",
+                version = plan.version
+            ),
         ));
     }
     if !is_slug(&plan.name) {
         out.push(Issue::error(
             path!["name"],
-            format!(
-                "nombre de plan inválido '{}' (usa minúsculas, números, - y _)",
-                plan.name
+            crate::tr!(
+                "nombre de plan inválido '{name}' (usa minúsculas, números, - y _)",
+                name = plan.name
             ),
         ));
     }
     if plan.steps.is_empty() {
-        out.push(Issue::error(path!["steps"], "el plan no tiene pasos"));
+        out.push(Issue::error(
+            path!["steps"],
+            crate::tr!("el plan no tiene pasos"),
+        ));
     } else if plan.active_steps().next().is_none() {
         out.push(Issue::warning(
             path!["steps"],
-            "todos los pasos están desactivados",
+            crate::tr!("todos los pasos están desactivados"),
         ));
     }
 
@@ -271,25 +314,28 @@ fn validate_tasks(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issue>) {
         if !is_slug(&t.id) {
             out.push(Issue::error(
                 p("id"),
-                format!(
-                    "id de tarea inválido '{}' (usa minúsculas, números, - y _)",
-                    t.id
+                crate::tr!(
+                    "id de tarea inválido '{id}' (usa minúsculas, números, - y _)",
+                    id = t.id
                 ),
             ));
         }
         if plan.tasks[..i].iter().any(|o| o.id == t.id) {
             out.push(Issue::error(
                 p("id"),
-                format!("id de tarea duplicado '{}'", t.id),
+                crate::tr!("id de tarea duplicado '{id}'", id = t.id),
             ));
         }
         if t.name.trim().is_empty() {
-            out.push(Issue::error(p("name"), "el nombre no puede estar vacío"));
+            out.push(Issue::error(
+                p("name"),
+                crate::tr!("el nombre no puede estar vacío"),
+            ));
         }
         if t.command.trim().is_empty() {
             out.push(Issue::error(
                 p("command"),
-                "el comando no puede estar vacío",
+                crate::tr!("el comando no puede estar vacío"),
             ));
         }
         if let Some(dir) = &t.dir
@@ -299,7 +345,7 @@ fn validate_tasks(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issue>) {
         {
             out.push(Issue::error(
                 p("dir"),
-                "la carpeta debe ser relativa a la raíz, sin '..' ni apuntar a .baton/",
+                crate::tr!("la carpeta debe ser relativa a la raíz, sin '..' ni apuntar a .baton/"),
             ));
         }
         if let (Some(target), Some(config)) = (&t.target, config)
@@ -308,7 +354,10 @@ fn validate_tasks(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issue>) {
         {
             out.push(Issue::error(
                 p("target"),
-                format!("el destino '{target}' no existe en config.toml"),
+                crate::tr!(
+                    "el destino '{target}' no existe en config.toml",
+                    target = target
+                ),
             ));
         }
     }
@@ -330,12 +379,7 @@ fn validate_plugin_credentials(plan: &Plan, out: &mut Vec<Issue>) {
                 reported.push(key);
                 out.push(Issue::error(
                     path!["credentials"],
-                    format!(
-                        "el plan declara {count} credenciales '{}' y el tipo '{}' solo puede usar una: para cuentas distintas usa ambientes (--ambiente), no dos credenciales",
-                        used.kind,
-                        step.kind.label()
-                    ),
-                ));
+                    crate::tr!("el plan declara {count} credenciales '{kind}' y el tipo '{label}' solo puede usar una: para cuentas distintas usa ambientes (--ambiente), no dos credenciales", count = count, kind = used.kind, label = step.kind.label())));
             }
         }
     }
@@ -346,27 +390,23 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
         if b.is_empty() {
             out.push(Issue::error(
                 path!["backup", "volumes"],
-                "la lista de volúmenes está vacía (o activa database = true para respaldar la base)",
-            ));
+                crate::tr!("la lista de volúmenes está vacía (o activa database = true para respaldar la base)")));
         }
         match &b.database {
             DatabaseBackup::All if plan.db_credentials().next().is_none() => {
                 out.push(Issue::error(
                     path!["backup", "database"],
-                    "database = true necesita una credencial de tipo db, mysql o sqlite en [[credentials]]",
-                ));
+                    crate::tr!("database = true necesita una credencial de tipo db, mysql o sqlite en [[credentials]]")));
             }
             DatabaseBackup::Only(ids) if ids.is_empty() => out.push(Issue::error(
                 path!["backup", "database"],
-                "database = [] no respalda ninguna base: pon los ids de las credenciales db, true o quítalo",
-            )),
+                crate::tr!("database = [] no respalda ninguna base: pon los ids de las credenciales db, true o quítalo"))),
             DatabaseBackup::Only(ids) => {
                 for id in ids {
                     if !plan.db_credentials().any(|c| c.id == *id) {
                         out.push(Issue::error(
                             path!["backup", "database"],
-                            format!("'{id}' no es una credencial de tipo db, mysql o sqlite declarada en [[credentials]]"),
-                        ));
+                            crate::tr!("'{id}' no es una credencial de tipo db, mysql o sqlite declarada en [[credentials]]", id = id)));
                     }
                 }
             }
@@ -375,7 +415,7 @@ fn validate_backup(plan: &Plan, out: &mut Vec<Issue>) {
         if b.volumes.iter().any(|v| v.trim().is_empty()) {
             out.push(Issue::error(
                 path!["backup", "volumes"],
-                "hay un nombre de volumen vacío",
+                crate::tr!("hay un nombre de volumen vacío"),
             ));
         }
     }
@@ -388,7 +428,10 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
     {
         out.push(Issue::error(
             path!["defaults", "secrets"],
-            format!("el proveedor de secretos por defecto '{d}' no existe en [secrets]"),
+            crate::tr!(
+                "el proveedor de secretos por defecto '{d}' no existe en [secrets]",
+                d = d
+            ),
         ));
     }
     for (name, provider) in &config.secrets {
@@ -399,19 +442,25 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
         {
             out.push(Issue::error(
                 path!["secrets", name.as_str()],
-                format!("nombre de proveedor inválido '{name}' (usa letras, números, - y _)"),
+                crate::tr!(
+                    "nombre de proveedor inválido '{name}' (usa letras, números, - y _)",
+                    name = name
+                ),
             ));
         }
         if name == FILE_PROVIDER {
             out.push(Issue::error(
                 path!["secrets", name.as_str()],
-                "el nombre 'file' está reservado para leer solo del .env",
+                crate::tr!("el nombre 'file' está reservado para leer solo del .env"),
             ));
         }
         let at = |field: &str| path!["secrets", name.as_str(), field];
         let required = |value: &str, field: &str, what: &str, out: &mut Vec<Issue>| {
             if value.trim().is_empty() {
-                out.push(Issue::error(at(field), what.to_string()));
+                out.push(Issue::error(
+                    at(field),
+                    crate::i18n::tr_dyn(what).into_owned(),
+                ));
             }
             template_warnings(value, SECRET_VARS, at(field), out);
         };
@@ -419,40 +468,43 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
             SecretProvider::Command(c) => required(
                 &c.get,
                 "get",
-                "get necesita el comando que imprime el valor del secreto",
+                crate::tk!("get necesita el comando que imprime el valor del secreto"),
                 out,
             ),
             SecretProvider::Vault(v) => {
                 required(
                     &v.path,
                     "path",
-                    "path necesita la ruta del secreto (ej. secret/baton/{ambiente}/{prefijo})",
+                    crate::tk!(
+                        "path necesita la ruta del secreto (ej. secret/baton/{ambiente}/{prefijo})"
+                    ),
                     out,
                 );
                 if let Some(f) = &v.field {
-                    required(f, "field", "field no puede estar vacío", out);
+                    required(f, "field", crate::tk!("field no puede estar vacío"), out);
                 }
                 if let Some(addr) = &v.addr
                     && !(addr.starts_with("http://") || addr.starts_with("https://"))
                 {
                     out.push(Issue::error(
                         at("addr"),
-                        "addr debe ser una URL (https://vault.ejemplo.com)",
+                        crate::tr!("addr debe ser una URL (https://vault.ejemplo.com)"),
                     ));
                 }
             }
             SecretProvider::Bitwarden(b) => {
                 if let Some(i) = &b.item {
-                    required(i, "item", "item no puede estar vacío", out);
+                    required(i, "item", crate::tk!("item no puede estar vacío"), out);
                 }
                 if let Some(part) = &b.read
                     && !crate::config::BITWARDEN_PARTS.contains(&part.as_str())
                 {
                     out.push(Issue::error(
                         at("read"),
-                        format!(
-                            "read '{part}' no es válido (opciones: {})",
-                            crate::config::BITWARDEN_PARTS.join(", ")
+                        crate::tr!(
+                            "read '{part}' no es válido (opciones: {a0})",
+                            part = part,
+                            a0 = crate::config::BITWARDEN_PARTS.join(", ")
                         ),
                     ));
                 }
@@ -466,11 +518,11 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
                 {
                     out.push(Issue::error(
                         at("vault"),
-                        "vault necesita el nombre del Key Vault (letras, números y -)",
+                        crate::tr!("vault necesita el nombre del Key Vault (letras, números y -)"),
                     ));
                 }
                 if let Some(n) = &a.name {
-                    required(n, "name", "name no puede estar vacío", out);
+                    required(n, "name", crate::tk!("name no puede estar vacío"), out);
                 }
             }
         }
@@ -480,7 +532,7 @@ fn validate_secret_providers(config: &Config, out: &mut Vec<Issue>) {
         {
             out.push(Issue::error(
                 at("timeout"),
-                "el timeout debe ser mayor que 0",
+                crate::tr!("el timeout debe ser mayor que 0"),
             ));
         }
     }
@@ -495,19 +547,22 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
         {
             out.push(Issue::error(
                 path!["credentials", i, "provider"],
-                format!("el proveedor '{p}' no existe en [secrets] de .baton/config.toml"),
+                crate::tr!(
+                    "el proveedor '{p}' no existe en [secrets] de .baton/config.toml",
+                    p = p
+                ),
             ));
         }
         if !is_slug(&c.id) {
             out.push(Issue::error(
                 path!["credentials", i, "id"],
-                format!("id de credencial inválido '{}'", c.id),
+                crate::tr!("id de credencial inválido '{id}'", id = c.id),
             ));
         }
         if !seen.insert(c.id.as_str()) {
             out.push(Issue::error(
                 path!["credentials", i, "id"],
-                format!("id de credencial duplicado '{}'", c.id),
+                crate::tr!("id de credencial duplicado '{id}'", id = c.id),
             ));
         }
     }
@@ -520,7 +575,7 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
             if s.database.is_some() {
                 out.push(Issue::error(
                     path!["steps", i, "database"],
-                    "database solo vale en pasos sql",
+                    crate::tr!("database solo vale en pasos sql"),
                 ));
             }
             continue;
@@ -529,21 +584,28 @@ fn validate_credentials(plan: &Plan, config: Option<&Config>, out: &mut Vec<Issu
             (Some(id), _) if ids.contains(&id.as_str()) => continue,
             (Some(id), _) => {
                 let why = if plan.credentials.iter().any(|c| c.id == *id) {
-                    format!("'{id}' no es una credencial de tipo db, mysql o sqlite")
+                    crate::tr!(
+                        "'{id}' no es una credencial de tipo db, mysql o sqlite",
+                        id = id
+                    )
                 } else {
-                    format!("no existe una credencial con id '{id}' en [[credentials]]")
+                    crate::tr!(
+                        "no existe una credencial con id '{id}' en [[credentials]]",
+                        id = id
+                    )
                 };
                 out.push(Issue::error(path!["steps", i, "database"], why));
                 continue;
             }
             (None, 0) => {
-                "un paso sql necesita una credencial de tipo db, mysql o sqlite en [[credentials]] (con la conexión a la base)"
-                    .to_string()
+                crate::tr!(
+                    "un paso sql necesita una credencial de tipo db, mysql o sqlite en [[credentials]] (con la conexión a la base)"
+                )
             }
             (None, 1) => continue,
-            (None, _) => format!(
-                "el plan declara varias credenciales de base de datos: elige la de este paso con database = \"<id>\" ({})",
-                ids.join(", ")
+            (None, _) => crate::tr!(
+                "el plan declara varias credenciales de base de datos: elige la de este paso con database = \"<id>\" ({ids})",
+                ids = ids.join(", ")
             ),
         };
         out.push(Issue::error(path!["steps", i, "type"], problem));
@@ -556,19 +618,19 @@ fn validate_ids_and_dependencies(plan: &Plan, out: &mut Vec<Issue>) {
         if !is_slug(&s.id) {
             out.push(Issue::error(
                 path!["steps", i, "id"],
-                format!(
-                    "id de paso inválido '{}' (usa minúsculas, números, - y _)",
-                    s.id
+                crate::tr!(
+                    "id de paso inválido '{id}' (usa minúsculas, números, - y _)",
+                    id = s.id
                 ),
             ));
         }
         if let Some(&prev) = first.get(s.id.as_str()) {
             out.push(Issue::error(
                 path!["steps", i, "id"],
-                format!(
-                    "id duplicado '{}' (ya se usa en el paso {})",
-                    s.id,
-                    prev + 1
+                crate::tr!(
+                    "id duplicado '{id}' (ya se usa en el paso {a1})",
+                    id = s.id,
+                    a1 = prev + 1
                 ),
             ));
         } else {
@@ -584,11 +646,12 @@ fn validate_ids_and_dependencies(plan: &Plan, out: &mut Vec<Issue>) {
             match first.get(dep.as_str()) {
                 None => out.push(Issue::error(
                     here,
-                    format!("depende de '{dep}', que no existe"),
+                    crate::tr!("depende de '{dep}', que no existe", dep = dep),
                 )),
-                Some(&j) if j == i => {
-                    out.push(Issue::error(here, "un paso no puede depender de sí mismo"))
-                }
+                Some(&j) if j == i => out.push(Issue::error(
+                    here,
+                    crate::tr!("un paso no puede depender de sí mismo"),
+                )),
                 Some(&j) => {
                     graph.add_edge(nodes[j], nodes[i], ());
                 }
@@ -601,9 +664,9 @@ fn validate_ids_and_dependencies(plan: &Plan, out: &mut Vec<Issue>) {
             let i = graph[cycle.node_id()];
             out.push(Issue::error(
                 path!["steps", i, "depends_on"],
-                format!(
-                    "dependencias circulares que involucran a '{}'",
-                    plan.steps[i].id
+                crate::tr!(
+                    "dependencias circulares que involucran a '{a0}'",
+                    a0 = plan.steps[i].id
                 ),
             ));
         }
@@ -614,7 +677,10 @@ fn validate_ids_and_dependencies(plan: &Plan, out: &mut Vec<Issue>) {
                     if first.get(dep.as_str()).is_some_and(|&j| j > i) {
                         out.push(Issue::error(
                             path!["steps", i, "depends_on", d],
-                            format!("depende de '{dep}', que va después; reordena los pasos"),
+                            crate::tr!(
+                                "depende de '{dep}', que va después; reordena los pasos",
+                                dep = dep
+                            ),
                         ));
                     }
                 }
@@ -635,7 +701,7 @@ fn validate_step(
     if step.name.trim().is_empty() {
         out.push(Issue::error(
             p("name"),
-            "el nombre del paso no puede estar vacío",
+            crate::tr!("el nombre del paso no puede estar vacío"),
         ));
     }
     if let (Some(t), Some(cfg)) = (&step.target, config)
@@ -643,13 +709,13 @@ fn validate_step(
     {
         out.push(Issue::error(
             p("target"),
-            format!("el destino '{t}' no existe en .baton/config.toml"),
+            crate::tr!("el destino '{t}' no existe en .baton/config.toml", t = t),
         ));
     }
     if step.timeout.is_some_and(|t| t.as_duration().is_zero()) {
         out.push(Issue::error(
             p("timeout"),
-            "el timeout debe ser mayor que 0",
+            crate::tr!("el timeout debe ser mayor que 0"),
         ));
     }
 
@@ -658,12 +724,12 @@ fn validate_step(
         if let Err(e) = glob::Pattern::new(s) {
             out.push(Issue::error(
                 at,
-                format!("patrón inválido '{s}': {}", e.msg),
+                crate::tr!("patrón inválido '{s}': {msg}", s = s, msg = e.msg),
             ));
         } else if let Some(why) = unsafe_source(s) {
             out.push(Issue::error(
                 at,
-                format!("origen '{s}' no permitido: {why}"),
+                crate::tr!("origen '{s}' no permitido: {why}", s = s, why = why),
             ));
         }
     }
@@ -673,9 +739,9 @@ fn validate_step(
             if step.source.is_empty() {
                 out.push(Issue::error(
                     p("source"),
-                    format!(
-                        "un paso {} necesita source (ruta o glob)",
-                        step.kind.label()
+                    crate::tr!(
+                        "un paso {label} necesita source (ruta o glob)",
+                        label = step.kind.label()
                     ),
                 ));
             }
@@ -685,7 +751,10 @@ fn validate_step(
             if step.command_template().is_none() {
                 out.push(Issue::error(
                     p("command"),
-                    format!("un paso {} necesita command", step.kind.label()),
+                    crate::tr!(
+                        "un paso {label} necesita command",
+                        label = step.kind.label()
+                    ),
                 ));
             }
         }
@@ -693,7 +762,7 @@ fn validate_step(
             if plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
                 out.push(Issue::error(
                     p("type"),
-                    "un paso backup necesita la sección [backup] con volumes",
+                    crate::tr!("un paso backup necesita la sección [backup] con volumes"),
                 ));
             }
         }
@@ -701,7 +770,7 @@ fn validate_step(
             if step.gate.is_none() {
                 out.push(Issue::error(
                     p("gate"),
-                    "un paso gate necesita la tabla [steps.gate]",
+                    crate::tr!("un paso gate necesita la tabla [steps.gate]"),
                 ));
             }
             for (field, present) in [
@@ -712,7 +781,10 @@ fn validate_step(
                 if present {
                     out.push(Issue::error(
                         p(field),
-                        format!("un paso gate no ejecuta acciones, quita {field}"),
+                        crate::tr!(
+                            "un paso gate no ejecuta acciones, quita {field}",
+                            field = field
+                        ),
                     ));
                 }
             }
@@ -723,7 +795,7 @@ fn validate_step(
     if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
         out.push(Issue::error(
             p("backup_before"),
-            "backup_before necesita la sección [backup] con volumes",
+            crate::tr!("backup_before necesita la sección [backup] con volumes"),
         ));
     }
 
@@ -746,21 +818,20 @@ fn validate_step(
     if !step.kind.destructive_patterns().is_empty() && step.dry_run_shadowed() {
         out.push(Issue::error(
             p("command"),
-            format!(
-                "el tipo '{}' revisa lo destructivo con su dry_run, que este paso pierde al reescribir command: declara dry_run en el paso con el plan equivalente",
-                step.kind.label()
-            ),
-        ));
+            crate::tr!("el tipo '{label}' revisa lo destructivo con su dry_run, que este paso pierde al reescribir command: declara dry_run en el paso con el plan equivalente", label = step.kind.label())));
     }
     if let Some(dry) = &step.dry_run {
         if dry.trim().is_empty() {
-            out.push(Issue::error(p("dry_run"), "dry_run no puede estar vacío"));
+            out.push(Issue::error(
+                p("dry_run"),
+                crate::tr!("dry_run no puede estar vacío"),
+            ));
         } else if !step.kind.runs_command() {
             out.push(Issue::error(
                 p("dry_run"),
-                format!(
-                    "dry_run no aplica a un paso {}: no ejecuta un comando",
-                    step.kind.label()
+                crate::tr!(
+                    "dry_run no aplica a un paso {label}: no ejecuta un comando",
+                    label = step.kind.label()
                 ),
             ));
         } else if let Some(word) = crate::plugin::mutating_word(dry) {
@@ -768,8 +839,7 @@ fn validate_step(
             // palabra suelta puede ser inocente; el plan lo ve quien lo revisa
             out.push(Issue::warning(
                 p("dry_run"),
-                format!("dry_run usa '{word}', que suele modificar algo: un dry-run debe ser de solo lectura"),
-            ));
+                crate::tr!("dry_run usa '{word}', que suele modificar algo: un dry-run debe ser de solo lectura", word = word)));
         }
     }
 
@@ -787,24 +857,26 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
     match (gate.condition, gate.at_least) {
         (Condition::AtLeast, None) => out.push(Issue::error(
             g("at_least"),
-            "condition = \"at_least\" necesita at_least (cuántos checks deben pasar)",
+            crate::tr!("condition = \"at_least\" necesita at_least (cuántos checks deben pasar)"),
         )),
-        (Condition::AtLeast, Some(0)) => {
-            out.push(Issue::error(g("at_least"), "at_least debe ser al menos 1"))
-        }
+        (Condition::AtLeast, Some(0)) => out.push(Issue::error(
+            g("at_least"),
+            crate::tr!("at_least debe ser al menos 1"),
+        )),
         (Condition::AtLeast, Some(n)) if !scanned && n as usize > active.len() => {
             out.push(Issue::error(
                 g("at_least"),
-                format!(
-                    "at_least = {n} pero solo hay {} checks activos",
-                    active.len()
+                crate::tr!(
+                    "at_least = {n} pero solo hay {len} checks activos",
+                    n = n,
+                    len = active.len()
                 ),
             ))
         }
         (Condition::AtLeast, Some(_)) => {}
         (_, Some(_)) => out.push(Issue::warning(
             g("at_least"),
-            "at_least solo se usa con condition = \"at_least\"",
+            crate::tr!("at_least solo se usa con condition = \"at_least\""),
         )),
         _ => {}
     }
@@ -813,9 +885,11 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
         && !active.iter().any(|c| c.critical)
         && !(scanned && gate.checks.is_empty())
     {
-        let msg = "condition = \"critical\" pero ningún check activo está marcado como critical";
+        let msg = crate::tr!(
+            "condition = \"critical\" pero ningún check activo está marcado como critical"
+        );
         out.push(if scanned {
-            Issue::warning(g("condition"), msg)
+            Issue::warning(g("condition"), msg.clone())
         } else {
             Issue::error(g("condition"), msg)
         });
@@ -824,13 +898,13 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
     if gate.attempts == Some(0) {
         out.push(Issue::error(
             g("attempts"),
-            "los intentos deben ser al menos 1",
+            crate::tr!("los intentos deben ser al menos 1"),
         ));
     }
     if gate.timeout.is_some_and(|t| t.as_duration().is_zero()) {
         out.push(Issue::error(
             g("timeout"),
-            "el timeout debe ser mayor que 0",
+            crate::tr!("el timeout debe ser mayor que 0"),
         ));
     }
 
@@ -839,7 +913,7 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
             if !gate.checks.is_empty() {
                 out.push(Issue::warning(
                     g("checks"),
-                    "un gate manual no usa checks (se ignoran)",
+                    crate::tr!("un gate manual no usa checks (se ignoran)"),
                 ));
             }
         }
@@ -847,13 +921,12 @@ fn validate_gate(gate: &Gate, step: &Step, i: usize, out: &mut Vec<Issue>) {
             if active.is_empty() && !scanned {
                 out.push(Issue::error(
                     g("checks"),
-                    "un gate auto necesita al menos un check activo (solo compose y dockerfile los infieren)",
-                ));
+                    crate::tr!("un gate auto necesita al menos un check activo (solo compose y dockerfile los infieren)")));
             }
             if gate.message.is_some() {
                 out.push(Issue::warning(
                     g("message"),
-                    "message solo se usa en gates manuales",
+                    crate::tr!("message solo se usa en gates manuales"),
                 ));
             }
         }
@@ -873,65 +946,75 @@ fn validate_check(check: &Check, i: usize, c: usize, scanned: bool, out: &mut Ve
             if blank(&check.service) {
                 out.push(Issue::error(
                     p("service"),
-                    "este tipo de check necesita service (nombre del servicio del compose)",
+                    crate::tr!(
+                        "este tipo de check necesita service (nombre del servicio del compose)"
+                    ),
                 ));
             }
             // el servicio se busca en los compose del origen del paso
             if !scanned {
                 out.push(Issue::error(
                     p("kind"),
-                    "un check healthcheck o running necesita un paso compose (con origen) que lo contenga",
-                ));
+                    crate::tr!("un check healthcheck o running necesita un paso compose (con origen) que lo contenga")));
             }
         }
         CheckKind::Http => match check.url.as_deref() {
-            None => out.push(Issue::error(p("url"), "un check http necesita url")),
+            None => out.push(Issue::error(
+                p("url"),
+                crate::tr!("un check http necesita url"),
+            )),
             Some(u) if !(u.starts_with("http://") || u.starts_with("https://")) => {
                 out.push(Issue::error(
                     p("url"),
-                    "la url debe empezar con http:// o https://",
+                    crate::tr!("la url debe empezar con http:// o https://"),
                 ));
             }
             Some(_) => {}
         },
         CheckKind::Command => {
             if blank(&check.run) {
-                out.push(Issue::error(p("run"), "un check command necesita run"));
+                out.push(Issue::error(
+                    p("run"),
+                    crate::tr!("un check command necesita run"),
+                ));
             }
             if blank(&check.service) && blank(&check.name) {
                 out.push(Issue::warning(
                     p("name"),
-                    "conviene darle name a un check sin servicio",
+                    crate::tr!("conviene darle name a un check sin servicio"),
                 ));
             }
         }
     }
 
     if check.kind != CheckKind::Http && check.url.is_some() {
-        out.push(Issue::warning(p("url"), "url solo se usa en checks http"));
+        out.push(Issue::warning(
+            p("url"),
+            crate::tr!("url solo se usa en checks http"),
+        ));
     }
     if check.kind != CheckKind::Command && check.run.is_some() {
         out.push(Issue::warning(
             p("run"),
-            "run solo se usa en checks command",
+            crate::tr!("run solo se usa en checks command"),
         ));
     }
     if check.kind != CheckKind::Running && check.min_up.is_some() {
         out.push(Issue::warning(
             p("min_up"),
-            "min_up solo se usa en checks running",
+            crate::tr!("min_up solo se usa en checks running"),
         ));
     }
     if check.attempts == Some(0) {
         out.push(Issue::error(
             p("attempts"),
-            "los intentos deben ser al menos 1",
+            crate::tr!("los intentos deben ser al menos 1"),
         ));
     }
     if check.timeout.is_some_and(|t| t.as_duration().is_zero()) {
         out.push(Issue::error(
             p("timeout"),
-            "el timeout debe ser mayor que 0",
+            crate::tr!("el timeout debe ser mayor que 0"),
         ));
     }
 
@@ -946,9 +1029,10 @@ fn template_warnings(text: &str, allowed: &[&str], at: Vec<Seg>, out: &mut Vec<I
     for u in unknown_placeholders(text, allowed) {
         out.push(Issue::warning(
             at.clone(),
-            format!(
-                "placeholder desconocido {{{u}}} (disponibles aquí: {}); se deja tal cual",
-                allowed
+            crate::tr!(
+                "placeholder desconocido {name} (disponibles aquí: {list}); se deja tal cual",
+                name = format!("{{{u}}}"),
+                list = allowed
                     .iter()
                     .map(|a| format!("{{{a}}}"))
                     .collect::<Vec<_>>()

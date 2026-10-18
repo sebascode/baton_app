@@ -7,8 +7,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use baton_core::db_console::{self, Meta};
+use baton_core::i18n::tr_dyn;
 use baton_core::plan::CredentialReq;
 use baton_core::sql::{destructive_statements, ends_statement, statement_count};
+use baton_core::tk;
+use baton_core::tr;
 use baton_store::Project;
 use baton_store::secrets::Resolver;
 use rustyline::error::ReadlineError;
@@ -22,7 +25,7 @@ use crate::db_cmd::{
 use crate::style::Style;
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED};
 
-const HELP: &str = "\
+const HELP: &str = tk!("\
 consultas   escribe una sentencia terminada en ; (puede ocupar varias líneas)
 \\tablas      las tablas y vistas de la base
 \\columnas T  las columnas de la tabla T
@@ -33,7 +36,7 @@ consultas   escribe una sentencia terminada en ; (puede ocupar varias líneas)
 \\lectura     vuelve al modo de solo lectura
 \\bases       las bases del plan
 \\?           esta ayuda
-\\q           salir (también ctrl+d)";
+\\q           salir (también ctrl+d)");
 
 pub fn run(
     project: &Project,
@@ -45,7 +48,7 @@ pub fn run(
     let resolved = match resolve_fields(cred, resolver, project) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{}", tr!("error: {e}", e = e));
             return ExitCode::from(EXIT_INVALID);
         }
     };
@@ -66,7 +69,7 @@ pub fn run(
     };
     // falla pronto si la base no se puede ni abrir (un archivo SQLite que no existe, por ejemplo)
     if let Err(e) = invocation_for(cred, &session.resolved, project, session.view.write) {
-        eprintln!("error: {e}");
+        eprintln!("{}", tr!("error: {e}", e = e));
         return ExitCode::from(EXIT_INVALID);
     }
     session.repl()
@@ -87,7 +90,11 @@ type Rl = Editor<(), DefaultHistory>;
 
 impl Session<'_> {
     fn prompt(&self) -> String {
-        let mode = if self.view.write { "(escritura)" } else { "" };
+        let mode = if self.view.write {
+            format!("({})", tr!("escritura"))
+        } else {
+            String::new()
+        };
         format!("{}{mode}> ", self.cred.id)
     }
 
@@ -102,7 +109,7 @@ impl Session<'_> {
         let mut rl: Rl = match Editor::with_config(config) {
             Ok(rl) => rl,
             Err(e) => {
-                eprintln!("error: no se pudo abrir la entrada: {e}");
+                eprintln!("{}", tr!("error: no se pudo abrir la entrada: {e}", e = e));
                 return ExitCode::from(EXIT_RUN_FAILED);
             }
         };
@@ -112,13 +119,13 @@ impl Session<'_> {
         }
         println!(
             "{}",
-            self.style.dim(&format!(
-                "baton db · {} · {} · \\? ayuda · \\q salir",
-                pick_credential_label(self.cred, self.resolver),
-                if self.view.write {
-                    "escritura"
+            self.style.dim(&tr!(
+                "baton db · {base} · {mode} · \\? ayuda · \\q salir",
+                base = pick_credential_label(self.cred, self.resolver),
+                mode = if self.view.write {
+                    tr!("escritura")
                 } else {
-                    "solo lectura"
+                    tr!("solo lectura")
                 }
             ))
         );
@@ -134,14 +141,14 @@ impl Session<'_> {
                 Ok(l) => l,
                 Err(ReadlineError::Interrupted) => {
                     if !buffer.is_empty() {
-                        println!("{}", self.style.dim("(consulta cancelada)"));
+                        println!("{}", self.style.dim(&tr!("(consulta cancelada)")));
                     }
                     buffer.clear();
                     continue;
                 }
                 Err(ReadlineError::Eof) => break,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", tr!("error: {e}", e = e));
                     break;
                 }
             };
@@ -184,7 +191,11 @@ impl Session<'_> {
             1 => {}
             n => {
                 eprintln!(
-                    "error: una consulta por vez (esta trae {n}); para varias, un paso sql del plan"
+                    "{}",
+                    tr!(
+                        "error: una consulta por vez (esta trae {n}); para varias, un paso sql del plan",
+                        n = n
+                    )
                 );
                 return;
             }
@@ -193,16 +204,19 @@ impl Session<'_> {
             let risks = destructive_statements(sql);
             if !risks.is_empty() {
                 for r in &risks {
-                    eprintln!("atención: {} ({})", r.what, r.text);
+                    eprintln!(
+                        "{}",
+                        tr!("atención: {what} ({text})", what = r.what, text = r.text)
+                    );
                 }
                 let answer = rl
-                    .readline("¿ejecutar de todos modos? (s/N) ")
+                    .readline(&tr!("¿ejecutar de todos modos? (s/N) "))
                     .unwrap_or_default();
                 if !matches!(
                     answer.trim().to_lowercase().as_str(),
                     "s" | "si" | "sí" | "y" | "yes"
                 ) {
-                    println!("{}", self.style.dim("(no se ejecutó)"));
+                    println!("{}", self.style.dim(&tr!("(no se ejecutó)")));
                     return;
                 }
             }
@@ -216,27 +230,32 @@ impl Session<'_> {
             match invocation_for(self.cred, &self.resolved, self.project, self.view.write) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", tr!("error: {e}", e = e));
                     return;
                 }
             };
         match query_csv(&inv, &secrets, sql, self.args.timeout) {
             Ok((csv, truncated)) => {
                 if let Err(e) = show(&csv, truncated, inv.tsv, &self.view) {
-                    eprintln!("error: {e}");
+                    eprintln!("{}", tr!("error: {e}", e = e));
                 }
             }
-            Err(QueryError::NotFound(p)) => eprintln!("error: no se encontró {p} en el PATH"),
+            Err(QueryError::NotFound(p)) => {
+                eprintln!("{}", tr!("error: no se encontró {p} en el PATH", p = p))
+            }
             Err(QueryError::TimedOut) => eprintln!(
-                "error: la consulta no terminó en {} (--timeout para esperar más)",
-                baton_core::units::format_duration(self.args.timeout)
+                "{}",
+                tr!(
+                    "error: la consulta no terminó en {time} (--timeout para esperar más)",
+                    time = baton_core::units::format_duration(self.args.timeout)
+                )
             ),
             Err(QueryError::Failed(lines)) => {
                 for l in lines {
                     eprintln!("{l}");
                 }
             }
-            Err(QueryError::Other(e)) => eprintln!("error: {e}"),
+            Err(QueryError::Other(e)) => eprintln!("{}", tr!("error: {e}", e = e)),
         }
     }
 
@@ -245,49 +264,61 @@ impl Session<'_> {
         let _ = rl;
         match db_console::parse_meta(line) {
             Meta::Quit => return true,
-            Meta::Help => println!("{HELP}"),
+            Meta::Help => println!("{}", tr_dyn(HELP)),
             Meta::Bases => print!("{}", describe(self.dbs, self.resolver, &self.style)),
             Meta::Tables => self.run_sql(&db_console::tables_query(self.cred.kind)),
             Meta::Columns(table) => match db_console::columns_query(self.cred.kind, &table) {
                 Ok(sql) => self.run_sql(&sql),
-                Err(e) => eprintln!("error: {e}"),
+                Err(e) => eprintln!("{}", tr!("error: {e}", e = e)),
             },
-            Meta::Format(None) => println!("formato: {}", format_name(self.view.format)),
+            Meta::Format(None) => println!(
+                "{}",
+                tr!("formato: {name}", name = format_name(self.view.format))
+            ),
             Meta::Format(Some(name)) => match parse_format(&name) {
                 Some(f) => {
                     self.view.format = f;
-                    println!("formato: {}", format_name(f));
+                    println!("{}", tr!("formato: {name}", name = format_name(f)));
                 }
-                None => eprintln!("error: el formato es tabla, registro, csv o json"),
+                None => eprintln!(
+                    "{}",
+                    tr!("error: el formato es tabla, registro, csv o json")
+                ),
             },
-            Meta::Limit(None) => println!("límite: {}", self.view.limit),
+            Meta::Limit(None) => println!("{}", tr!("límite: {n}", n = self.view.limit)),
             Meta::Limit(Some(n)) => match n.parse::<usize>() {
                 Ok(n) => {
                     self.view.limit = n;
-                    println!("límite: {n}");
+                    println!("{}", tr!("límite: {n}", n = n));
                 }
-                Err(_) => eprintln!("error: \\limite necesita un número (0: todas)"),
+                Err(_) => eprintln!("{}", tr!("error: \\limite necesita un número (0: todas)")),
             },
             Meta::Full => {
                 self.view.full = !self.view.full;
                 println!(
-                    "celdas: {}",
-                    if self.view.full {
-                        "completas"
-                    } else {
-                        "recortadas"
-                    }
+                    "{}",
+                    tr!(
+                        "celdas: {mode}",
+                        mode = if self.view.full {
+                            tr!("completas")
+                        } else {
+                            tr!("recortadas")
+                        }
+                    )
                 );
             }
             Meta::Write => {
                 self.view.write = true;
                 println!(
-                    "modo escritura: las consultas pueden modificar datos (\\lectura para volver)"
+                    "{}",
+                    tr!(
+                        "modo escritura: las consultas pueden modificar datos (\\lectura para volver)"
+                    )
                 );
             }
             Meta::ReadOnly => {
                 self.view.write = false;
-                println!("modo solo lectura");
+                println!("{}", tr!("modo solo lectura"));
             }
             Meta::Unknown(m) => eprintln!("{m}"),
         }
