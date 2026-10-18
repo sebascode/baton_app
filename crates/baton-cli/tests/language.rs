@@ -297,3 +297,14 @@ fn import_report_talks_english_too() {
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("error: could not read"), "{}", err(&o));
 }
+
+#[test]
+fn db_talks_english_too() {
+    let fx = Fx::new();
+    let o = fx.run(Some("en"), &["db", "-c", "select 1"]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    let t = err(&o);
+    assert!(t.contains("declares no database credentials"), "{t}");
+    assert!(t.contains("add one in [[credentials]]"), "{t}");
+    assert!(!t.contains("no declara"), "{t}");
+}
