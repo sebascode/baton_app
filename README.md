@@ -18,7 +18,7 @@ Un plan es una lista ordenada de pasos. Cada paso apunta a archivos de tu proyec
 | `sql` | ejecuta archivos `.sql` contra PostgreSQL, MySQL o MariaDB, o un archivo SQLite |
 | `comando`, `check`, `backup`, `gate` | un comando suelto, una verificación, un respaldo, o una pausa |
 
-Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un docker context.
+Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un docker context. Funciona con docker o podman (se elige solo, o con `BATON_ENGINE`), y la interfaz habla español o inglés (`BATON_LANG=en`).
 
 ## Cómo lo hace
 
@@ -27,6 +27,7 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 - **Gates**: un paso puede esperar una confirmación manual o verificaciones automáticas (healthcheck de Docker, HTTP, comando, contenedor corriendo) antes de seguir.
 - **Fallos**: si algo falla, puedes reintentar, ver el log completo, abrir una shell, hacer rollback o abortar, y luego reanudar desde donde quedó.
 - **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. Las variables de entorno se filtran con más facilidad que un archivo (listados de procesos, `docker inspect`, logs de CI): para secretos de larga vida conviene un archivo en `.baton/` o un gestor; ver [SECURITY.md](SECURITY.md). `.baton/` nunca sale de tu máquina.
+- **Ambientes**: `baton run --ambiente qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
 - **Sin terminal** (CI): no pregunta nada; si falta algo, falla diciendo qué.
 
 ## Instalación
