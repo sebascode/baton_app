@@ -1281,3 +1281,13 @@
 "este --resume" = "this --resume"
 "este rollback" = "this rollback"
 "ninguno" = "none"
+
+" Ambiente " = " Environment "
+"ambiente" = "environment"
+"ambiente: {name}" = "environment: {name}"
+"ese nombre de ambiente no es válido" = "that environment name is not valid"
+"hay cambios sin guardar en el editor: guárdalos (ctrl s) antes de cambiar de ambiente" = "there are unsaved changes in the editor: save them (ctrl s) before changing the environment"
+"sin ambiente" = "no environment"
+"↑↓ · enter elegir · esc" = "↑↓ · enter choose · esc"
+
+"elegir el ambiente (solo esta sesión)" = "pick the environment (this session only)"

@@ -106,6 +106,8 @@ pub enum Effect {
     /// Pasar a otro plan del proyecto (selector de la vista previa). Quien atiende reemplaza la
     /// aplicación entera con la del plan elegido, o responde con `notify` si no puede.
     SwitchPlan(String),
+    /// Elegir el ambiente de esta sesión (`None`: ninguno).
+    SetAmbiente(Option<String>),
     /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja). Quien atiende lo hace en
     /// disco y responde con `plans_changed` (o `notify` si no pudo).
     PlanOp(crate::plan_prompt::PlanRequest),
@@ -628,6 +630,7 @@ impl App {
                 PreviewAction::Maintenance => Some(Effect::Maintenance),
                 PreviewAction::LastLog => Some(Effect::OpenLog(0)),
                 PreviewAction::SwitchPlan(name) => Some(Effect::SwitchPlan(name)),
+                PreviewAction::SetAmbiente(a) => Some(Effect::SetAmbiente(a)),
                 PreviewAction::PlanOp(req) => Some(Effect::PlanOp(req)),
                 PreviewAction::Quit => Some(Effect::Quit),
                 PreviewAction::AskQuit => self.ask_quit(),

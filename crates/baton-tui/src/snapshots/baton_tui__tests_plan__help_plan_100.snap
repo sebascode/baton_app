@@ -26,9 +26,9 @@ expression: "screen(&app, 100, 30)"
 │                │ m         mantención (logs, reinicios, imágenes)               │                │
 │                │ v         pipeline                                             │                │
 │                │ p         cambiar de plan                                      │                │
-├────────────────│ q         salir de baton                                       │────────────────┤
-│ (●) Backup ante└────────────────────────────────────────────────────────────────┘                │
-├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+├────────────────│ a         elegir el ambiente (solo esta sesión)                │────────────────┤
+│ (●) Backup ante│ q         salir de baton                                       │                │
+├────────────────└────────────────────────────────────────────────────────────────┘────────────────┤
 │ [espacio] activar  [shift ↑↓] mover  [e] editar paso  [g] añadir gate  [v] pipeline              │
 │ [m] mantención  [?] ayuda  [enter] ejecutar                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

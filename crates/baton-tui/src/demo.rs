@@ -223,6 +223,7 @@ impl Driver for DemoDriver {
             | Effect::AddGate(_)
             | Effect::OpenPlan(_)
             | Effect::SwitchPlan(_)
+            | Effect::SetAmbiente(_)
             | Effect::PlanOp(_) => {}
         }
         Flow::Continue
