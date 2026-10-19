@@ -262,12 +262,8 @@ fn verify_attestation(file: &Path) -> Result<(), String> {
         return Ok(());
     }
     let why = String::from_utf8_lossy(&out.stderr);
-    let why = why
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
+    // todo lo que dijo gh en una línea: una frase suelta ("populate GH_TOKEN...") no se entiende
+    let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
     Err(tr!(
         "no se pudo verificar la atestación de procedencia ({why}); no se instaló nada",
         why = why

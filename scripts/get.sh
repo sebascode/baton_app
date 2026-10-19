@@ -136,7 +136,7 @@ if [ -n "$verify" ]; then
   slug="${slug%/}"
   gh attestation verify "$tmp/$asset" --repo "$slug" \
     --signer-workflow "$slug/.github/workflows/release.yml" >"$tmp/verify.log" 2>&1 ||
-    die "no se pudo verificar la atestación de procedencia ($(tail -n 1 "$tmp/verify.log")): no se instaló nada"
+    die "no se pudo verificar la atestación de procedencia ($(tr '\n' ' ' <"$tmp/verify.log" | tr -s ' ')): no se instaló nada"
   echo "atestación de procedencia verificada"
 fi
 
