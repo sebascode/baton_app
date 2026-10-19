@@ -108,6 +108,8 @@ pub enum Effect {
     SwitchPlan(String),
     /// Elegir el ambiente de esta sesión (`None`: ninguno).
     SetAmbiente(Option<String>),
+    /// Lo mismo, pedido desde la pantalla de mantención (que se vuelve a abrir).
+    MaintAmbiente(Option<String>),
     /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja). Quien atiende lo hace en
     /// disco y responde con `plans_changed` (o `notify` si no pudo).
     PlanOp(crate::plan_prompt::PlanRequest),
@@ -667,6 +669,7 @@ impl App {
             Mode::Maintenance(m) => match m.handle_key(key)? {
                 MaintAction::Run(req) => Some(Effect::MaintRun(req)),
                 MaintAction::Cancel => Some(Effect::MaintCancel),
+                MaintAction::SetAmbiente(a) => Some(Effect::MaintAmbiente(a)),
                 MaintAction::Back => {
                     self.back_to_preview();
                     Some(Effect::MaintCancel)

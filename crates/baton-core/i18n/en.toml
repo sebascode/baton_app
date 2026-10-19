@@ -145,6 +145,7 @@
 "Los pasos corren en este orden. Una línea punteada es una dependencia que no es el paso anterior; un rombo es un gate; un recuadro de líneas cortadas es un paso desactivado.\n\n" = "The steps run in this order. A dotted line is a dependency that is not the previous step; a diamond is a gate; a dashed box is a disabled step.\n\n"
 "Mantención del plan {plan}\n\n" = "Maintenance of plan {plan}\n\n"
 "Mantención · {plan}" = "Maintenance · {plan}"
+"Mantención · {plan} · ambiente {name}" = "Maintenance · {plan} · environment {name}"
 "Mantención: ¿qué hacemos?" = "Maintenance: what shall we do?"
 "Ningún paso coincide con «{filter}»." = "No step matches «{filter}»."
 "No se pudo crear {path}: {e}" = "Could not create {path}: {e}"
