@@ -6,18 +6,21 @@
 #
 #   --version X.Y.Z   instala esa versión (por defecto, la última)
 #   --dir RUTA        carpeta donde queda `baton` (por defecto ~/.local/bin)
+#   --verify          además del sha256, verifica la firma de procedencia con `gh attestation
+#                     verify` (necesita la GitHub CLI con sesión iniciada); si falla no instala
 #
 # Baja el archivo de tu plataforma (Linux x86_64 o aarch64, macOS con Apple Silicon), comprueba su
 # suma sha256, comprueba que el binario responda con la versión esperada y recién entonces lo
 # instala, de forma atómica. Si ya había uno lo deja como `baton.prev`. También instala la página de
 # manual en ~/.local/share/man (o BATON_MAN_DIR). Después se actualiza con `baton update`.
 #
-# Variables: BATON_VERSION, BATON_INSTALL_DIR, BATON_MAN_DIR y BATON_REPO_URL.
+# Variables: BATON_VERSION, BATON_INSTALL_DIR, BATON_MAN_DIR, BATON_REPO_URL y BATON_VERIFY=1.
 set -eu
 
 repo="${BATON_REPO_URL:-https://github.com/sebascode/baton_app}"
 dest="${BATON_INSTALL_DIR:-$HOME/.local/bin}"
 version="${BATON_VERSION:-}"
+verify="${BATON_VERIFY:-}"
 
 die() {
   echo "error: $*" >&2
@@ -36,6 +39,10 @@ while [ $# -gt 0 ]; do
       dest="$2"
       shift 2
       ;;
+    --verify)
+      verify=1
+      shift
+      ;;
     -h | --help)
       cat <<'AYUDA'
 Instala baton desde los binarios de GitHub Releases (sin Rust ni Homebrew).
@@ -45,9 +52,11 @@ Instala baton desde los binarios de GitHub Releases (sin Rust ni Homebrew).
 
   --version X.Y.Z   instala esa versión (por defecto, la última)
   --dir RUTA        carpeta donde queda baton (por defecto ~/.local/bin)
+  --verify          además del sha256, verifica la firma de procedencia con `gh attestation
+                    verify` (necesita la GitHub CLI con sesión iniciada)
 
 Comprueba la suma sha256 y que el binario responda con la versión esperada antes de instalar.
-Variables: BATON_VERSION, BATON_INSTALL_DIR, BATON_MAN_DIR y BATON_REPO_URL.
+Variables: BATON_VERSION, BATON_INSTALL_DIR, BATON_MAN_DIR, BATON_REPO_URL y BATON_VERIFY=1.
 AYUDA
       exit 0
       ;;
@@ -57,6 +66,9 @@ done
 
 command -v curl >/dev/null 2>&1 || die "hace falta curl"
 command -v tar >/dev/null 2>&1 || die "hace falta tar"
+if [ -n "$verify" ]; then
+  command -v gh >/dev/null 2>&1 || die "--verify necesita la GitHub CLI (gh) instalada y con sesión iniciada (gh auth login)"
+fi
 if command -v sha256sum >/dev/null 2>&1; then
   sha_of() { sha256sum "$1" | cut -d' ' -f1; }
 elif command -v shasum >/dev/null 2>&1; then
@@ -117,6 +129,16 @@ actual="$(sha_of "$tmp/$asset")"
 [ "$actual" = "$expected" ] ||
   die "la suma de verificación no coincide (esperada $expected, obtenida $actual): no se instaló nada"
 echo "suma sha256 verificada"
+
+# La firma de procedencia: prueba que el archivo lo construyó el workflow `release` de este repo.
+if [ -n "$verify" ]; then
+  slug="${repo#https://github.com/}"
+  slug="${slug%/}"
+  gh attestation verify "$tmp/$asset" --repo "$slug" \
+    --signer-workflow "$slug/.github/workflows/release.yml" >"$tmp/verify.log" 2>&1 ||
+    die "no se pudo verificar la atestación de procedencia ($(tail -n 1 "$tmp/verify.log")): no se instaló nada"
+  echo "atestación de procedencia verificada"
+fi
 
 mkdir "$tmp/x"
 tar -xzf "$tmp/$asset" -C "$tmp/x" || die "no se pudo extraer $asset"

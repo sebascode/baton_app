@@ -123,3 +123,4 @@
 "Vuelve a la versión que había antes de la última actualización" = "Goes back to the version that was installed before the last update"
 "`github:dueño/repo@versión` (un tag o un commit) o una carpeta local" = "`github:owner/repo@version` (a tag or a commit) or a local folder"
 "bash, zsh o fish (por defecto, el de $SHELL)" = "bash, zsh or fish (by default, the one in $SHELL)"
+"Además del sha256, verifica la firma de procedencia del release con `gh attestation verify` (necesita `gh` con sesión iniciada)" = "Besides the sha256, verifies the release provenance signature with `gh attestation verify` (needs `gh` signed in)"

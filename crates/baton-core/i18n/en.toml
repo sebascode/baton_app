@@ -1476,3 +1476,8 @@
 "no hay nada en curso que lea texto" = "nothing is running that could read text"
 "enviar texto" = "send text"
 "este comando no puede recibir texto (el destino no lo admite o ya terminó)" = "this command cannot receive text (the target does not support it or it already ended)"
+
+"atestación de procedencia verificada" = "provenance attestation verified"
+"no se pudo deducir el repositorio de {repo}" = "could not work out the repository of {repo}"
+"--verify necesita la GitHub CLI (`gh`) instalada y con sesión iniciada (gh auth login)" = "--verify needs the GitHub CLI (`gh`) installed and signed in (gh auth login)"
+"no se pudo verificar la atestación de procedencia ({why}); no se instaló nada" = "could not verify the provenance attestation ({why}); nothing was installed"

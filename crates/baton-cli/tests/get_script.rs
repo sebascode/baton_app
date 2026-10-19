@@ -29,6 +29,13 @@ file="$FAKE_RELEASE/$(basename "$url")"
 cp "$file" "$out"
 "#;
 
+/// `gh` de mentira: registra los argumentos y falla si `FAKE_GH_FAIL` está definida.
+const FAKE_GH: &str = r#"#!/bin/sh
+echo "gh $*" >> "$FAKE_LOG"
+[ -n "$FAKE_GH_FAIL" ] && { echo "Error: no matching attestations found" >&2; exit 1; }
+exit 0
+"#;
+
 const FAKE_UNAME: &str = r#"#!/bin/sh
 case "$1" in
   -s) echo "$FAKE_OS" ;;
@@ -53,6 +60,7 @@ impl Sandbox {
         }
         exec(&dir.path().join("tools/curl"), FAKE_CURL);
         exec(&dir.path().join("tools/uname"), FAKE_UNAME);
+        exec(&dir.path().join("tools/gh"), FAKE_GH);
         Self { dir }
     }
 
@@ -112,6 +120,8 @@ impl Sandbox {
                 "https://github.com/sebascode/baton_app/releases/tag/v9.9.9",
             )
             .env_remove("FAKE_OFFLINE")
+            .env_remove("FAKE_GH_FAIL")
+            .env_remove("BATON_VERIFY")
             .env_remove("BATON_VERSION")
             .env_remove("BATON_INSTALL_DIR")
             .env_remove("BATON_MAN_DIR")
@@ -402,4 +412,66 @@ fn the_script_is_plain_posix_sh() {
     ] {
         assert!(!script.contains(banned), "bashismo: {banned}");
     }
+}
+
+#[test]
+fn without_verify_gh_is_never_called() {
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", "linux-x86_64", "9.9.9");
+    let o = sb.run(&[], &[]);
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    let log = fs::read_to_string(sb.p("log")).unwrap();
+    assert!(!log.contains("gh "), "{log}");
+}
+
+#[test]
+fn verify_checks_the_attestation_of_the_download_before_installing() {
+    for how in [("--verify", ""), ("", "1")] {
+        let sb = Sandbox::new();
+        sb.publish("9.9.9", "linux-x86_64", "9.9.9");
+        let args: Vec<&str> = [how.0].into_iter().filter(|a| !a.is_empty()).collect();
+        let env: Vec<(&str, &str)> = if how.1.is_empty() {
+            vec![]
+        } else {
+            vec![("BATON_VERIFY", how.1)]
+        };
+        let o = sb.run(&args, &env);
+        assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+        assert!(
+            out(&o).contains("atestación de procedencia verificada"),
+            "{}",
+            out(&o)
+        );
+        let log = fs::read_to_string(sb.p("log")).unwrap();
+        let call = log.lines().find(|l| l.starts_with("gh ")).expect(&log);
+        assert!(
+            call.starts_with("gh attestation verify ")
+                && call.contains("baton-v9.9.9-linux-x86_64.tar.gz")
+                && call.contains("--repo sebascode/baton_app")
+                && call.contains(
+                    "--signer-workflow sebascode/baton_app/.github/workflows/release.yml"
+                ),
+            "{call}"
+        );
+        assert_eq!(
+            said(&sb.p("home/.local/bin/baton")),
+            "baton 9.9.9 (release)"
+        );
+    }
+}
+
+#[test]
+fn a_failed_verification_installs_nothing() {
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", "linux-x86_64", "9.9.9");
+    let o = sb.run(&["--verify"], &[("FAKE_GH_FAIL", "1")]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        err(&o).contains("no se pudo verificar la atestación de procedencia")
+            && err(&o).contains("no matching attestations found")
+            && err(&o).contains("no se instaló nada"),
+        "{}",
+        err(&o)
+    );
+    assert!(!sb.p("home/.local/bin/baton").exists());
 }
