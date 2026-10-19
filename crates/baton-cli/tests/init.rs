@@ -271,45 +271,31 @@ fn without_a_terminal_init_never_asks_about_git() {
 }
 
 #[test]
-fn sql_files_become_disabled_steps_with_a_db_credential_and_the_plan_validates() {
+fn sql_files_are_reported_but_never_become_steps() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    for f in ["docker-compose.yml", "db/01-esquema.sql", "db/02-datos.sql"] {
+    for f in [
+        "docker-compose.yml",
+        "db/01-esquema.sql",
+        "db/02-datos.sql",
+        "otra/x.sql",
+    ] {
         touch(root, f);
     }
     let o = baton(root, &["init", "demo"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     let stdout = out(&o);
-    assert!(
-        stdout.contains("paso 'sql-db': 1 archivo(s) (desactivado)"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("los .sql quedaron desactivados"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("encontré 3 archivo(s) .sql"), "{stdout}");
+    assert!(!stdout.contains("paso 'sql"), "{stdout}");
 
     let text = plan_text(root, "demo");
-    assert!(text.starts_with("name = \"demo\""), "{text}");
     assert!(
-        text.contains("kind = \"db\"") && text.contains("ref = \"db.env#DB\""),
-        "{text}"
-    );
-    assert!(
-        text.contains("type = \"sql\"") && text.contains("source = \"db/*.sql\""),
+        !text.contains("type = \"sql\"") && !text.contains("[[credentials]]"),
         "{text}"
     );
 
     let v = baton(root, &["validate", "demo"]);
     assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
-
-    // el paso sql está desactivado: en CI no pide la conexión de la base
-    let mut run = std::process::Command::new(env!("CARGO_BIN_EXE_baton"));
-    run.arg("-C")
-        .arg(root)
-        .args(["run", "demo", "--dry-run", "--no-tui"]);
-    let r = run.env("CI", "1").output().unwrap();
-    assert_eq!(r.status.code(), Some(0), "{}\n{}", out(&r), err(&r));
 }
 
 #[test]
