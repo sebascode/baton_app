@@ -69,6 +69,7 @@ impl Sandbox {
             &format!("#!/bin/sh\necho \"baton {says} (release)\"\n"),
         );
         fs::write(stage.join("baton.1"), ".TH BATON 1\n").unwrap();
+        fs::write(stage.join("baton.en.1"), ".TH BATON 1 en\n").unwrap();
         let name = format!("baton-v{version}-{platform}.tar.gz");
         let tarball = self.p("release").join(&name);
         assert!(
@@ -77,7 +78,7 @@ impl Sandbox {
                 .arg(&tarball)
                 .arg("-C")
                 .arg(&stage)
-                .args(["baton", "baton.1"])
+                .args(["baton", "baton.1", "baton.en.1"])
                 .status()
                 .unwrap()
                 .success()
@@ -160,6 +161,7 @@ fn it_installs_the_latest_release_for_this_platform_with_its_manual() {
         0o111
     );
     assert!(sb.p("home/.local/share/man/man1/baton.1").is_file());
+    assert!(sb.p("home/.local/share/man/en/man1/baton.1").is_file());
     let text = out(&o);
     assert!(
         text.contains("suma sha256 verificada") && text.contains("instalado en"),

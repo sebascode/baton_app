@@ -1,12 +1,23 @@
-//! La página de manual (`man/baton.1`) no debe quedarse atrás: cada comando y cada opción de la
-//! ayuda real tiene que estar documentada, y los ejemplos de TOML tienen que leerse.
+//! Las páginas de manual (`man/baton.1` en español y `man/en/baton.1` en inglés) no deben quedarse
+//! atrás: cada comando y cada opción de la ayuda real tiene que estar documentada en las dos, y los
+//! ejemplos de TOML tienen que leerse.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-fn page() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../man/baton.1");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+/// Las dos páginas: `(archivo, texto)`.
+fn pages() -> Vec<(&'static str, String)> {
+    ["man/baton.1", "man/en/baton.1"]
+        .into_iter()
+        .map(|file| {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            (file, text)
+        })
+        .collect()
 }
 
 fn help(args: &[&str]) -> String {
@@ -47,55 +58,58 @@ fn long_flags(text: &str) -> Vec<String> {
 
 #[test]
 fn every_command_in_the_help_is_in_the_manual() {
-    let page = page();
     let commands = commands();
     assert!(
         commands.len() >= 12,
         "no se pudo leer la lista de comandos: {commands:?}"
     );
-    for c in &commands {
-        let documented = page.contains(&format!(".SS baton {c}"))
-            || page.contains(&format!(".BI {c} "))
-            || page.contains(&format!(".B {c}\n"));
-        assert!(documented, "el comando '{c}' no está en man/baton.1");
+    for (file, page) in pages() {
+        for c in &commands {
+            let documented = page.contains(&format!(".SS baton {c}"))
+                || page.contains(&format!(".BI {c} "))
+                || page.contains(&format!(".B {c}\n"));
+            assert!(documented, "el comando '{c}' no está en {file}");
+        }
     }
 }
 
 #[test]
 fn every_long_option_of_every_command_is_in_the_manual() {
-    let page = page();
-    let mut missing = Vec::new();
-    for c in commands() {
-        for flag in long_flags(&help(&[&c])) {
-            if matches!(flag.as_str(), "help" | "version") {
-                continue;
-            }
-            let escaped = format!("\\-\\-{}", flag.replace('-', "\\-"));
-            if !page.contains(&escaped) {
-                missing.push(format!("baton {c} --{flag}"));
+    for (file, page) in pages() {
+        let mut missing = Vec::new();
+        for c in commands() {
+            for flag in long_flags(&help(&[&c])) {
+                if matches!(flag.as_str(), "help" | "version") {
+                    continue;
+                }
+                let escaped = format!("\\-\\-{}", flag.replace('-', "\\-"));
+                if !page.contains(&escaped) {
+                    missing.push(format!("baton {c} --{flag}"));
+                }
             }
         }
+        missing.sort();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "opciones sin documentar en {file}: {missing:?}"
+        );
     }
-    missing.sort();
-    missing.dedup();
-    assert!(
-        missing.is_empty(),
-        "opciones sin documentar en man/baton.1: {missing:?}"
-    );
 }
 
 #[test]
 fn the_manual_has_no_long_dashes_and_documents_the_exit_codes() {
-    let page = page();
-    assert!(
-        !page.contains('\u{2014}') && !page.contains('\u{2013}'),
-        "guiones largos"
-    );
-    for code in ["0", "1", "2", "3", "130"] {
+    for (file, page) in pages() {
         assert!(
-            page.contains(&format!(".B {code}\n")),
-            "falta el código de salida {code}"
+            !page.contains('\u{2014}') && !page.contains('\u{2013}'),
+            "guiones largos en {file}"
         );
+        for code in ["0", "1", "2", "3", "130"] {
+            assert!(
+                page.contains(&format!(".B {code}\n")),
+                "falta el código de salida {code} en {file}"
+            );
+        }
     }
 }
 
@@ -119,9 +133,14 @@ fn code_blocks(page: &str) -> Vec<String> {
 
 #[test]
 fn the_toml_examples_in_the_manual_are_valid_toml_for_baton() {
-    let page = page();
+    for (file, page) in pages() {
+        check_examples(file, &page);
+    }
+}
+
+fn check_examples(file: &str, page: &str) {
     let (mut plans, mut configs, mut manifests) = (0, 0, 0);
-    for block in code_blocks(&page) {
+    for block in code_blocks(page) {
         if block.starts_with("name = \"") {
             baton_core::Plan::parse(&block)
                 .unwrap_or_else(|e| panic!("plan de ejemplo: {e}\n{block}"));
@@ -144,6 +163,41 @@ fn the_toml_examples_in_the_manual_are_valid_toml_for_baton() {
     assert_eq!(
         (plans, configs, manifests),
         (1, 2, 1),
-        "se esperaba 1 plan, 2 configuraciones y 1 manifiesto de ejemplo"
+        "se esperaba 1 plan, 2 configuraciones y 1 manifiesto de ejemplo en {file}"
     );
+}
+
+/// Las líneas de macros de roff (`.SS`, `.TP`, `.BI`...) con su primer argumento fijo: la
+/// estructura de la página, sin el texto que se traduce.
+fn skeleton(page: &str) -> Vec<String> {
+    page.lines()
+        .filter(|l| l.starts_with('.') && !l.starts_with(".\\\"") && *l != ".")
+        .filter(|l| !l.starts_with(".SH") && !l.starts_with(".TH"))
+        .map(|l| l.split_whitespace().take(1).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn the_english_page_has_the_same_structure_as_the_spanish_one() {
+    let pages = pages();
+    let (es, en) = (&pages[0].1, &pages[1].1);
+    assert_eq!(
+        skeleton(es),
+        skeleton(en),
+        "las páginas tienen otra estructura"
+    );
+    // las mismas secciones y los mismos comandos documentados
+    let count = |p: &str, m: &str| p.lines().filter(|l| l.starts_with(m)).count();
+    for marker in [".SH ", ".SS ", ".TP", ".nf"] {
+        assert_eq!(count(es, marker), count(en, marker), "{marker}");
+    }
+    let ss = |p: &str| -> Vec<String> {
+        p.lines()
+            .filter(|l| l.starts_with(".SS baton "))
+            .map(|l| l.split_whitespace().nth(2).unwrap_or("").to_string())
+            // "baton (sin argumentos)" / "baton (no arguments)" se escribe en cada idioma
+            .filter(|c| !c.starts_with('('))
+            .collect()
+    };
+    assert_eq!(ss(es), ss(en));
 }
