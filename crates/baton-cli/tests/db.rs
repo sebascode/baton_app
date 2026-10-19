@@ -875,11 +875,13 @@ fn a_mysql_interactive_session_lists_tables_and_columns_of_the_current_database(
 }
 
 /// Contra un MySQL de verdad en un contenedor (necesita `podman`). Se corre a mano:
-/// `cargo test -p baton --test db real_mysql -- --ignored`.
+/// `cargo test -p baton --test db real_mysql -- --ignored`. Con `BATON_IT_MYSQL_IMAGE=mariadb:11.4`
+/// (por ejemplo) corre contra otra imagen que hable el mismo cliente.
 #[test]
-#[ignore = "necesita podman y la imagen mysql:8.4"]
+#[ignore = "necesita podman y la imagen mysql:8.4 (o la de BATON_IT_MYSQL_IMAGE)"]
 fn real_mysql_in_a_container_is_read_only_by_default_and_reports_errors() {
     let name = format!("baton-my-it-{}", std::process::id());
+    let image = std::env::var("BATON_IT_MYSQL_IMAGE").unwrap_or_else(|_| "mysql:8.4".into());
     assert!(
         Command::new("podman")
             .args([
@@ -892,7 +894,7 @@ fn real_mysql_in_a_container_is_read_only_by_default_and_reports_errors() {
                 "MYSQL_ROOT_PASSWORD=pw",
                 "-e",
                 "MYSQL_DATABASE=tienda",
-                "mysql:8.4"
+                &image
             ])
             .status()
             .unwrap()
@@ -917,10 +919,8 @@ fn real_mysql_in_a_container_is_read_only_by_default_and_reports_errors() {
             String::from_utf8_lossy(&logs.stdout),
             String::from_utf8_lossy(&logs.stderr)
         );
-        if text
-            .lines()
-            .any(|l| l.contains("ready for connections") && l.contains("port: 3306"))
-        {
+        // MySQL lo dice en una línea; MariaDB, "ready for connections" y luego "port: 3306"
+        if text.contains("ready for connections") && text.contains("port: 3306") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
