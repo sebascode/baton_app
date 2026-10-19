@@ -2,6 +2,7 @@
 
 mod ambiente;
 mod ask;
+mod clap_i18n;
 mod config_run;
 mod db_cmd;
 mod db_session;
@@ -34,7 +35,7 @@ use std::process::ExitCode;
 
 use baton_store::Project;
 use baton_tui::{ConfigState, Screen};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 /// Códigos de salida: 0 todo bien, 1 el proyecto o el plan tienen errores, 2 no se pudo ni empezar
 /// (uso, no hay proyecto, plan inexistente), 3 la ejecución falló o se abortó.
@@ -581,7 +582,19 @@ fn main() -> ExitCode {
     if let Some(keys) = std::env::var_os(baton_core::askpass::KEYS_VAR) {
         return askpass(&keys.to_string_lossy());
     }
-    let cli = Cli::parse();
+    // el idioma antes de que clap lea los argumentos: sus errores también se traducen
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    baton_core::i18n::set(baton_store::global::language(
+        &clap_i18n::dir_from_args(&raw)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default(),
+    ));
+    let cli = match clap_i18n::localize(Cli::command()).try_get_matches_from(&raw) {
+        Ok(matches) => Cli::from_arg_matches(&matches)
+            .map_err(|e| e.apply::<clap_i18n::Localized>())
+            .unwrap_or_else(|e| e.exit()),
+        Err(e) => e.apply::<clap_i18n::Localized>().exit(),
+    };
     style::set_quiet(cli.quiet);
     // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
     baton_core::i18n::set(baton_store::global::language(

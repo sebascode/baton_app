@@ -22,7 +22,7 @@ fn help(args: &[&str]) -> String {
 fn commands() -> Vec<String> {
     help(&[])
         .lines()
-        .skip_while(|l| !l.starts_with("Commands:"))
+        .skip_while(|l| !l.starts_with("Comandos:"))
         .skip(1)
         .take_while(|l| l.starts_with("  "))
         .filter_map(|l| l.split_whitespace().next())
