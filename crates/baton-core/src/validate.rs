@@ -1963,6 +1963,10 @@ mod tests {
             binaries: &[],
             destructive: &["will be destroyed"],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
     }
@@ -2007,6 +2011,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
         assert!(errors(&step_of("t-val-free", "command = \"mi-aplicar\"\n")).is_empty());
@@ -2019,6 +2027,7 @@ mod tests {
             vec![crate::kind::CredUse {
                 kind: "docker",
                 env: &[("REGISTRY_TOKEN", "{TOKEN}")],
+                test: None,
             }]
             .into_boxed_slice(),
         );
@@ -2035,6 +2044,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: uses,
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
     }

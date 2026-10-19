@@ -294,8 +294,48 @@ pub fn describe(m: &Manifest) -> Vec<(&'static str, String)> {
             ),
         ));
     }
+    if let (Some(backup), Some(restore)) = (&t.backup, &t.restore) {
+        out.push((
+            tk!("respaldo"),
+            tr!(
+                "antes de un paso con backup_before corre: {backup}",
+                backup = backup.trim()
+            ),
+        ));
+        out.push((
+            tk!("restauración"),
+            tr!(
+                "al deshacer el paso (si no declara rollback) corre: {restore}",
+                restore = restore.trim()
+            ),
+        ));
+    }
+    if !t.scan.is_empty() {
+        out.push((
+            tk!("revisa"),
+            tr!(
+                "pide confirmar si los archivos del origen contienen: {list}",
+                list = t
+                    .scan
+                    .iter()
+                    .map(|p| format!("\"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
     for c in &m.credentials {
         out.push((tk!("credencial"), describe_credential(c)));
+        if let Some(test) = &c.test {
+            out.push((
+                tk!("prueba"),
+                tr!(
+                    "la prueba de conexión de «{kind}» corre: {test}",
+                    kind = c.kind,
+                    test = test.trim()
+                ),
+            ));
+        }
     }
     if !m.requires.is_empty() {
         out.push((tk!("requiere"), m.requires.join(", ")));

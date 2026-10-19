@@ -36,7 +36,7 @@ use tokio::sync::mpsc::{UnboundedReceiver as Rx, UnboundedSender as Tx, unbounde
 
 use crate::gate::{GateResult, run_auto_gate};
 use crate::prepare::{
-    Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run, sql_risks,
+    Mode, PStep, PrepareError, RunOptions, prepare_rollback, prepare_run, scan_risks, sql_risks,
 };
 use crate::remote::{SshConn, build_transports};
 use crate::transport::{Command, Exit, Stream, Transport, sh_quote};
@@ -710,11 +710,15 @@ fn file_name(file: &Path) -> String {
     )
 }
 
-/// Un paso sql con sentencias destructivas: las deja en el log y pide confirmación (con
+/// Un paso sql con sentencias destructivas (o de un tipo de plugin con contenido a revisar): las deja en el log y pide confirmación (con
 /// `--assume-yes` o en dry-run no se pregunta, pero queda escrito qué había).
 async fn confirm_destructive(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize) -> Answer {
     let ps = &ctx.steps[i];
-    let found = sql_risks(&ctx.project.root, &ps.files);
+    let found = if ps.step.kind == StepKind::Sql {
+        sql_risks(&ctx.project.root, &ps.files)
+    } else {
+        scan_risks(&ctx.project.root, &ps.files, ps.step.kind.scan_phrases())
+    };
     if found.is_empty() {
         return Answer::Yes;
     }
@@ -991,6 +995,52 @@ async fn backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(),
     }
     if spec.database.is_on() {
         backup_database(ctx, cmds, step, &dir).await?;
+    }
+    Ok(())
+}
+
+/// El respaldo que declara el tipo de plugin del paso, una sola vez por ejecución. El archivo es
+/// `<plan>-<fecha>-<id del paso>.<extensión>` en la carpeta de respaldos.
+async fn plugin_backup(ctx: &Ctx, cmds: &mut Rx<RunCommand>, step: usize) -> Result<(), StepEnd> {
+    let ps = &ctx.steps[step];
+    let Some((template, _, ext)) = ps.step.kind.plugin_backup() else {
+        return Ok(());
+    };
+    let dir = backup_dir(ctx);
+    if !ctx.opts.dry_run
+        && let Err(e) = fs::create_dir_all(&dir)
+    {
+        return Err(failure(
+            ctx,
+            tr!("No se pudo crear {path}: {e}", path = dir.display(), e = e),
+            "backup".into(),
+        ));
+    }
+    let file = dir.join(format!(
+        "{}-{}-{}.{ext}",
+        ctx.plan.name, ctx.fecha, ps.step.id
+    ));
+    if ctx.backups.lock().is_ok_and(|b| b.contains(&file)) {
+        ctx.log(
+            step,
+            LogKind::Output,
+            tr!(
+                "respaldo de «{name}» ya hecho en esta ejecución",
+                name = ps.step.name
+            ),
+        );
+        return Ok(());
+    }
+    let line = ctx
+        .vars(ps, None)
+        .render(template)
+        .replace("{backup_file}", &sh_quote(&file.to_string_lossy()));
+    let cmd = ctx.command(ps, line, None);
+    run_command(ctx, cmds, step, cmd, ps.step.retries).await?;
+    if !ctx.opts.dry_run
+        && let Ok(mut b) = ctx.backups.lock()
+    {
+        b.push(file);
     }
     Ok(())
 }
@@ -1333,6 +1383,11 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
             }
         } else if let Err(end) = backup(ctx, cmds, i).await {
             return end;
+        } else if ps.step.backup_before
+            && ps.step.kind.plugin_backup().is_some()
+            && let Err(end) = plugin_backup(ctx, cmds, i).await
+        {
+            return end;
         }
     }
 
@@ -1377,7 +1432,7 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         && ps.step.kind.runs_command()
         && (template.is_some() || ps.step.kind.has_own_interpreter())
     {
-        if is_sql {
+        if is_sql || !ps.step.kind.scan_phrases().is_empty() {
             match confirm_destructive(ctx, cmds, i).await {
                 Answer::Yes => {}
                 Answer::No => return StepEnd::Declined,
@@ -1447,6 +1502,9 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
     if ps.restore_db {
         return restore_database(ctx, i).await;
     }
+    if ps.restore_plugin {
+        return restore_plugin_backup(ctx, i).await;
+    }
     let Some(template) = ps.step.rollback.as_deref() else {
         return true;
     };
@@ -1490,6 +1548,90 @@ async fn rollback_one(ctx: &Ctx, i: usize) -> bool {
         }
     }
     if ok && !ctx.opts.dry_run {
+        let id = ps.step.id.clone();
+        ctx.record(&id, StepState::Pending, Duration::ZERO, 0);
+    }
+    ok
+}
+
+/// Rollback de un paso de un tipo de plugin con respaldo: corre su `restore` con el último
+/// respaldo de este paso (el de esta ejecución o, con `baton rollback`, el de la anterior).
+async fn restore_plugin_backup(ctx: &Ctx, i: usize) -> bool {
+    let ps = &ctx.steps[i];
+    let Some((_, template, ext)) = ps.step.kind.plugin_backup() else {
+        return true;
+    };
+    if ctx.opts.dry_run {
+        ctx.log(
+            i,
+            LogKind::Command,
+            tr!(
+                "rollback: restaurar el último respaldo de «{name}»",
+                name = ps.step.name
+            ),
+        );
+        ctx.log(i, LogKind::Success, tr!("dry-run: no se ejecutó"));
+        return true;
+    }
+    if ctx.ensure_synced(i).await.is_err() {
+        return false;
+    }
+    let dir = backup_dir(ctx);
+    let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &ps.step.id, ext)
+    else {
+        ctx.log(
+            i,
+            LogKind::Error,
+            tr!(
+                "no hay un respaldo de «{name}» en {path}: no se puede restaurar",
+                name = ps.step.name,
+                path = ctx.project.display_path(&dir)
+            ),
+        );
+        return false;
+    };
+    let line = ctx
+        .vars(ps, None)
+        .render(template)
+        .replace("{backup_file}", &sh_quote(&file.to_string_lossy()));
+    let cmd = ctx.command(ps, line, None);
+    ctx.log(
+        i,
+        LogKind::Command,
+        tr!("rollback: {line}", line = cmd.line),
+    );
+    let mut on_line = |s: Stream, t: String| ctx.output(i, s, t);
+    let ok = match ctx.transport_for(&ps.target).run(&cmd, &mut on_line).await {
+        Ok(exit) if exit.success() => {
+            ctx.log(
+                i,
+                LogKind::Success,
+                tr!(
+                    "«{name}» restaurado desde {path}",
+                    name = ps.step.name,
+                    path = ctx.project.display_path(&file)
+                ),
+            );
+            true
+        }
+        Ok(exit) => {
+            ctx.log(i, LogKind::Error, describe(exit, cmd.timeout));
+            false
+        }
+        Err(e) => {
+            ctx.log(
+                i,
+                LogKind::Error,
+                tr!(
+                    "No se pudo restaurar «{name}»: {e}",
+                    name = ps.step.name,
+                    e = e
+                ),
+            );
+            false
+        }
+    };
+    if ok {
         let id = ps.step.id.clone();
         ctx.record(&id, StepState::Pending, Duration::ZERO, 0);
     }
@@ -1688,6 +1830,9 @@ async fn run(
             // un paso de respaldo sin rollback propio restaura el último volcado de la base
             if info.undo.is_none() && p.restore_db {
                 info.undo = Some(tr!("restaura el último respaldo de la base"));
+            }
+            if info.undo.is_none() && p.restore_plugin {
+                info.undo = Some(tr!("restaura el último respaldo del paso"));
             }
             info
         })
