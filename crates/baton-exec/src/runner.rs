@@ -377,6 +377,7 @@ impl Ctx {
             env: self.opts.env.clone(),
             secrets,
             timeout: ps.step.timeout.map(|t| t.as_duration()),
+            input: None,
             line,
         }
     }

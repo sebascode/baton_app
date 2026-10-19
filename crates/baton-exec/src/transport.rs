@@ -24,12 +24,70 @@ pub struct Command {
     /// por la entrada estándar.
     pub secrets: Vec<(String, String)>,
     pub timeout: Option<Duration>,
+    /// Entrada por teclado para el comando (solo `baton ops`); `None`: sin entrada estándar.
+    pub input: Option<Input>,
+}
+
+/// Lo que se le manda a la entrada estándar de un comando.
+#[derive(Debug)]
+enum Feed {
+    Data(Vec<u8>),
+    Eof,
+}
+
+/// El extremo que escribe: lo usa quien maneja la pantalla.
+#[derive(Debug, Clone)]
+pub struct InputTx(tokio::sync::mpsc::UnboundedSender<Feed>);
+
+impl InputTx {
+    /// Manda una línea (se le agrega el salto). `false`: el comando ya no puede recibirla.
+    pub fn line(&self, text: &str) -> bool {
+        self.0
+            .send(Feed::Data(format!("{text}\n").into_bytes()))
+            .is_ok()
+    }
+
+    /// Cierra la entrada estándar (fin de archivo). `false`: el comando ya no puede recibirla.
+    pub fn eof(&self) -> bool {
+        self.0.send(Feed::Eof).is_ok()
+    }
+}
+
+/// El extremo que lee: viaja en el `Command` y el transporte lo toma. Si el transporte no puede
+/// entregar la entrada (ssh con credenciales, que usa la entrada estándar para ellas) lo descarta
+/// y `InputTx` empieza a responder `false`.
+#[derive(Clone)]
+pub struct Input(
+    std::sync::Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Feed>>>>,
+);
+
+impl std::fmt::Debug for Input {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Input")
+    }
+}
+
+impl Input {
+    pub fn channel() -> (InputTx, Input) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            InputTx(tx),
+            Input(std::sync::Arc::new(std::sync::Mutex::new(Some(rx)))),
+        )
+    }
+
+    fn take(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<Feed>> {
+        self.0.lock().ok()?.take()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stream {
     Stdout,
     Stderr,
+    /// Texto sin salto de línea que el comando dejó esperando (una pregunta): solo se emite si
+    /// el comando tiene entrada por teclado.
+    Prompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,22 +154,26 @@ fn clean(buf: &[u8]) -> String {
 /// Arma el proceso, lo corre y le transmite cada línea a `on_line` en cuanto se produce; lo mismo
 /// sirve para un comando local (`sh -c ...`) que para uno remoto (`ssh usuario@host ...`), porque
 /// a `ssh` ya le llega el trabajo hecho: el comando remoto va armado en uno de sus argumentos.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_and_stream(
     program: &str,
     args: &[String],
     cwd: Option<&std::path::Path>,
     env: &[(String, String)],
     stdin: Option<&[u8]>,
+    input: Option<&Input>,
     timeout: Option<Duration>,
     on_line: LineFn<'_>,
 ) -> io::Result<Exit> {
+    // con datos propios por la entrada estándar (secretos de ssh) no hay lugar para el teclado
+    let mut feed = input.and_then(Input::take).filter(|_| stdin.is_none());
     let mut builder = Proc::new(program);
     builder.args(args).envs(env.iter().cloned());
     if let Some(cwd) = cwd {
         builder.current_dir(cwd);
     }
     let mut child = builder
-        .stdin(if stdin.is_some() {
+        .stdin(if stdin.is_some() || feed.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -123,6 +185,11 @@ async fn spawn_and_stream(
         .process_group(0)
         .spawn()?;
     let mut guard = GroupKill { pgid: child.id() };
+    let mut keyboard = if feed.is_some() {
+        child.stdin.take()
+    } else {
+        None
+    };
     if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
         // Poco texto (unas líneas `export`): cabe en el búfer de la tubería, no hay riesgo de
         // bloqueo. Si el proceso termina sin leerlo, no es un error.
@@ -135,8 +202,36 @@ async fn spawn_and_stream(
     let body = async {
         let (mut ob, mut eb) = (Vec::new(), Vec::new());
         let (mut od, mut ed) = (false, false);
+        let waiting = feed.is_some();
         while !(od && ed) {
             tokio::select! {
+                msg = async { feed.as_mut().expect("con entrada").recv().await }, if feed.is_some() => {
+                    match msg {
+                        Some(Feed::Data(bytes)) => {
+                            if let Some(pipe) = keyboard.as_mut()
+                                && (pipe.write_all(&bytes).await.is_err() || pipe.flush().await.is_err())
+                            {
+                                keyboard = None;
+                            }
+                        }
+                        // fin de archivo, o quien escribía ya no está
+                        Some(Feed::Eof) | None => {
+                            keyboard = None;
+                            feed = None;
+                        }
+                    }
+                }
+                // una pregunta sin salto de línea (`printf '¿seguir? '`) no llegaría nunca: si el
+                // comando se queda callado un momento se muestra lo que dejó escrito (lo leído a
+                // medias ya está en el búfer aunque `read_until` siga esperando el salto)
+                () = tokio::time::sleep(Duration::from_millis(250)), if waiting => {
+                    for (stream, buf) in [(Stream::Stdout, &mut ob), (Stream::Stderr, &mut eb)] {
+                        if !buf.is_empty() && !buf.ends_with(b"\n") {
+                            on_line(if stream == Stream::Stdout { Stream::Prompt } else { stream }, clean(buf));
+                            buf.clear();
+                        }
+                    }
+                }
                 r = out.read_until(b'\n', &mut ob), if !od => {
                     // `read_until` puede cancelarse a medias dentro de `select!` y dejar
                     // bytes en el búfer: lo que quede se emite al llegar a EOF.
@@ -188,6 +283,7 @@ impl Transport for LocalTransport {
                 Some(&cmd.cwd),
                 &[cmd.env.as_slice(), cmd.secrets.as_slice()].concat(),
                 None,
+                cmd.input.as_ref(),
                 cmd.timeout,
                 on_line,
             )
@@ -473,6 +569,7 @@ impl Transport for SshTransport {
                 None,
                 &env,
                 stdin.as_deref(),
+                cmd.input.as_ref(),
                 cmd.timeout,
                 on_line,
             )
@@ -515,6 +612,7 @@ mod tests {
             env: vec![],
             secrets: vec![],
             timeout: None,
+            input: None,
         }
     }
 
@@ -541,6 +639,84 @@ mod tests {
             .map(|(_, t)| t.as_str())
             .collect();
         assert_eq!(stdout, ["uno", "tres"]);
+    }
+
+    /// Corre `c` contestando con `answer` cada vez que el comando deja una pregunta sin salto.
+    async fn run_answering(
+        c: Command,
+        tx: InputTx,
+        answer: &'static str,
+    ) -> (Exit, Vec<(Stream, String)>) {
+        let mut lines = Vec::new();
+        let mut on_line = |s: Stream, t: String| {
+            if s == Stream::Prompt {
+                tx.line(answer);
+            }
+            lines.push((s, t));
+        };
+        let exit = LocalTransport.run(&c, &mut on_line).await.unwrap();
+        (exit, lines)
+    }
+
+    #[tokio::test]
+    async fn a_question_without_newline_is_shown_and_the_answer_reaches_the_command() {
+        let (tx, input) = Input::channel();
+        let mut c = cmd("printf 'nombre? '; read x; echo \"hola $x\"");
+        c.input = Some(input);
+        let (exit, lines) = run_answering(c, tx, "ana").await;
+        assert!(exit.success());
+        assert_eq!(
+            lines,
+            [
+                (Stream::Prompt, "nombre? ".to_string()),
+                (Stream::Stdout, "hola ana".to_string())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn eof_closes_the_command_input() {
+        let (tx, input) = Input::channel();
+        let mut c = cmd("cat");
+        c.input = Some(input);
+        assert!(tx.line("uno"));
+        assert!(tx.eof());
+        let (exit, lines) = run(c).await;
+        assert!(exit.success());
+        assert_eq!(lines, [(Stream::Stdout, "uno".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn without_input_a_read_gets_end_of_file_and_no_partial_lines_are_flushed() {
+        let (exit, lines) = run(cmd("printf 'x? '; sleep 0.4; read y; echo \"[$y]\"")).await;
+        assert!(exit.success());
+        assert_eq!(
+            lines.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            [Stream::Stdout]
+        );
+        assert_eq!(lines[0].1, "x? []");
+    }
+
+    #[tokio::test]
+    async fn a_transport_that_cannot_take_the_input_drops_it() {
+        let (tx, input) = Input::channel();
+        let mut on_line = |_: Stream, _: String| {};
+        spawn_and_stream(
+            "sh",
+            &["-c".into(), "cat >/dev/null".into()],
+            None,
+            &[],
+            Some(b"export A=1\n"),
+            Some(&input),
+            None,
+            &mut on_line,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !tx.line("hola"),
+            "con datos propios por stdin no hay teclado"
+        );
     }
 
     #[tokio::test]
@@ -863,7 +1039,18 @@ sh -c "$last"
         // el ejecutable recién escrito puede verse "ocupado" (ETXTBSY) un instante: se reintenta.
         let mut attempts = 0;
         let exit = loop {
-            match spawn_and_stream(&t.ssh_bin, &args, None, &env, None, None, &mut on_line).await {
+            match spawn_and_stream(
+                &t.ssh_bin,
+                &args,
+                None,
+                &env,
+                None,
+                None,
+                None,
+                &mut on_line,
+            )
+            .await
+            {
                 Ok(e) => break e,
                 Err(e) if e.raw_os_error() == Some(26) && attempts < 20 => {
                     attempts += 1;
