@@ -99,6 +99,16 @@ fn catalog() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Las descripciones de `--help` (`en_help.toml`): las comprueba la prueba de `clap_i18n.rs`
+/// contra el árbol de clap; aquí valen las mismas reglas de forma que para el resto.
+fn help_catalog() -> BTreeMap<String, String> {
+    let text = fs::read_to_string(root().join("crates/baton-core/i18n/en_help.toml")).unwrap();
+    baton_core::i18n::try_parse_catalog(&text)
+        .expect("en_help.toml es TOML válido")
+        .into_iter()
+        .collect()
+}
+
 #[test]
 fn every_marked_text_has_an_english_translation() {
     let cat = catalog();
@@ -131,7 +141,7 @@ fn the_catalog_has_no_leftovers() {
 
 #[test]
 fn placeholders_match_on_both_sides() {
-    for (k, v) in catalog() {
+    for (k, v) in catalog().into_iter().chain(help_catalog()) {
         assert_eq!(
             baton_core::i18n::placeholders(&k),
             baton_core::i18n::placeholders(&v),
@@ -142,7 +152,7 @@ fn placeholders_match_on_both_sides() {
 
 #[test]
 fn translations_are_actually_english_and_follow_the_style_rules() {
-    for (k, v) in catalog() {
+    for (k, v) in catalog().into_iter().chain(help_catalog()) {
         assert!(!v.trim().is_empty(), "la traducción de {k:?} está vacía");
         assert!(
             !v.chars().any(|c| "¿¡áéíóúñÁÉÍÓÚÑ".contains(c)),

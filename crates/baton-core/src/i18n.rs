@@ -106,7 +106,12 @@ fn catalog(lang: Lang) -> Option<&'static HashMap<String, String>> {
     static EN: OnceLock<HashMap<String, String>> = OnceLock::new();
     match lang {
         Lang::Es => None,
-        Lang::En => Some(EN.get_or_init(|| parse_catalog(include_str!("../i18n/en.toml")))),
+        Lang::En => Some(EN.get_or_init(|| {
+            // `en_help.toml`: las descripciones de `--help`, que salen del árbol de clap
+            let mut c = parse_catalog(include_str!("../i18n/en.toml"));
+            c.extend(parse_catalog(include_str!("../i18n/en_help.toml")));
+            c
+        })),
     }
 }
 

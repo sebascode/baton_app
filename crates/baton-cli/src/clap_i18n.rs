@@ -5,6 +5,7 @@
 //! Los errores salen con el mismo formato que `report`: `error: <mensaje>`, una línea de ayuda
 //! con sangría y, al final, `Uso:` y cómo pedir ayuda.
 
+use baton_core::i18n::tr_dyn;
 use baton_core::tr;
 use clap::builder::StyledStr;
 use clap::error::Error;
@@ -65,7 +66,54 @@ pub fn localize(mut cmd: Command) -> Command {
         version: fixed(tr!("Muestra la versión")),
         help_about: fixed(tr!("Muestra esta ayuda o la de un subcomando")),
     };
-    walk(cmd, Box::leak(Box::new(texts)))
+    let cmd = walk(cmd, Box::leak(Box::new(texts)));
+    map_texts(cmd, &mut |t| tr_dyn(t).into_owned())
+}
+
+/// Aplica `f` a cada texto de ayuda escrito por baton (descripciones de comandos, opciones y
+/// valores) y deja el resultado en su lugar.
+fn map_texts(mut cmd: Command, f: &mut dyn FnMut(&str) -> String) -> Command {
+    if let Some(t) = cmd.get_about().map(|s| s.to_string()) {
+        cmd = cmd.about(f(&t));
+    }
+    if let Some(t) = cmd.get_long_about().map(|s| s.to_string()) {
+        cmd = cmd.long_about(f(&t));
+    }
+    if let Some(t) = cmd.get_before_help().map(|s| s.to_string()) {
+        cmd = cmd.before_help(f(&t));
+    }
+    if let Some(t) = cmd.get_after_help().map(|s| s.to_string()) {
+        cmd = cmd.after_help(f(&t));
+    }
+    let mut cmd = cmd.mut_args(|a| {
+        let mut a = a;
+        if let Some(t) = a.get_help().map(|s| s.to_string()) {
+            a = a.help(f(&t));
+        }
+        if let Some(t) = a.get_long_help().map(|s| s.to_string()) {
+            a = a.long_help(f(&t));
+        }
+        a
+    });
+    let names: Vec<String> = cmd
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    for name in names {
+        cmd = cmd.mut_subcommand(name, |c| map_texts(c, f));
+    }
+    cmd
+}
+
+/// Todos los textos de ayuda propios de baton, en español tal cual están en el código.
+#[cfg(test)]
+pub fn help_keys(cmd: Command) -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    map_texts(cmd, &mut |t| {
+        keys.insert(t.to_string());
+        t.to_string()
+    });
+    keys
 }
 
 fn walk(cmd: Command, t: &'static Texts) -> Command {
@@ -225,5 +273,29 @@ impl ErrorFormatter for Localized {
             tr!("Para más información, prueba '--help'.")
         ));
         StyledStr::from(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn texts_in_catalog() -> std::collections::BTreeSet<String> {
+        let text = include_str!("../../baton-core/i18n/en_help.toml");
+        baton_core::i18n::parse_catalog(text).into_keys().collect()
+    }
+
+    #[test]
+    fn every_help_text_has_an_english_translation_and_none_are_left_over() {
+        let mut cmd = crate::Cli::command();
+        cmd.build();
+        let mut keys = help_keys(cmd);
+        keys.retain(|k| !k.is_empty() && !k.starts_with("Print "));
+        let cat = texts_in_catalog();
+        let missing: Vec<_> = keys.difference(&cat).collect();
+        let stale: Vec<_> = cat.difference(&keys).collect();
+        assert!(missing.is_empty(), "faltan en en_help.toml: {missing:#?}");
+        assert!(stale.is_empty(), "sobran en en_help.toml: {stale:#?}");
     }
 }
