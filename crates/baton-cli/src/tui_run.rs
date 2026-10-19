@@ -1432,6 +1432,49 @@ exit 2"#,
         assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
     }
 
+    #[test]
+    fn a_plugin_credential_runs_the_test_its_manifest_declares_and_redacts_secrets() {
+        let manifest = r#"
+api = 2
+name = "probar-cred"
+version = "0.1.0"
+[type]
+command = "true"
+[[credentials]]
+kind = "probarcred"
+fields = [{ key = "USER" }, { key = "PASSWORD", secret = true }]
+test = 'if [ "$PC_USER" = ok ]; then echo "conectado como $PC_USER con $PC_PWD"; else echo "rechazado: $PC_PWD" >&2; exit 1; fi'
+[credentials.env]
+PC_USER = "{USER}"
+PC_PWD = "{PASSWORD}"
+"#;
+        baton_core::plugin::Manifest::parse(manifest)
+            .unwrap()
+            .register()
+            .unwrap();
+        let kind = CredentialKind::from_name("probarcred").unwrap();
+        let item = |user: &str| {
+            CredItem::new(
+                "pc",
+                CredStatus::FromFile,
+                "db.env",
+                vec![
+                    CredField::new("user", user, false),
+                    CredField::new("password", "clave-super-secreta", true),
+                ],
+            )
+        };
+        let reference: baton_core::CredentialRef = "db.env#PC".parse().unwrap();
+        let root = std::path::Path::new(".");
+        let (ok, msg) = test_connection(kind, &reference, &item("ok"), root);
+        assert!(ok, "{msg}");
+        assert!(msg.contains("conectado como ok"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "se tacha: {msg}");
+        let (ok, msg) = test_connection(kind, &reference, &item("otro"), root);
+        assert!(!ok && msg.starts_with("rechazado"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "{msg}");
+    }
+
     fn mysql_ping_with(body: &str, extra: &[(&str, &str)]) -> (bool, String) {
         let (_d, script) = fake_psql(body);
         let reference: baton_core::CredentialRef = "db.env#MY".parse().unwrap();

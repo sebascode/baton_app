@@ -145,6 +145,11 @@ fn every_manifest_field_is_explained_in_the_reference() {
         "optional",
         "label",
         "env",
+        "backup",
+        "restore",
+        "backup_ext",
+        "scan",
+        "test",
     ] {
         assert!(
             text.contains(&format!("`{field}`")),

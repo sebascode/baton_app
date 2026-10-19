@@ -1579,6 +1579,15 @@ async fn restore_plugin_backup(ctx: &Ctx, i: usize) -> bool {
     let dir = backup_dir(ctx);
     let Some(file) = baton_store::backups::latest_dump(&dir, &ctx.plan.name, &ps.step.id, ext)
     else {
+        // con el backup apagado en esta ejecución nunca se hizo uno: no hay nada que deshacer
+        if ctx.opts.mode != Mode::Rollback && !ctx.opts.backup {
+            ctx.log(
+                i,
+                LogKind::Output,
+                tr!("backup desactivado: no hay respaldo que restaurar"),
+            );
+            return true;
+        }
         ctx.log(
             i,
             LogKind::Error,

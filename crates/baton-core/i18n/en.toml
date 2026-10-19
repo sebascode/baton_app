@@ -1466,3 +1466,4 @@
 "no se encontró sh en el PATH" = "sh was not found in the PATH"
 "la prueba no respondió en {n} s" = "the test did not answer in {n} s"
 "la prueba falló" = "the test failed"
+"backup desactivado: no hay respaldo que restaurar" = "backup disabled: there is no backup to restore"

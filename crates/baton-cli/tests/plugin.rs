@@ -312,6 +312,154 @@ fn the_mariadb_plugin_runs_each_script_with_the_client_and_hands_the_password_by
     assert!(!shown.contains("clave-de-prueba-9"), "{shown}");
 }
 
+// registra la llamada (nombre, argumentos) y, para el cliente, lo que lee por la entrada estandar
+const FAKE_DUMP: &str = "#!/bin/sh\necho \"dump|$*\" >> \"$BATON_CALLS\"\necho dumpdata\n";
+const FAKE_CLIENT: &str =
+    "#!/bin/sh\ninput=$(cat)\necho \"mariadb|$*|$input\" >> \"$BATON_CALLS\"\n";
+
+fn mariadb_backup_fx(plan_extra: &str, step_extra: &str) -> (Fx, [(&'static str, String); 4]) {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    fx.install("mariadb", MARIADB_EXAMPLE);
+    fx.write("db/01.sql", "insert into t values (1);");
+    fx.write(
+        "baton/plans/p.toml",
+        &format!(
+            "name = \"p\"\n{plan_extra}[[credentials]]\nid = \"ma\"\nkind = \"mariadb\"\nref = \"db.env#MA\"\n\
+             [[steps]]\nid = \"datos\"\nname = \"Datos\"\ntype = \"mariadb\"\nsource = \"db/*.sql\"\n{step_extra}\
+             [[steps]]\nid = \"mal\"\nname = \"Mal\"\ntype = \"comando\"\ncommand = \"exit 1\"\n"
+        ),
+    );
+    for (name, body) in [("mariadb-dump", FAKE_DUMP), ("mariadb", FAKE_CLIENT)] {
+        let bin = fx.write(&format!("_bin/{name}"), body);
+        fs::set_permissions(bin, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let calls = fx.root.join("_calls").to_string_lossy().into_owned();
+    let env = [
+        ("BATON_CALLS", calls),
+        ("MA_USER", "app".to_string()),
+        ("MA_PASSWORD", "clave-de-prueba-9".to_string()),
+        ("MA_DATABASE", "tienda".to_string()),
+    ];
+    (fx, env)
+}
+
+fn run_p(fx: &Fx, env: &[(&str, String)], extra: &[&str]) -> Output {
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let mut args = vec!["run", "p", "--no-tui"];
+    args.extend_from_slice(extra);
+    fx.baton_full(&args, true, &env)
+}
+
+#[test]
+fn a_plugin_that_declares_backup_and_restore_dumps_before_the_step_and_restores_on_rollback() {
+    let (fx, env) = mariadb_backup_fx(
+        "[options]\nbackup = true\nauto_rollback = true\n",
+        "backup_before = true\n",
+    );
+    let v = fx.baton_full(&["validate", "p"], true, &[]);
+    assert_eq!(
+        code(&v),
+        0,
+        "el plan no necesita [backup]: {}{}",
+        out(&v),
+        err(&v)
+    );
+    let o = run_p(&fx, &env, &[]);
+    assert_eq!(code(&o), 3, "falla el segundo paso: {}{}", out(&o), err(&o));
+    let calls = calls(&fx);
+    // 1) volcado antes del paso, 2) el script, 3) la restauracion con el volcado
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert!(
+        calls[0].starts_with("dump|-u app --single-transaction"),
+        "{calls:?}"
+    );
+    assert!(
+        calls[1].ends_with("|insert into t values (1);"),
+        "{calls:?}"
+    );
+    assert!(calls[2].starts_with("mariadb|-u app tienda|"), "{calls:?}");
+    assert!(
+        calls[2].ends_with("|dumpdata"),
+        "restaura lo que se volco: {calls:?}"
+    );
+    let dumps: Vec<_> = fs::read_dir(fx.root.join(".baton/backups"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(dumps.len(), 1, "{dumps:?}");
+    assert!(
+        dumps[0].starts_with("p-") && dumps[0].ends_with("-datos.sql"),
+        "{dumps:?}"
+    );
+    let shown = format!("{}{}", out(&o), err(&o));
+    assert!(shown.contains("restaurado desde"), "{shown}");
+    assert!(!shown.contains("clave-de-prueba-9"), "{shown}");
+}
+
+#[test]
+fn without_backup_the_plugin_does_not_dump_and_the_rollback_has_nothing_to_restore() {
+    let (fx, env) = mariadb_backup_fx(
+        "[options]\nbackup = true\nauto_rollback = true\n",
+        "backup_before = true\n",
+    );
+    let o = run_p(&fx, &env, &["--no-backup"]);
+    assert_eq!(code(&o), 3, "{}{}", out(&o), err(&o));
+    let calls = calls(&fx);
+    assert_eq!(calls.len(), 1, "solo el script: {calls:?}");
+    assert!(calls[0].starts_with("mariadb|"), "{calls:?}");
+    assert!(
+        format!("{}{}", out(&o), err(&o)).contains("backup desactivado"),
+        "{}{}",
+        out(&o),
+        err(&o)
+    );
+}
+
+#[test]
+fn a_rollback_declared_by_the_step_wins_over_the_plugin_restore() {
+    let (fx, env) = mariadb_backup_fx(
+        "[options]\nbackup = true\nauto_rollback = true\n",
+        "backup_before = true\nrollback = \"echo deshacer-propio\"\n",
+    );
+    let o = run_p(&fx, &env, &[]);
+    assert_eq!(code(&o), 3, "{}{}", out(&o), err(&o));
+    let calls = calls(&fx);
+    assert_eq!(
+        calls.len(),
+        2,
+        "volcado y script, sin restauracion: {calls:?}"
+    );
+    assert!(format!("{}{}", out(&o), err(&o)).contains("deshacer-propio"));
+}
+
+#[test]
+fn a_plugin_scan_asks_for_confirmation_and_in_ci_needs_assume_yes() {
+    let (fx, env) = mariadb_backup_fx("", "");
+    fx.write("db/01.sql", "delete from t;\ndrop table viejo;");
+    let o = run_p(&fx, &env, &[]);
+    assert_eq!(code(&o), 1, "{}{}", out(&o), err(&o));
+    let shown = format!("{}{}", out(&o), err(&o));
+    assert!(
+        shown.contains("tiene contenido a revisar en db/01.sql")
+            && shown.contains("línea 1")
+            && shown.contains("línea 2")
+            && shown.contains("--assume-yes"),
+        "{shown}"
+    );
+    assert!(calls(&fx).is_empty(), "no se ejecutó nada");
+    let o = run_p(&fx, &env, &["--assume-yes"]);
+    assert_eq!(
+        code(&o),
+        3,
+        "el segundo paso falla a proposito: {}{}",
+        out(&o),
+        err(&o)
+    );
+    assert!(calls(&fx)[0].starts_with("mariadb|"), "el script sí corrió");
+    assert!(format!("{}{}", out(&o), err(&o)).contains("atención: db/01.sql línea 1"));
+}
+
 #[test]
 fn the_mariadb_plugin_stops_at_the_first_failing_script() {
     use std::os::unix::fs::PermissionsExt;

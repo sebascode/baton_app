@@ -929,6 +929,94 @@ dry_run = "terraform init -input=false && terraform plan -input=false"
         assert_eq!(m.requires, ["terraform"]);
     }
 
+    /// El manifiesto base en `api = 2` con `extra` agregado a `[type]`.
+    fn v2(extra: &str) -> Manifest {
+        manifest(
+            &TERRAFORM
+                .replace("api = 1", "api = 2")
+                .replace("[type]\n", &format!("[type]\n{extra}\n")),
+        )
+    }
+
+    #[test]
+    fn api_2_capabilities_are_valid_when_complete_and_need_api_2() {
+        let caps = "backup = 'dump > {backup_file}'\nrestore = 'load < {backup_file}'\nbackup_ext = \"sql\"\nscan = [\"DROP \", \"TRUNCATE\"]";
+        let m = v2(caps);
+        assert!(errors(&m).is_empty(), "{:?}", validate_manifest(&m));
+        let spec = m.to_spec();
+        assert_eq!(spec.backup, Some("dump > {backup_file}"));
+        assert_eq!(spec.restore, Some("load < {backup_file}"));
+        assert_eq!(spec.backup_ext, "sql");
+        assert_eq!(spec.scan, ["DROP ", "TRUNCATE"]);
+        // el mismo manifiesto declarado como api = 1 se rechaza diciendo qué falta
+        let old = manifest(&TERRAFORM.replace("[type]\n", &format!("[type]\n{caps}\n")));
+        let e = errors(&old).join("\n");
+        for field in ["backup", "restore", "backup_ext", "scan"] {
+            assert!(e.contains(&format!("'{field}' es de api = 2")), "{e}");
+        }
+    }
+
+    #[test]
+    fn backup_and_restore_go_together_and_use_the_backup_file() {
+        let e = errors(&v2("backup = 'dump > {backup_file}'")).join("\n");
+        assert!(e.contains("backup necesita restore"), "{e}");
+        let e = errors(&v2("restore = 'load < {backup_file}'")).join("\n");
+        assert!(e.contains("restore necesita backup"), "{e}");
+        let e = errors(&v2(
+            "backup = 'dump > x.sql'\nrestore = 'load < {backup_file}'",
+        ))
+        .join("\n");
+        assert!(e.contains("backup tiene que usar {backup_file}"), "{e}");
+        let ok = v2("backup = 'dump > {backup_file}'\nrestore = 'load < {backup_file}'");
+        assert!(
+            !validate_manifest(&ok)
+                .iter()
+                .any(|i| i.message.contains("placeholder")),
+            "{{backup_file}} no es un placeholder desconocido"
+        );
+    }
+
+    #[test]
+    fn the_backup_extension_and_scan_phrases_are_checked() {
+        let pair = "backup = 'd > {backup_file}'\nrestore = 'l < {backup_file}'\n";
+        for bad in ["\"\"", "\"SQL\"", "\"a/b\"", "\"unaextensionmuylarga\""] {
+            let e = errors(&v2(&format!("{pair}backup_ext = {bad}"))).join("\n");
+            assert!(e.contains("extensión"), "{bad}: {e}");
+        }
+        let e = errors(&v2("scan = [\"ab\"]")).join("\n");
+        assert!(e.contains("entre 4 y 200"), "{e}");
+    }
+
+    #[test]
+    fn a_credential_test_is_read_only_and_needs_api_2() {
+        let with_test = |api: &str, test: &str| {
+            manifest(&format!(
+                "{}\n[[credentials]]\nkind = \"aws\"\nfields = [{{ key = \"KEY\" }}]\ntest = '{test}'\n[credentials.env]\nAWS_KEY = \"{{KEY}}\"\n",
+                TERRAFORM.replace("api = 1", api)
+            ))
+        };
+        let ok = errors(&with_test("api = 2", "aws sts get-caller-identity"));
+        assert!(ok.is_empty(), "{ok:?}");
+        let e = errors(&with_test("api = 2", "aws iam create user")).join("\n");
+        assert!(e.contains("test usa 'create'"), "{e}");
+        let e = errors(&with_test("api = 1", "aws sts get-caller-identity")).join("\n");
+        assert!(e.contains("'test' es de api = 2"), "{e}");
+    }
+
+    #[test]
+    fn scan_text_finds_the_phrases_by_line_ignoring_case() {
+        let hits = scan_text(
+            "select 1;\n  drop table t;\n-- nada\nTRUNCATE usuarios;",
+            &["DROP ", "TRUNCATE"],
+        );
+        assert_eq!(
+            hits.iter().map(|r| (r.line, r.what)).collect::<Vec<_>>(),
+            [(2, "DROP "), (4, "TRUNCATE")]
+        );
+        assert_eq!(hits[0].text, "drop table t;");
+        assert!(scan_text("select 1;", &["DROP "]).is_empty());
+    }
+
     #[test]
     fn the_type_can_have_its_own_name() {
         let m = with("[type]\n", "[type]\nname = \"tf\"\n");
