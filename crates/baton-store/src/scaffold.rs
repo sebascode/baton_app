@@ -14,8 +14,9 @@ use crate::project::Project;
 const MAX_STEP_PER_SCRIPT: usize = 12;
 
 /// Pasos de arranque de lo encontrado: los de plugins (desactivados), `build` (todos los
-/// `Dockerfile`), `servicios` (todos los compose) y los `.sql` (desactivados). Los scripts `.sh`
-/// **no** son pasos: son de mantención y se ofrecen en `baton ops`. El comando de cada paso queda
+/// `Dockerfile`), `servicios` (todos los compose). Los scripts `.sh` y los `.sql`
+/// **no** son pasos: los `.sh` son de mantención (`baton ops`) y los `.sql` suelen ser el `init.sql` que
+/// el contenedor de la base ya carga; quien quiera ejecutarlos crea el paso `sql` a mano. El comando de cada paso queda
 /// sin declarar (usa el de su tipo); el destino es `target` o ninguno (usa el default del plan).
 pub fn starter_steps(found: &Discovered, target: Option<&str>) -> Vec<Step> {
     let mut steps = Vec::new();
@@ -38,7 +39,6 @@ pub fn starter_steps(found: &Discovered, target: Option<&str>) -> Vec<Step> {
             target,
         ));
     }
-    steps.extend(sql_steps(&found.sql, target));
     steps
 }
 
@@ -78,49 +78,6 @@ fn capitalize(s: &str) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
     }
-}
-
-/// Un paso `sql` por carpeta con archivos `.sql` (`db/*.sql`), **desactivado**: esos archivos suelen
-/// ser el `init.sql` que el propio contenedor de la base carga al arrancar, y ejecutarlos de nuevo
-/// no es algo que baton deba decidir solo. Van después de `servicios` (la base tiene que estar arriba).
-fn sql_steps(files: &[std::path::PathBuf], target: Option<&str>) -> Vec<Step> {
-    let mut dirs: Vec<std::path::PathBuf> = files
-        .iter()
-        .map(|p| {
-            p.parent()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_default()
-        })
-        .collect();
-    dirs.dedup(); // vienen ordenados: las carpetas iguales quedan juntas
-    let mut seen = std::collections::HashSet::new();
-    dirs.into_iter()
-        .map(|d| {
-            let root = d.as_os_str().is_empty();
-            let (base, name, glob) = if root {
-                ("sql".to_string(), "SQL".to_string(), "*.sql".to_string())
-            } else {
-                (
-                    format!("sql-{}", d.display()),
-                    format!("SQL de {}", d.display()),
-                    format!("{}/*.sql", d.display()),
-                )
-            };
-            let mut id = baton_core::slug::slug(&base, "sql");
-            let mut n = 2;
-            while !seen.insert(id.clone()) {
-                id = format!("{}-{n}", baton_core::slug::slug(&base, "sql"));
-                n += 1;
-            }
-            let mut st = step(&id, &name, StepKind::Sql, &[std::path::PathBuf::from(glob)], target);
-            st.enabled = false;
-            st.description = Some(
-                "Desactivado: revisa que el contenedor de la base no cargue ya estos archivos al arrancar. Usa la credencial db del plan."
-                    .to_string(),
-            );
-            st
-        })
-        .collect()
 }
 
 /// Bloque `[[credentials]]` de la base de datos que un paso `sql` necesita para validar.
@@ -280,17 +237,12 @@ mod tests {
     }
 
     #[test]
-    fn sql_files_become_one_disabled_step_per_folder_after_the_services() {
+    fn sql_files_do_not_become_steps() {
         let found = Discovered {
             composes: vec![PathBuf::from("docker-compose.yml")],
-            sql: [
-                "db/01-esquema.sql",
-                "db/02-datos.sql",
-                "seed.sql",
-                "tools/x/a.sql",
-            ]
-            .map(PathBuf::from)
-            .to_vec(),
+            sql: ["db/01-esquema.sql", "seed.sql", "tools/x/a.sql"]
+                .map(PathBuf::from)
+                .to_vec(),
             scripts: vec![PathBuf::from("scripts/03-smoke.sh")],
             ..Discovered::default()
         };
@@ -299,21 +251,8 @@ mod tests {
             .iter()
             .map(|s| (s.id.as_str(), s.enabled, s.kind))
             .collect();
-        assert_eq!(
-            got,
-            [
-                ("servicios", true, StepKind::Compose),
-                ("sql-db", false, StepKind::Sql),
-                ("sql", false, StepKind::Sql),
-                ("sql-tools-x", false, StepKind::Sql),
-            ]
-        );
-        let db = &steps[1];
-        assert_eq!(db.name, "SQL de db");
-        assert_eq!(db.source.0, ["db/*.sql"]);
-        assert_eq!(db.target.as_deref(), Some("prod"));
-        assert!(db.description.as_deref().unwrap().contains("Desactivado"));
-        assert_eq!(steps[2].source.0, ["*.sql"]);
+        assert_eq!(got, [("servicios", true, StepKind::Compose)]);
+        assert_eq!(steps[0].target.as_deref(), Some("prod"));
     }
 
     #[test]

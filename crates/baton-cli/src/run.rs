@@ -245,16 +245,6 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
     let steps = baton_store::scaffold::starter_steps(&found, flags.target.as_deref());
 
     if !steps.is_empty() {
-        // un paso sql necesita la credencial db en el plan para validar
-        if steps
-            .iter()
-            .any(|s| s.kind == baton_core::plan::StepKind::Sql)
-            && let Err(e) = baton_store::scaffold::add_db_credential(project, &plan_name)
-        {
-            report::error(tr!("no se pudo agregar la credencial db: {e}", e = e));
-            let _ = std::fs::remove_file(project.plan_path(&plan_name));
-            return ExitCode::from(EXIT_INVALID);
-        }
         let config = check_config(project);
         for d in &config.diagnostics {
             eprintln!("{d}");
@@ -328,12 +318,19 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
             )
         );
     }
-    if steps.is_empty() {
+    if !found.sql.is_empty() {
         println!(
             "{}",
             tr!(
-                "no encontré docker-compose, Dockerfile ni archivos .sql en esta carpeta: el plan quedó vacío"
+                "encontré {n} archivo(s) .sql: no son pasos del plan (suelen cargarse solos al arrancar la base); si baton debe ejecutarlos, crea un paso sql en el editor",
+                n = found.sql.len()
             )
+        );
+    }
+    if steps.is_empty() {
+        println!(
+            "{}",
+            tr!("no encontré docker-compose ni Dockerfile en esta carpeta: el plan quedó vacío")
         );
     } else {
         println!("{}", tr!("armado con lo que encontré en la carpeta:"));
@@ -350,17 +347,6 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
                     id = s.id,
                     n = s.source.0.len(),
                     off = off
-                )
-            );
-        }
-        if steps
-            .iter()
-            .any(|s| s.kind == baton_core::plan::StepKind::Sql)
-        {
-            println!(
-                "{}",
-                tr!(
-                    "los .sql quedaron desactivados y el plan declara una credencial db (id 'db'): actívalos si baton debe ejecutarlos y completa la conexión (host, base...) al ejecutar"
                 )
             );
         }
