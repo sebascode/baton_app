@@ -227,7 +227,7 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
         )
     })?;
 
-    update_man(&work.path.join("baton.1"));
+    update_man(&work.path);
     Ok(())
 }
 
@@ -280,22 +280,27 @@ fn rollback(exe: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Si ya hay una página de manual instalada (`install.sh`), la deja al día. No crea una nueva.
-fn update_man(new_page: &Path) {
-    if !new_page.is_file() {
-        return;
-    }
+/// Si ya hay páginas de manual instaladas (`install.sh`), las deja al día: la de siempre
+/// (`baton.1`) y la inglesa (`baton.en.1`, instalada en `en/man1/`). No crea ninguna nueva.
+fn update_man(new_dir: &Path) {
     let base = std::env::var_os("BATON_MAN_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/man")));
-    let Some(target) = base.map(|b| b.join("man1/baton.1")).filter(|t| t.is_file()) else {
+    let Some(base) = base else {
         return;
     };
-    if fs::copy(new_page, &target).is_ok() {
-        println!(
-            "{}",
-            tr!("manual actualizado en {path}", path = target.display())
-        );
+    for (page, installed) in [
+        ("baton.1", "man1/baton.1"),
+        ("baton.en.1", "en/man1/baton.1"),
+    ] {
+        let new_page = new_dir.join(page);
+        let target = base.join(installed);
+        if new_page.is_file() && target.is_file() && fs::copy(&new_page, &target).is_ok() {
+            println!(
+                "{}",
+                tr!("manual actualizado en {path}", path = target.display())
+            );
+        }
     }
 }
 

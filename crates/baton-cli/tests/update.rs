@@ -69,13 +69,18 @@ impl Sandbox {
             format!(".TH BATON 1 \"{version}\"\n"),
         )
         .unwrap();
+        fs::write(
+            stage.join("baton.en.1"),
+            format!(".TH BATON 1 \"{version} en\"\n"),
+        )
+        .unwrap();
         let release = self.dir.path().join("release");
         let ok = Command::new("tar")
             .args(["-czf"])
             .arg(release.join(&name))
             .arg("-C")
             .arg(&stage)
-            .args(["baton", "baton.1"])
+            .args(["baton", "baton.1", "baton.en.1"])
             .status()
             .unwrap()
             .success();
@@ -260,6 +265,24 @@ fn update_refreshes_an_installed_manual_but_does_not_create_one() {
     let o = sb.baton(&["update"], &tag_url("9.9.9"));
     assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
     assert!(fs::read_to_string(&page).unwrap().contains("9.9.9"));
+    assert!(
+        !sb.dir.path().join("man/en/man1/baton.1").exists(),
+        "tampoco crea la página en inglés"
+    );
+
+    // con la página en inglés ya instalada, también se actualiza
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", this_platform());
+    let en = sb.dir.path().join("man/en/man1");
+    fs::create_dir_all(&en).unwrap();
+    fs::write(en.join("baton.1"), "viejo").unwrap();
+    let o = sb.baton(&["update"], &tag_url("9.9.9"));
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(
+        fs::read_to_string(en.join("baton.1"))
+            .unwrap()
+            .contains("9.9.9 en")
+    );
 }
 
 #[test]

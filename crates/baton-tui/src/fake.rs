@@ -17,6 +17,7 @@ use baton_core::events::{
 
 use baton_core::config::Config;
 use baton_core::plan::CheckKind;
+use baton_core::tr;
 
 use crate::app::App;
 use crate::config_view::{ConfigState, TargetStatus};
@@ -56,13 +57,13 @@ pub fn history() -> Vec<HistoryEntry> {
         HistoryEntry {
             id: "2026-10-01-1757".into(),
             started: "2026-10-01 17:57".into(),
-            ago: "hace 3 min".into(),
+            ago: tr!("hace 3 min"),
             outcome: RunOutcome::Failed,
             duration: Some(Duration::from_secs(42)),
             steps: vec![
                 step("Pre-checks", StepStatus::Done, 2, 0),
-                step("Build imágenes", StepStatus::Failed, 38, 2),
-                step("Levantar servicios", StepStatus::Pending, 0, 0),
+                step(&tr!("Build imágenes"), StepStatus::Failed, 38, 2),
+                step(&tr!("Levantar servicios"), StepStatus::Pending, 0, 0),
             ],
             has_log: true,
             ambiente: None,
@@ -70,13 +71,13 @@ pub fn history() -> Vec<HistoryEntry> {
         HistoryEntry {
             id: "2026-10-01-1750".into(),
             started: "2026-10-01 17:50".into(),
-            ago: "hace 10 min".into(),
+            ago: tr!("hace 10 min"),
             outcome: RunOutcome::Completed,
             duration: Some(Duration::from_secs(63)),
             steps: vec![
                 step("Pre-checks", StepStatus::Done, 2, 0),
-                step("Build imágenes", StepStatus::Done, 41, 0),
-                step("Levantar servicios", StepStatus::Done, 20, 0),
+                step(&tr!("Build imágenes"), StepStatus::Done, 41, 0),
+                step(&tr!("Levantar servicios"), StepStatus::Done, 20, 0),
             ],
             has_log: true,
             ambiente: None,
@@ -84,12 +85,12 @@ pub fn history() -> Vec<HistoryEntry> {
         HistoryEntry {
             id: "2026-09-30-1103".into(),
             started: "2026-09-30 11:03".into(),
-            ago: "hace 1 día".into(),
+            ago: tr!("hace 1 día"),
             outcome: RunOutcome::Aborted,
             duration: Some(Duration::from_secs(9)),
             steps: vec![
                 step("Pre-checks", StepStatus::Done, 2, 0),
-                step("Build imágenes", StepStatus::Skipped, 0, 0),
+                step(&tr!("Build imágenes"), StepStatus::Skipped, 0, 0),
             ],
             has_log: true,
             ambiente: None,
@@ -115,17 +116,17 @@ pub fn log_file() -> Vec<LogLine> {
         line(
             "17:57:02",
             LogKind::Command,
-            "Build imágenes: $ docker build -t api:latest .",
+            &format!("{}: $ docker build -t api:latest .", tr!("Build imágenes")),
         ),
         line(
             "17:57:03",
             LogKind::Output,
-            "Build imágenes: sh: línea 1: docker: orden no encontrada",
+            &tr!("Build imágenes: sh: línea 1: docker: orden no encontrada"),
         ),
         line(
             "17:57:03",
             LogKind::Error,
-            "Build imágenes: ✗ El comando terminó con código 127",
+            &tr!("Build imágenes: ✗ El comando terminó con código 127"),
         ),
     ]
 }
@@ -138,46 +139,52 @@ pub fn preview() -> PreviewState {
             pstep(
                 "pre-checks",
                 "Pre-checks",
-                "docker ≥24, puertos 5432, 8080",
+                &tr!("docker ≥24, puertos 5432, 8080"),
                 "check",
                 true,
             ),
             pstep(
                 "backup",
-                "Backup volúmenes (opcional)",
+                &tr!("Backup volúmenes (opcional)"),
                 "pg_data → .baton/backups/",
                 "backup",
                 true,
             ),
             pstep(
                 "build",
-                "Build imágenes",
+                &tr!("Build imágenes"),
                 "api/, worker/, web/Dockerfile",
                 "dockerfile",
                 true,
             ),
             pstep(
                 "db",
-                "Levantar DB",
+                &tr!("Levantar DB"),
                 "db/docker-compose.yml",
                 "compose",
                 true,
             ),
             pstep(
                 "gate-db",
-                "Gate: healthcheck postgres",
-                "pg_isready · 6 intentos · 60s",
+                &tr!("Gate: healthcheck postgres"),
+                &tr!("pg_isready · 6 intentos · 60s"),
                 "gate auto",
                 true,
             ),
             pstep(
                 "gate-confirm",
-                "Gate: confirmar despliegue",
-                "pregunta antes de continuar",
+                &tr!("Gate: confirmar despliegue"),
+                &tr!("pregunta antes de continuar"),
                 "gate manual",
                 true,
             ),
-            pstep("smoke", "Smoke tests", "desactivado por ti", "check", false),
+            pstep(
+                "smoke",
+                "Smoke tests",
+                &tr!("desactivado por ti"),
+                "check",
+                false,
+            ),
         ],
         cursor: 2,
         backup: true,
@@ -254,24 +261,24 @@ fn chk(label: &str, kind: &str, detail: &str) -> CheckInfo {
 fn pipe_gate_db() -> GateInfo {
     GateInfo {
         manual: false,
-        summary: "auto · todos pasan · 60s".into(),
+        summary: tr!("auto · todos pasan · 60s"),
         checks: vec![chk("pg_isready", "command", "")],
     }
 }
 
 /// Gate multi-check de "Levantar servicios": 3 checks activos y 1 servicio nuevo sin activar.
 fn pipe_gate_services() -> GateInfo {
-    let mut api = chk("api", "healthcheck", "definido en compose");
+    let mut api = chk("api", "healthcheck", &tr!("definido en compose"));
     api.critical = true;
     let mut notifier = chk("notifier", "http", "");
     notifier.is_new = true;
     GateInfo {
         manual: false,
-        summary: "auto por servicio · todos pasan · 60s".into(),
+        summary: tr!("auto por servicio · todos pasan · 60s"),
         checks: vec![
             api,
             chk("web", "http", ":3000/health"),
-            chk("worker", "running", "contenedor arriba 30s"),
+            chk("worker", "running", &tr!("contenedor arriba 30s")),
             notifier,
         ],
     }
@@ -280,17 +287,17 @@ fn pipe_gate_services() -> GateInfo {
 fn pipe_gate_confirm() -> GateInfo {
     GateInfo {
         manual: true,
-        summary: "manual · ¿Continuar con el despliegue?".into(),
+        summary: tr!("manual · ¿Continuar con el despliegue?"),
         checks: Vec::new(),
     }
 }
 
 /// Los 7 pasos del pipeline de las pantallas 3 y 4, todos pendientes.
 fn pipeline() -> Vec<StepInfo> {
-    let mut gate = kinded("Gate: healthcheck", "esperando", "gate", "prod-db");
+    let mut gate = kinded("Gate: healthcheck", &tr!("esperando"), "gate", "prod-db");
     gate.gate = Some(pipe_gate_db());
     let mut services = kinded(
-        "Levantar servicios",
+        &tr!("Levantar servicios"),
         "services/*/compose",
         "compose",
         "prod-app",
@@ -298,12 +305,32 @@ fn pipeline() -> Vec<StepInfo> {
     services.gate = Some(pipe_gate_services());
     vec![
         kinded("Pre-checks", "docker, puertos", "check", "local"),
-        kinded("Backup volúmenes", "opcional", "backup", "local"),
-        kinded("Build imágenes", "3 Dockerfiles", "dockerfile", "local"),
-        kinded("Levantar DB", "db/docker-compose.yml", "compose", "prod-db"),
+        kinded(
+            &tr!("Backup volúmenes"),
+            &tr!("opcional"),
+            "backup",
+            "local",
+        ),
+        kinded(
+            &tr!("Build imágenes"),
+            &tr!("3 Dockerfiles"),
+            "dockerfile",
+            "local",
+        ),
+        kinded(
+            &tr!("Levantar DB"),
+            "db/docker-compose.yml",
+            "compose",
+            "prod-db",
+        ),
         gate,
         services,
-        kinded("Smoke tests", "últ. ejecución: ok", "check", "prod-app"),
+        kinded(
+            "Smoke tests",
+            &tr!("últ. ejecución: ok"),
+            "check",
+            "prod-app",
+        ),
     ]
 }
 
@@ -312,8 +339,8 @@ fn pipeline() -> Vec<StepInfo> {
 pub fn demo_pipeline() -> Vec<StepInfo> {
     let mut steps = pipeline();
     let mut confirm = kinded(
-        "Gate: confirmar despliegue",
-        "pregunta antes de continuar",
+        &tr!("Gate: confirmar despliegue"),
+        &tr!("pregunta antes de continuar"),
         "gate",
         "prod-app",
     );
@@ -368,7 +395,7 @@ pub fn running() -> RunState {
         step: 4,
         check: 0,
         state: CheckState::Running,
-        detail: Some("intento 3/6".into()),
+        detail: Some(tr!("intento 3/6")),
     });
     apply_all(&mut s, events);
     s.elapsed = secs(161);
@@ -387,21 +414,29 @@ fn db_log() -> Vec<LogLine> {
         line("14:02:12", Output, "Volume pg_data  Created"),
         line("14:02:14", Output, "Container postgres  Started"),
         line("14:02:14", Output, "Container redis  Started"),
-        line("14:02:15", Success, "2/2 contenedores arriba"),
+        line("14:02:15", Success, &tr!("2/2 contenedores arriba")),
         line(
             "14:02:15",
             Command,
             "gate: healthcheck postgres (timeout 60s)",
         ),
-        line("14:02:20", Retry, "intento 1/6 · esperando pg_isready…"),
-        line("14:02:25", Retry, "intento 2/6 · esperando pg_isready…"),
-        line("14:02:30", Output, "intento 3/6 ·"),
+        line(
+            "14:02:20",
+            Retry,
+            &tr!("intento 1/6 · esperando pg_isready…"),
+        ),
+        line(
+            "14:02:25",
+            Retry,
+            &tr!("intento 2/6 · esperando pg_isready…"),
+        ),
+        line("14:02:30", Output, &tr!("intento 3/6 ·")),
     ]
 }
 
 fn services_failure() -> Failure {
     Failure {
-        message: "El servidor rechazó la autenticación".into(),
+        message: tr!("El servidor rechazó la autenticación"),
         command: "ssh deploy@10.0.4.12 \"docker compose up -d\"".into(),
         output_tail: vec!["Permission denied (publickey)".into()],
         kind: FailureKind::Auth,
@@ -444,10 +479,10 @@ pub fn failed() -> RunState {
 fn summary_pipeline() -> Vec<StepInfo> {
     vec![
         info("Pre-checks", ""),
-        info("Backup volúmenes", ""),
-        info("Build imágenes", ""),
-        info("Levantar DB + gate", ""),
-        info("Levantar servicios", ""),
+        info(&tr!("Backup volúmenes"), ""),
+        info(&tr!("Build imágenes"), ""),
+        info(&tr!("Levantar DB + gate"), ""),
+        info(&tr!("Levantar servicios"), ""),
         info("Smoke tests", ""),
     ]
 }
@@ -509,7 +544,7 @@ pub fn completed() -> RunState {
     for (check, state, detail) in [
         (0, CheckState::Passed, "healthy"),
         (1, CheckState::Passed, "200 ok"),
-        (2, CheckState::Warning, "falló 2 de 6 intentos"),
+        (2, CheckState::Warning, &tr!("falló 2 de 6 intentos")),
     ] {
         events.push(RunEvent::CheckUpdate {
             step: 5,
@@ -536,7 +571,7 @@ pub fn completed() -> RunState {
         outcome: RunOutcome::CompletedWithWarnings,
         elapsed: secs(372),
         summary: RunSummary {
-            warnings: vec!["worker: healthcheck no crítico falló".into()],
+            warnings: vec![tr!("worker: healthcheck no crítico falló")],
             ..RunSummary::default()
         },
     });
@@ -563,7 +598,7 @@ pub fn credentials() -> CredentialsState {
             f("token", "ghp_abcdefghijkl9xZ", true),
         ],
     );
-    git.when = "hoy".into();
+    git.when = tr!("hoy");
     let server = CredItem::new(
         "Servidor · deploy@10.0.4.12",
         CredStatus::Silenced,
@@ -585,7 +620,7 @@ pub fn credentials() -> CredentialsState {
         ],
     );
     let db = CredItem::new(
-        "Base de datos · postgres",
+        &tr!("Base de datos · postgres"),
         CredStatus::FromFile,
         "db.env",
         vec![
@@ -595,7 +630,7 @@ pub fn credentials() -> CredentialsState {
         ],
     );
     let nexus = CredItem::new(
-        "Registry privado · nexus",
+        &tr!("Registry privado · nexus"),
         CredStatus::NotFound,
         "docker.env",
         vec![
@@ -640,12 +675,16 @@ fn row(service: &str, kind: CheckKind, target: RowTarget) -> GateRow {
 
 /// Gate de "Levantar servicios" (pantalla 8): 3 checks activos y 1 servicio nuevo sin activar.
 pub fn gate_services() -> GateState {
-    let mut g = GateState::new("Levantar servicios", true, "services/*/docker-compose.yml");
-    g.scanned = "hace 2 min".into();
+    let mut g = GateState::new(
+        &tr!("Levantar servicios"),
+        true,
+        "services/*/docker-compose.yml",
+    );
+    g.scanned = tr!("hace 2 min");
     let mut api = row(
         "api",
         CheckKind::Healthcheck,
-        RowTarget::Fixed("definido en compose".into()),
+        RowTarget::Fixed(tr!("definido en compose")),
     );
     api.critical = true;
     let web = row(
@@ -656,7 +695,7 @@ pub fn gate_services() -> GateState {
     let worker = row(
         "worker",
         CheckKind::Running,
-        RowTarget::Fixed("sin puertos · contenedor arriba 30s".into()),
+        RowTarget::Fixed(tr!("sin puertos · contenedor arriba 30s")),
     );
     let mut notifier = row(
         "notifier",
@@ -677,12 +716,12 @@ pub fn scan() -> Vec<ScannedService> {
         target: target.into(),
     };
     vec![
-        svc("api", CheckKind::Healthcheck, "definido en compose"),
+        svc("api", CheckKind::Healthcheck, &tr!("definido en compose")),
         svc("web", CheckKind::Http, "http://{destino}:3000/health"),
         svc(
             "worker",
             CheckKind::Running,
-            "sin puertos · contenedor arriba 30s",
+            &tr!("sin puertos · contenedor arriba 30s"),
         ),
         svc("notifier", CheckKind::Http, "http://{destino}:8081/health"),
         svc("scheduler", CheckKind::Http, "http://{destino}:9090/health"),
@@ -717,7 +756,7 @@ pub fn editor() -> EditorState {
     build.timeout = "10m".into();
     build.retries = "1".into();
     let mut db = spec(
-        "Levantar DB",
+        &tr!("Levantar DB"),
         "compose",
         "prod-db",
         "docker compose up -d --wait",
@@ -737,7 +776,7 @@ pub fn editor() -> EditorState {
     )];
     health.gate = Some(gate);
     let mut services = spec(
-        "Levantar servicios",
+        &tr!("Levantar servicios"),
         "compose",
         "prod-app",
         "docker compose up -d --wait",
@@ -949,19 +988,19 @@ impl Scenario {
                 0,
                 4,
                 "scripts/prechecks.sh",
-                "docker 26.1 · puertos 5432 y 8080 libres",
+                &tr!("docker 26.1 · puertos 5432 y 8080 libres"),
             ),
             (
                 1,
                 38,
                 "docker run --rm -v pg_data:/data alpine tar czf /backup/pg_data.tgz /data",
-                "412 MB respaldados",
+                &tr!("412 MB respaldados"),
             ),
             (
                 2,
                 112,
                 "docker build -t stack/api:latest .",
-                "3 imágenes construidas",
+                &tr!("3 imágenes construidas"),
             ),
         ] {
             self.emit(RunEvent::StepStarted { step: i })?;
@@ -975,8 +1014,9 @@ impl Scenario {
         // 4 y su gate, como en la pantalla 3.
         self.emit(RunEvent::StepStarted { step: 3 })?;
         let mut attempt = 0;
-        for l in db_log() {
-            let is_attempt = l.text.starts_with("intento");
+        for (n, l) in db_log().into_iter().enumerate() {
+            // las tres últimas líneas del registro son los intentos del gate
+            let is_attempt = n >= 7;
             self.emit(RunEvent::Log { step: 3, line: l })?;
             if is_attempt {
                 attempt += 1;
@@ -990,7 +1030,7 @@ impl Scenario {
                     step: 4,
                     check: 0,
                     state: CheckState::Running,
-                    detail: Some(format!("intento {attempt}/6")),
+                    detail: Some(tr!("intento {attempt}/6", attempt = attempt)),
                 })?;
             }
             self.wait(if self.skip_gate { 100 } else { 900 })?;
@@ -1038,7 +1078,12 @@ impl Scenario {
                 retries += 1;
                 continue;
             }
-            self.log(5, "14:06:10", LogKind::Success, "4/4 servicios arriba")?;
+            self.log(
+                5,
+                "14:06:10",
+                LogKind::Success,
+                &tr!("4/4 servicios arriba"),
+            )?;
             self.wait(400)?;
             // gate por servicio: cada check corre y pasa; "notifier" está sin activar y no corre
             self.emit(RunEvent::GateAttempt {
@@ -1047,12 +1092,12 @@ impl Scenario {
                 of: 6,
                 waiting_on: "api, web, worker".into(),
             })?;
-            for (check, detail) in [(0, "healthy"), (1, "200 ok"), (2, "arriba 30s")] {
+            for (check, detail) in [(0, "healthy"), (1, "200 ok"), (2, &tr!("arriba 30s"))] {
                 self.emit(RunEvent::CheckUpdate {
                     step: 5,
                     check,
                     state: CheckState::Running,
-                    detail: Some("esperando…".into()),
+                    detail: Some(tr!("esperando…")),
                 })?;
                 self.wait(700)?;
                 self.emit(RunEvent::CheckUpdate {
@@ -1075,7 +1120,7 @@ impl Scenario {
         self.emit(RunEvent::StepStarted { step: 6 })?;
         self.emit(RunEvent::GateAsk {
             step: 6,
-            message: "¿Continuar con el despliegue?".into(),
+            message: tr!("¿Continuar con el despliegue?"),
         })?;
         loop {
             match self.wait_command()? {
@@ -1113,8 +1158,8 @@ pub fn maintenance() -> crate::maint_view::MaintState {
         ],
         vec![MaintTask {
             id: "limpiar".into(),
-            name: "Limpiar temporales".into(),
-            description: "borra /tmp/build".into(),
+            name: tr!("Limpiar temporales"),
+            description: tr!("borra /tmp/build"),
             confirm: true,
         }],
     )

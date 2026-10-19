@@ -182,7 +182,7 @@ fn step_meta(step: &Step) -> String {
 }
 
 const SHORTCUTS: [(&str, &str); 6] = [
-    ("espacio", tk!("activar")),
+    (tk!("espacio"), tk!("activar")),
     ("shift ↑↓", tk!("mover")),
     ("e", tk!("editar paso")),
     ("g", tk!("añadir gate")),

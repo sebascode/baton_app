@@ -39,6 +39,12 @@ contents:
     expand: true
     file_info:
       mode: 0644
+  # la página en inglés, para quien tiene el sistema en inglés (man busca primero `en/`)
+  - src: ${MANPAGE_EN}
+    dst: /usr/share/man/en/man1/baton.1.gz
+    expand: true
+    file_info:
+      mode: 0644
   - src: LICENSE
     dst: /usr/share/doc/baton/copyright
     file_info:

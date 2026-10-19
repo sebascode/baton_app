@@ -29,8 +29,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Si cambias comandos, opciones o códigos de salida, actualiza `man/baton.1` (hay una prueba que lo
-exige).
+Si cambias comandos, opciones o códigos de salida, actualiza `man/baton.1` (español) y su copia `man/en/baton.1` (inglés): hay una prueba que lo
+exige en las dos y otra que compara que tengan la misma estructura.
 
 Los nombres de los flags van en inglés (`--env`, `--lines`, `--follow`), igual en todos los
 comandos: si un flag ya existe en otro, usa el mismo nombre. Un nombre en español que ya se haya

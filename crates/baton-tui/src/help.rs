@@ -38,7 +38,7 @@ pub fn for_mode(mode: &Mode) -> Option<Help> {
             screen: tk!("vista del plan"),
             here: vec![
                 ("enter", tk!("ejecutar los pasos activos")),
-                ("espacio", tk!("activar o desactivar el paso")),
+                (tk!("espacio"), tk!("activar o desactivar el paso")),
                 ("shift+↑↓", tk!("mover el paso")),
                 ("/", tk!("filtrar los pasos (esc lo quita)")),
                 ("e", tk!("editar pasos")),
@@ -80,7 +80,10 @@ fn pipeline() -> Help {
     Help {
         screen: tk!("pipeline"),
         here: vec![
-            ("espacio enter", tk!("abrir o cerrar los checks de un gate")),
+            (
+                tk!("espacio enter"),
+                tk!("abrir o cerrar los checks de un gate"),
+            ),
             ("f", tk!("seguir el paso en curso")),
             ("l", tk!("ver el log")),
             ("v esc q", tk!("volver a la pantalla anterior")),
@@ -158,7 +161,10 @@ fn section(
     for (key, what) in items {
         let desc = truncate(&tr_dyn(what), w.saturating_sub(key_w + 2));
         out.push(Line::from(vec![
-            Span::styled(format!("{key:<key_w$}"), Style::new().fg(theme::INFO)),
+            Span::styled(
+                format!("{:<key_w$}", baton_core::i18n::tr_dyn(key)),
+                Style::new().fg(theme::INFO),
+            ),
             Span::raw("  "),
             Span::raw(desc),
         ]));
