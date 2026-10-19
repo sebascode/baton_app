@@ -340,6 +340,9 @@ enum Command {
         /// Ambiente del que se resuelven las credenciales
         #[arg(long)]
         ambiente: Option<String>,
+        /// Sin la interfaz: un menú de preguntas en la terminal (por defecto se abre la pantalla de mantención)
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
     History {
@@ -860,6 +863,7 @@ fn main() -> ExitCode {
             lineas,
             assume_yes,
             ambiente,
+            no_tui,
         } => match pick::resolve(&project, plan, "ops", "mantener") {
             Ok(plan) => ops::run(
                 &project,
@@ -873,6 +877,7 @@ fn main() -> ExitCode {
                     lines: lineas,
                     assume_yes,
                     ambiente,
+                    no_tui,
                 },
             ),
             Err(code) => code,

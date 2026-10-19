@@ -29,6 +29,8 @@ pub struct Flags {
     pub resume: bool,
     /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
     pub ambiente: Option<String>,
+    /// Líneas de logs que pide la pantalla de mantención (`baton ops --lineas`); sin valor, 100.
+    pub ops_tail: Option<u32>,
 }
 
 pub struct RunDriver {
@@ -394,12 +396,16 @@ impl RunDriver {
     }
 
     /// Abre la pantalla de mantención del plan (servicios, acciones y la salida en vivo).
+    pub fn open_maintenance(&self, app: &mut App) {
+        self.maintenance(app);
+    }
+
     fn maintenance(&self, app: &mut App) {
-        app.show_maintenance(crate::ops::maintenance_state(
-            &self.project,
-            &self.config,
-            &self.plan,
-        ));
+        let state = crate::ops::maintenance_state(&self.project, &self.config, &self.plan);
+        app.show_maintenance(match self.flags.ops_tail {
+            Some(n) => state.with_tail(n),
+            None => state,
+        });
     }
 
     /// Corre lo pedido en la mantención en un hilo; la salida llega por `poll`.
