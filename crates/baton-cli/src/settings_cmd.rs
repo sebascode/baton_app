@@ -14,7 +14,9 @@ use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 pub enum Action {
-    List,
+    List {
+        json: bool,
+    },
     Get {
         clave: String,
     },
@@ -32,7 +34,7 @@ pub enum Action {
 pub fn run(action: &Action, start: &Path) -> ExitCode {
     let project = Project::discover(start);
     match action {
-        Action::List => list(project.as_ref()),
+        Action::List { json } => list(project.as_ref(), *json),
         Action::Get { clave } => get(project.as_ref(), clave),
         Action::Set {
             clave,
@@ -70,11 +72,39 @@ fn layers(project: Option<&Project>) -> Result<Layers, ExitCode> {
     }
 }
 
-fn list(project: Option<&Project>) -> ExitCode {
+fn list(project: Option<&Project>, json: bool) -> ExitCode {
     let layers = match layers(project) {
         Ok(l) => l,
         Err(code) => return code,
     };
+    if json {
+        let keys: Vec<_> = KEYS
+            .iter()
+            .map(|k| {
+                let (origin, value) = layers.resolve(k);
+                // un valor por defecto que es un texto entre paréntesis ("(ninguno)") es solo
+                // para mostrarlo: en JSON es `null`
+                let value =
+                    value.or_else(|| (!k.default.starts_with('(')).then(|| k.default.to_string()));
+                serde_json::json!({
+                    "key": k.name,
+                    "value": value,
+                    "origin": match origin {
+                        Origin::Env => "env",
+                        Origin::Project => "project",
+                        Origin::Global => "global",
+                        Origin::Default => "default",
+                    },
+                })
+            })
+            .collect();
+        report::json(&serde_json::json!({
+            "global_file": layers.global_path.as_ref().map(|p| p.display().to_string()),
+            "project_file": project.map(|_| layers.project_path.display().to_string()),
+            "settings": keys,
+        }));
+        return ExitCode::SUCCESS;
+    }
     match &layers.global_path {
         Some(p) if layers.global.is_some() => {
             println!("{}", tr!("global:   {path}", path = p.display()))

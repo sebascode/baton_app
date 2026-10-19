@@ -92,6 +92,9 @@ enum Command {
     Validate {
         /// Nombre del plan (archivo en baton/plans/)
         plan: Option<String>,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Ejecuta un plan directo, sin pasar por la vista previa (también: `baton <plan>`)
     Run(RunArgs),
@@ -253,6 +256,9 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Documenta un plan en markdown con diagramas mermaid (sin valores de credenciales)
     Docs {
@@ -342,9 +348,16 @@ enum Command {
         /// Cuántas ejecuciones se muestran, de la más reciente a la más antigua
         #[arg(long, default_value_t = 20, value_name = "N")]
         limit: usize,
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
-    Config,
+    Config {
+        /// En vez de abrir la pantalla, imprime la configuración como JSON (sin valores secretos)
+        #[arg(long)]
+        json: bool,
+    },
     /// Recorre las pantallas con datos falsos (no toca ningún proyecto)
     Demo {
         /// Acorta las esperas del escenario para probar rápido
@@ -362,7 +375,11 @@ enum Command {
 #[derive(Subcommand)]
 enum SettingsAction {
     /// Muestra cada clave con su valor y de dónde sale (es lo que hace sin subcomando)
-    List,
+    List {
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Imprime el valor efectivo de una clave (el origen va a stderr)
     Get {
         /// Por ejemplo defaults.engine, logs.format, ui.confirm_exit
@@ -633,7 +650,8 @@ fn main() -> ExitCode {
             None => std::env::current_dir().unwrap_or_default(),
         };
         let action = match action {
-            None | Some(SettingsAction::List) => settings_cmd::Action::List,
+            None => settings_cmd::Action::List { json: false },
+            Some(SettingsAction::List { json }) => settings_cmd::Action::List { json: *json },
             Some(SettingsAction::Get { clave }) => settings_cmd::Action::Get {
                 clave: clave.clone(),
             },
@@ -779,8 +797,8 @@ fn main() -> ExitCode {
     };
 
     match command {
-        Command::Validate { plan } => validate::run(&project, plan.as_deref()),
-        Command::Config => config(&project),
+        Command::Validate { plan, json } => validate::run(&project, plan.as_deref(), json),
+        Command::Config { json } => config(&project, json),
         Command::Run(args) => {
             let (plan, flags) = args.into();
             match pick::resolve(&project, plan, "run", "ejecutar") {
@@ -859,16 +877,18 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::History { plan, limit } => {
+        Command::History { plan, limit, json } => {
             match pick::resolve(&project, plan, "history", "consultar") {
-                Ok(plan) => history_cmd::run(&project, &plan, limit),
+                Ok(plan) => history_cmd::run(&project, &plan, limit, json),
                 Err(code) => code,
             }
         }
-        Command::Last { plan, lines } => match pick::resolve(&project, plan, "last", "consultar") {
-            Ok(plan) => last::run(&project, &plan, lines),
-            Err(code) => code,
-        },
+        Command::Last { plan, lines, json } => {
+            match pick::resolve(&project, plan, "last", "consultar") {
+                Ok(plan) => last::run(&project, &plan, lines, json),
+                Err(code) => code,
+            }
+        }
         Command::Docs {
             plan,
             salida,
@@ -1003,7 +1023,10 @@ fn require_terminal(command: &str) -> bool {
     ok
 }
 
-fn config(project: &Project) -> ExitCode {
+fn config(project: &Project, json: bool) -> ExitCode {
+    if json {
+        return config_json(project);
+    }
     if !require_terminal("config") {
         return ExitCode::from(EXIT_USAGE);
     }
@@ -1034,6 +1057,55 @@ fn config(project: &Project) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `baton config --json`: la configuración del proyecto sin abrir la pantalla. Solo referencias
+/// y nombres: nunca valores de credenciales ni comandos de los proveedores de secretos.
+fn config_json(project: &Project) -> ExitCode {
+    use baton_core::config::Target;
+    use serde_json::{Value, json};
+    let checked = baton_store::check_project_config(project);
+    for d in &checked.diagnostics {
+        eprintln!("{d}");
+    }
+    let valid = checked.is_valid();
+    let Some(c) = checked.value.filter(|_| valid) else {
+        report::error("corrige la configuración antes de leerla (baton validate)".to_string());
+        return ExitCode::from(EXIT_INVALID);
+    };
+    let targets: Vec<Value> = c
+        .targets
+        .iter()
+        .map(|(name, t)| match t {
+            Target::Ssh(s) => json!({
+                "name": name, "type": "ssh", "host": s.host, "port": s.port, "user": s.user,
+                "remote_dir": s.remote_dir, "bastion": s.bastion, "sync": s.sync,
+            }),
+            other => json!({ "name": name, "type": other.kind_label() }),
+        })
+        .collect();
+    let value = json!({
+        "project": project.root.display().to_string(),
+        "defaults": {
+            "target": c.defaults.target, "ambiente": c.defaults.ambiente,
+            "secrets": c.defaults.secrets, "engine": c.defaults.engine,
+        },
+        "targets": targets,
+        "logs": {
+            "local": c.logs.local, "remote": c.logs.remote,
+            "format": match c.logs.format {
+                baton_core::config::LogFormat::Text => "text",
+                baton_core::config::LogFormat::Json => "json",
+            },
+        },
+        "ambientes": c.ambientes.iter()
+            .map(|(n, a)| json!({ "name": n, "protected": a.protegido }))
+            .collect::<Vec<_>>(),
+        "secret_providers": c.secrets.keys().collect::<Vec<_>>(),
+        "plans": project.list_plans(),
+    });
+    report::json(&value);
+    ExitCode::SUCCESS
 }
 
 fn demo(fast: bool, screen: Screen) -> ExitCode {

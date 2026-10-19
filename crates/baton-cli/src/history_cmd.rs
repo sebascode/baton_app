@@ -13,7 +13,7 @@ use crate::report;
 use crate::style::{Style, Tone, duration, outcome_mark, step_bar};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
-pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
+pub fn run(project: &Project, plan_name: &str, limit: usize, json: bool) -> ExitCode {
     if !project.plan_path(plan_name).exists() {
         for d in check_plan(project, plan_name, None).diagnostics {
             eprintln!("{d}");
@@ -35,6 +35,15 @@ pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
         }
     };
     let entries = history::entries(&state, &plan, history::now());
+    if json {
+        let counts = history::run_counts(&state, plan_name);
+        report::json(&serde_json::json!({
+            "plan": plan_name,
+            "runs": entries.iter().take(limit).map(entry_json).collect::<Vec<_>>(),
+            "counts": counts_json(counts),
+        }));
+        return ExitCode::SUCCESS;
+    }
     if entries.is_empty() {
         eprintln!(
             "{}",
@@ -63,6 +72,51 @@ pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
         )
     );
     ExitCode::SUCCESS
+}
+
+pub(crate) fn outcome_name(o: RunOutcome) -> &'static str {
+    match o {
+        RunOutcome::Completed => "completed",
+        RunOutcome::CompletedWithWarnings => "completed_with_warnings",
+        RunOutcome::Failed => "failed",
+        RunOutcome::Aborted => "aborted",
+    }
+}
+
+fn status_name(s: StepStatus) -> &'static str {
+    match s {
+        StepStatus::Pending => "pending",
+        StepStatus::Running => "running",
+        StepStatus::Gate => "gate",
+        StepStatus::Done => "done",
+        StepStatus::Failed => "failed",
+        StepStatus::Skipped => "skipped",
+    }
+}
+
+pub(crate) fn counts_json(c: RunCounts) -> serde_json::Value {
+    serde_json::json!({
+        "total": c.total, "completed": c.completed, "failed": c.failed, "aborted": c.aborted,
+    })
+}
+
+/// Una ejecución para `--json`. Los nombres de estado son fijos (no se traducen).
+pub(crate) fn entry_json(e: &HistoryEntry) -> serde_json::Value {
+    serde_json::json!({
+        "id": e.id,
+        "started": e.started,
+        "outcome": outcome_name(e.outcome),
+        "duration_ms": e.duration.map(|d| d.as_millis() as u64),
+        "ambiente": e.ambiente,
+        "has_log": e.has_log,
+        "stopped_at": stopped_at(e),
+        "steps": e.steps.iter().map(|s| serde_json::json!({
+            "name": s.name,
+            "status": status_name(s.status),
+            "duration_ms": s.duration.map(|d| d.as_millis() as u64),
+            "retries": s.retries,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Dónde se detuvo una ejecución: el paso que falló o, si se abortó, el primero sin hacer.

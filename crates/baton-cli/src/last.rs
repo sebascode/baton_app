@@ -19,7 +19,7 @@ use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
 /// Lo más largo que se muestra de una línea de salida.
 const MAX_LINE: usize = 160;
 
-pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
+pub fn run(project: &Project, plan_name: &str, lines: usize, json: bool) -> ExitCode {
     if !project.plan_path(plan_name).exists() {
         for d in check_plan(project, plan_name, None).diagnostics {
             eprintln!("{d}");
@@ -79,6 +79,22 @@ pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
         (Some(path), Some(id)) if stopped => Some(read_excerpt(path, id, lines)),
         _ => None,
     };
+    let code = match banner.outcome {
+        RunOutcome::Completed | RunOutcome::CompletedWithWarnings => ExitCode::SUCCESS,
+        RunOutcome::Failed | RunOutcome::Aborted => ExitCode::from(EXIT_RUN_FAILED),
+    };
+    if json {
+        report::json(&serde_json::json!({
+            "plan": plan_name,
+            "run": crate::history_cmd::entry_json(&entry),
+            "counts": crate::history_cmd::counts_json(history::run_counts(&state, plan_name)),
+            "can_resume": banner.can_resume,
+            "log": log_path.as_deref().map(|p| project.display_path(p)),
+            "stopped_step": banner.failed_step,
+            "excerpt": excerpt.as_ref().map(excerpt_json),
+        }));
+        return code;
+    }
     let view = View {
         plan: plan_name,
         banner: &banner,
@@ -92,9 +108,27 @@ pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
         excerpt,
     };
     print!("{}", render(&view, &Style::detect()));
-    match banner.outcome {
-        RunOutcome::Completed | RunOutcome::CompletedWithWarnings => ExitCode::SUCCESS,
-        RunOutcome::Failed | RunOutcome::Aborted => ExitCode::from(EXIT_RUN_FAILED),
+    code
+}
+
+fn excerpt_json(e: &Excerpt) -> serde_json::Value {
+    match e {
+        Excerpt::Found(x) => serde_json::json!({
+            "command": x.command,
+            "omitted": x.omitted,
+            "lines": x.lines.iter().map(|(k, t)| serde_json::json!({
+                "kind": match k {
+                    LogKind::Command => "command",
+                    LogKind::Output => "output",
+                    LogKind::Success => "success",
+                    LogKind::Retry => "retry",
+                    LogKind::Error => "error",
+                },
+                "text": t,
+            })).collect::<Vec<_>>(),
+        }),
+        Excerpt::Silent => serde_json::json!({ "command": null, "omitted": 0, "lines": [] }),
+        Excerpt::Unreadable(why) => serde_json::json!({ "error": why }),
     }
 }
 

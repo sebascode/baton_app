@@ -102,6 +102,7 @@ baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
+baton last --json              # también validate, history, config y settings list: JSON por stdout para scripts
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
 baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
 baton docs instalar -o docs/instalar.md   # documentación del plan: resumen, flujo mermaid, variables, destinos con su host, ambientes y mantención

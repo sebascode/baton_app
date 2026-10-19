@@ -35,6 +35,16 @@ pub fn warn(msg: impl Display) {
     eprintln!("{}", line(&tr!("aviso"), "33", &msg));
 }
 
+/// Imprime un valor JSON (con sangría) por stdout: la salida pensada para máquinas de `--json`.
+/// Es un formato estable (se agregan campos, no se quitan ni cambian); los textos para personas
+/// pueden cambiar entre versiones.
+pub fn json(value: &serde_json::Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".into())
+    );
+}
+
 /// Una línea de ayuda debajo de un error, con sangría.
 pub fn hint(msg: impl Display) {
     eprintln!("  {msg}");
