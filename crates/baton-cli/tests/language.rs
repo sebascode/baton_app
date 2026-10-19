@@ -51,6 +51,7 @@ impl Fx {
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
             .env("LANG", "C")
+            .env("BATON_ASCII", "0")
             .env("CI", "1");
         c
     }

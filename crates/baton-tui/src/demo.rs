@@ -79,6 +79,7 @@ fn event_loop(
     let mut last_tick = Instant::now();
     let mut last_blink = Instant::now();
     let mono = crate::theme::no_color();
+    let ascii = baton_core::ascii::enabled();
 
     loop {
         terminal.draw(|frame| {
@@ -86,6 +87,9 @@ fn event_loop(
             app.render(frame.buffer_mut(), area);
             if mono {
                 crate::theme::monochrome(frame.buffer_mut());
+            }
+            if ascii {
+                crate::theme::ascii_symbols(frame.buffer_mut());
             }
         })?;
 

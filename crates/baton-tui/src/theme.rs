@@ -82,6 +82,20 @@ pub fn no_color() -> bool {
     std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
+/// Cambia cada símbolo de un buffer ya dibujado por su carácter ASCII (`BATON_ASCII`, o una
+/// terminal que no es UTF-8): `✓` pasa a `+`, `│` a `|`, `╭` a `+`... Cada uno es de un solo
+/// carácter, así que el dibujo no cambia de ancho.
+pub fn ascii_symbols(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        let mut chars = cell.symbol().chars();
+        if let (Some(c), None) = (chars.next(), chars.next())
+            && let Some(a) = baton_core::ascii::map(c)
+        {
+            cell.set_char(a);
+        }
+    }
+}
+
 /// Quita los colores de un buffer ya dibujado y los reemplaza por atributos, para `NO_COLOR`:
 /// lo atenuado sigue atenuado, el error va en negrita, la fila elegida y los fondos de estado
 /// se ven en vídeo inverso y el resto queda con el color de la terminal. Los símbolos

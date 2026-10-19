@@ -711,6 +711,9 @@ Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBe
 .B BATON_LANG
 Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
 .TP
+.B BATON_ASCII
+Símbolos ASCII (\fB+ x ~ # | -\fR en vez de \fB✓ ✗ ◐ ◆ │ ─\fR) para consolas sin fuente Unicode. \fB1\fR los activa y \fB0\fR los apaga; sin valor se activan solos si el juego de caracteres de la terminal no es UTF\-8 (\fBLC_ALL\fR, \fBLC_CTYPE\fR o \fBLANG\fR, el primero definido) o si \fBTERM=linux\fR. Cada símbolo pasa a un solo carácter, así que el dibujo no cambia de ancho; no afecta a las letras con tilde, que dependen de la terminal. Los textos de ayuda de los menús de preguntas (\fBbaton ops \-\-no\-tui\fR, \fBbaton select\fR) conservan sus flechas.
+.TP
 .B BATON_CONFIG
 Archivo de configuración global en vez de \fI~/.config/baton/config.toml\fR (ver \fBbaton settings\fR).
 .TP

@@ -199,3 +199,33 @@ fn the_old_spanish_flag_names_still_work_as_hidden_aliases() {
         "los alias van ocultos: {help}"
     );
 }
+
+#[test]
+fn ascii_symbols_are_used_on_request_or_with_a_non_utf8_terminal() {
+    let fx = Fx::new();
+    let run = |envs: &[(&str, &str)]| -> String {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_baton"));
+        c.arg("-C")
+            .arg(&fx.root)
+            .arg("validate")
+            .env("BATON_CONFIG", fx.root.join("_sin_global.toml"))
+            .env("CI", "1")
+            .env_remove("BATON_LANG")
+            .env_remove("BATON_ASCII")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE")
+            .env("LANG", "es_CL.UTF-8");
+        for (k, v) in envs {
+            c.env(k, v);
+        }
+        String::from_utf8_lossy(&c.output().unwrap().stdout).into_owned()
+    };
+    assert!(run(&[]).contains('✓'));
+    let t = run(&[("BATON_ASCII", "1")]);
+    assert!(
+        t.contains("+ baton/plans/demo.toml") && !t.contains('✓'),
+        "{t}"
+    );
+    assert!(run(&[("LANG", "C")]).contains("+ baton/plans/demo.toml"));
+    assert!(run(&[("LANG", "C"), ("BATON_ASCII", "0")]).contains('✓'));
+}
