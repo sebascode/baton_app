@@ -1,5 +1,9 @@
 //! Binario `baton`.
 
+// Primero y aparte: sus macros (`println!`...) tapan a las de std en todos los módulos que siguen.
+#[macro_use]
+mod out;
+
 mod ambiente;
 mod ask;
 mod clap_i18n;

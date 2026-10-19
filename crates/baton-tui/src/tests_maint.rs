@@ -259,3 +259,22 @@ fn the_log_lines_asked_for_follow_lineas_in_both_log_actions() {
         })
     );
 }
+
+#[test]
+fn ascii_mode_replaces_every_symbol_without_changing_the_layout() {
+    use crate::testutil::{render, text};
+    let app = opened();
+    let mut unicode = render(100, 26, |b, a| app.render(b, a));
+    let before = text(&unicode);
+    assert!(before.contains('│') && before.contains('╭'), "{before}");
+    crate::theme::ascii_symbols(&mut unicode);
+    let after = text(&unicode);
+    for c in "│─╭╮╰╯├┤┬┴▸⚠".chars() {
+        assert!(!after.contains(c), "{c}: {after}");
+    }
+    assert!(after.contains('|') && after.contains('+'), "{after}");
+    // las letras con tilde no se tocan y cada línea mide lo mismo que antes
+    assert!(after.contains("Mantención"), "{after}");
+    let widths = |t: &str| t.lines().map(|l| l.chars().count()).collect::<Vec<_>>();
+    assert_eq!(widths(&before), widths(&after));
+}

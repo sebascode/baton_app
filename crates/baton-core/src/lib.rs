@@ -1,6 +1,7 @@
 //! Dominio de baton: modelo de configuración y planes, validación, plantillas y contrato de
 //! eventos. No hace IO ni async; todo recibe texto o valores ya cargados.
 
+pub mod ascii;
 pub mod ask;
 pub mod askpass;
 pub mod auth_failure;
