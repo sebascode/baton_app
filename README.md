@@ -101,7 +101,7 @@ baton demo
 En tu proyecto:
 
 ```sh
-baton init             # escanea la carpeta (compose, Dockerfile, .sh, .sql) y arma un plan
+baton init             # escanea la carpeta (compose, Dockerfile; los .sh y .sql no son pasos) y arma un plan
 baton start            # revisa y edita el plan en la TUI
 baton run              # ejecuta el plan
 ```
@@ -209,6 +209,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-18 | **0.10.5.** `baton docs` más completo: índice, resumen en tabla, cómo se usa, variables, destinos con su host (sin usuarios), planes y ambientes del proyecto y la mantención de `baton ops`. Cada ejecución registra con qué ambiente corrió (`last`, `history`, la TUI) y `--resume` y `rollback` avisan si fue otro; tecla `a` para elegirlo en la TUI. `baton plugin add <nombre>` copia al proyecto un plugin global sin volver a bajarlo, y el editor tiene el campo `dry-run`. Más textos en inglés (`last`, `history`, `update`, `import`, `db`, `validate`). |
 | 2026-10-18 | **0.11.0.** `baton docs` más completo: cabecera con la versión de baton y el hash del plan, notas manuales que se conservan al regenerar con `-o` (entre `<!-- baton:notas-manuales -->` y su cierre), duración estimada, y secciones de requisitos (programas que necesita el plan), resultados (dónde quedan logs, estado y respaldos) y qué hacer si algo falla. |
 | 2026-10-19 | **0.12.0.** Plugins con capacidades (`api = 2`): respaldo y restauración en el rollback, revisión de contenido destructivo y prueba de conexión de credenciales, con un plugin de ejemplo para MariaDB 11+. `baton ops` en la interfaz: selector de ambiente (`a`) y ventana para escribirle al comando en curso (`i`). `--help` y manual en inglés, flags en inglés (los nombres en español siguen como alias), `--json` en `validate`, `history`, `last`, `config` y `settings list`, `--no-color`, `FORCE_COLOR`, `BATON_ASCII` y paleta `terminal`. Los archivos del release llevan una atestación de procedencia firmada y `baton update --verify` y `get.sh --verify` la comprueban. |
+| 2026-10-19 | **0.12.1.** `baton init` ya no arma un paso `sql` por cada carpeta con archivos `.sql`: en un proyecto real daban decenas de pasos. Dice cuántos encontró y el paso se crea a mano. |
 
 ## Desarrollo
 
