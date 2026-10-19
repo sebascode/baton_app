@@ -25,6 +25,13 @@ fn line(prefix: &str, code: &str, msg: &dyn Display) -> String {
     }
 }
 
+/// El prefijo `error:` ya con su color (si stderr lo admite), para quien arma su propio mensaje.
+pub fn error_prefix() -> String {
+    line(&tr!("error"), "31", &"")
+        .trim_end_matches(' ')
+        .to_string()
+}
+
 /// `error: <mensaje>`.
 pub fn error(msg: impl Display) {
     eprintln!("{}", line(&tr!("error"), "31", &msg));
