@@ -62,6 +62,11 @@ install_man() {
   if [ -f "$root/man/baton.1" ] && mkdir -p "$man_dir" 2>/dev/null; then
     cp "$root/man/baton.1" "$man_dir/baton.1" && chmod 644 "$man_dir/baton.1"
     echo "manual instalado en $man_dir/baton.1 (man baton)"
+    # la página en inglés: man la elige sola si el sistema está en inglés
+    if [ -f "$root/man/en/baton.1" ] && mkdir -p "$man_base/en/man1" 2>/dev/null; then
+      cp "$root/man/en/baton.1" "$man_base/en/man1/baton.1" && chmod 644 "$man_base/en/man1/baton.1"
+      echo "manual en inglés instalado en $man_base/en/man1/baton.1"
+    fi
     # man-db (Linux) ya busca en ~/.local/share/man; el man de macOS no
     if command -v manpath >/dev/null 2>&1 &&
       ! manpath 2>/dev/null | tr ':' '\n' | grep -qxF "$man_base"; then

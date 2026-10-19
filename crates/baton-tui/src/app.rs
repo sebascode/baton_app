@@ -108,6 +108,10 @@ pub enum Effect {
     SwitchPlan(String),
     /// Elegir el ambiente de esta sesión (`None`: ninguno).
     SetAmbiente(Option<String>),
+    /// Lo mismo, pedido desde la pantalla de mantención (que se vuelve a abrir).
+    MaintAmbiente(Option<String>),
+    /// Texto para la entrada estándar de lo que corre en la mantención.
+    MaintInput(crate::maint_view::MaintInput),
     /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja). Quien atiende lo hace en
     /// disco y responde con `plans_changed` (o `notify` si no pudo).
     PlanOp(crate::plan_prompt::PlanRequest),
@@ -148,6 +152,8 @@ pub struct App {
     quit_ask: bool,
     /// `[ui] confirm_exit`: si es falso, esc y enter salen sin preguntar.
     quit_confirm: bool,
+    /// Paleta de la interfaz (`[ui] colors`, `BATON_COLORS`).
+    palette: baton_core::color::Palette,
 }
 
 /// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
@@ -197,6 +203,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -210,6 +217,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -223,6 +231,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -236,6 +245,16 @@ impl App {
     pub fn with_quit_confirm(mut self, ask: bool) -> App {
         self.quit_confirm = ask;
         self
+    }
+
+    /// La paleta de la interfaz: `Terminal` deja que mande el tema de la terminal.
+    pub fn with_palette(mut self, palette: baton_core::color::Palette) -> App {
+        self.palette = palette;
+        self
+    }
+
+    pub fn palette(&self) -> baton_core::color::Palette {
+        self.palette
     }
 
     pub fn with_editor(mut self, editor: EditorState) -> App {
@@ -289,6 +308,13 @@ impl App {
     pub fn maint_note(&mut self, text: &str) {
         if let Mode::Maintenance(m) = &mut self.mode {
             m.note(text);
+        }
+    }
+
+    /// Una pregunta que dejó el comando sin salto de línea (abre la ventana de entrada).
+    pub fn maint_prompt(&mut self, text: &str) {
+        if let Mode::Maintenance(m) = &mut self.mode {
+            m.prompt_line(text);
         }
     }
 
@@ -551,7 +577,11 @@ impl App {
             return None;
         }
         // Ctrl+C se comporta como `q`: en plena ejecución pide confirmación.
-        let key = if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+        // (en la ventana de entrada de la mantención, ctrl+c y las letras son del comando)
+        let typing = matches!(&self.mode, Mode::Maintenance(m) if m.is_typing());
+        let key = if !typing
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
         {
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
         } else {
@@ -596,6 +626,7 @@ impl App {
             return None;
         }
         if key.code == KeyCode::Char('?')
+            && !typing
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && let Some(help) = crate::help::for_mode(&self.mode)
         {
@@ -652,6 +683,8 @@ impl App {
             Mode::Maintenance(m) => match m.handle_key(key)? {
                 MaintAction::Run(req) => Some(Effect::MaintRun(req)),
                 MaintAction::Cancel => Some(Effect::MaintCancel),
+                MaintAction::SetAmbiente(a) => Some(Effect::MaintAmbiente(a)),
+                MaintAction::Input(i) => Some(Effect::MaintInput(i)),
                 MaintAction::Back => {
                     self.back_to_preview();
                     Some(Effect::MaintCancel)

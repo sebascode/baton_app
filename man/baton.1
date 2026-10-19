@@ -60,7 +60,7 @@ Una condición que debe cumplirse antes de pasar al paso siguiente: una confirma
 Dónde corre un paso: \fBlocal\fR, \fBssh\fR (host, usuario, directorio remoto, bastion opcional) o \fBcontext\fR (un docker context). Cada paso elige su destino.
 .TP
 .B ambiente
-Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-ambiente\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste como valor por defecto (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Cada ejecución sí registra con qué ambiente corrió, como dato del historial: \fBbaton last\fR, \fBbaton history\fR, \fBbaton\fR a secas y la interfaz lo muestran, y \fB\-\-resume\fR o \fBrollback\fR con otro ambiente que el de la última ejecución avisan (solo avisan: eligen el que les des). En la interfaz, la tecla \fBa\fR de la vista del plan abre un selector con los ambientes que baton conoce (las carpetas de \fI.baton/credentials/\fR y los de \fB[ambientes]\fR) y \fBninguno\fR; el elegido vale solo para esa sesión y no se guarda. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar. Los nombres son libres: baton no sabe cuál es producción. Para que lo trate con cuidado, márcalo con \fBprotegido = true\fR en \fB[ambientes.<nombre>]\fR de \fI.baton/config.toml\fR; en la interfaz, antes de ejecutar (salvo con dry\-run) y antes de un rollback en ese ambiente se pide escribir su nombre. Sin terminal no se pregunta nada, así que una ejecución de CI con \fB\-\-ambiente\fR no se detiene.
+Una dimensión aparte del destino (dev, staging, prod...). Decide de qué carpeta se leen las credenciales (\fI.baton/credentials/<ambiente>/\fR) y el valor de \fB{ambiente}\fR en los comandos; nunca cambia los pasos de un plan. Si dos ambientes necesitan pasos distintos, son dos planes. Se elige con \fB\-\-env\fR; si no se da, con la variable \fBBATON_AMBIENTE\fR y, si tampoco está, con \fBambiente\fR en \fB[defaults]\fR de \fI.baton/config.toml\fR. Baton nunca recuerda el último que usaste como valor por defecto (para no desplegar a producción por costumbre), y cuando no viene del flag dice de dónde salió. Cada ejecución sí registra con qué ambiente corrió, como dato del historial: \fBbaton last\fR, \fBbaton history\fR, \fBbaton\fR a secas y la interfaz lo muestran, y \fB\-\-resume\fR o \fBrollback\fR con otro ambiente que el de la última ejecución avisan (solo avisan: eligen el que les des). En la interfaz, la tecla \fBa\fR de la vista del plan abre un selector con los ambientes que baton conoce (las carpetas de \fI.baton/credentials/\fR y los de \fB[ambientes]\fR) y \fBninguno\fR; el elegido vale solo para esa sesión y no se guarda. Solo letras, números, \fB.\fR, \fB\-\fR y \fB_\fR. Un paso que usa \fB{ambiente}\fR sin que haya uno elegido no se ejecuta: la preparación lo informa antes de empezar. Los nombres son libres: baton no sabe cuál es producción. Para que lo trate con cuidado, márcalo con \fBprotegido = true\fR en \fB[ambientes.<nombre>]\fR de \fI.baton/config.toml\fR; en la interfaz, antes de ejecutar (salvo con dry\-run) y antes de un rollback en ese ambiente se pide escribir su nombre. Sin terminal no se pregunta nada, así que una ejecución de CI con \fB\-\-env\fR no se detiene.
 .TP
 .B credencial
 Una referencia \fIarchivo.env#PREFIJO\fR que agrupa las variables \fIPREFIJO_CAMPO\fR (por ejemplo \fIdocker.env#GHCR\fR agrupa \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR y \fBGHCR_TOKEN\fR). El plan guarda la referencia, nunca el valor.
@@ -72,6 +72,9 @@ Carpeta del proyecto. Por defecto, la actual o la primera superior que sea un pr
 .TP
 .BR \-q ", " \-\-quiet
 Calla los avisos de contexto que baton escribe por stderr (el proyecto, el plan o el ambiente que eligió solo). Los errores, los avisos que cambian lo que pasa y el resultado se muestran igual.
+.TP
+.B \-\-no\-color
+Sin colores en la salida y en la interfaz (equivale a definir \fBNO_COLOR\fR). Manda sobre \fBFORCE_COLOR\fR.
 .TP
 .BR \-h ", " \-\-help
 Muestra la ayuda de \fBbaton\fR o de un comando.
@@ -104,7 +107,7 @@ Responde que sí a los gates manuales cuando no hay terminal. Sin esta opción, 
 .BR \-\-backup ", " \-\-no\-backup
 Fuerzan hacer (o no hacer) backup, por encima de lo que diga el plan.
 .TP
-.BI \-\-ambiente " ambiente"
+.BI \-\-env " ambiente"
 Ambiente: carpeta de credenciales y valor de \fB{ambiente}\fR en los comandos. Ver \fBambiente\fR en la sección CONCEPTOS.
 .SS baton create plan
 Crea el archivo de un plan vacío y nada más (no lo abre ni toca \fI.baton/\fR). No pisa un plan existente. El nombre se normaliza a minúsculas, números, \fB\-\fR y \fB_\fR, y se avisa si cambió.
@@ -125,7 +128,7 @@ Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyect
 .BI \-\-target " destino"
 Destino de los pasos encontrados.
 .TP
-.BI \-\-ambiente " a,b,c"
+.BI \-\-env " a,b,c"
 Crea las carpetas de credenciales de esos ambientes.
 .TP
 .B \-\-no\-scan
@@ -154,94 +157,103 @@ Muestra el informe sin escribir nada.
 .SS baton rollback [plan]
 Deshace lo que hizo la última ejecución: corre el \fBrollback\fR de cada paso que terminó (y del que falló, que pudo dejar cosas a medias), en orden inverso.
 .TP
-.BI \-\-ambiente " ambiente"
+.BI \-\-env " ambiente"
 Ambiente de los comandos de rollback que usan \fB{ambiente}\fR y de las credenciales; se elige igual que en \fBbaton run\fR.
 .SS baton last [plan]
 Muestra cómo terminó la última ejecución de un plan: el resultado, una barra con una celda por paso (\fB■\fR hecho, \fB✗\fR falló, \fB▫\fR omitido, \fB□\fR sin hacer), cuántas ejecuciones lleva el plan y cómo terminó cada una, el estado y la duración de cada paso y qué hacer a continuación. Si la ejecución falló o se abortó, muestra además el último comando del paso donde se detuvo, lo que escribió y el error, sacados del log (cuya ruta también se indica). Sin plan usa el único del proyecto o pregunta cuál. Sale con 0 si la última ejecución terminó bien (con o sin advertencias), con 3 si falló o se abortó, y con 1 si el plan todavía no se ejecutó (el aviso va a stderr y stdout queda vacío).
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
+.TP
+.B \-\-json
+En vez del texto, imprime un JSON por stdout con la ejecución (id, resultado, duración, ambiente, pasos con su estado), los conteos, el log y, si se detuvo, el extracto del paso. Los códigos de salida no cambian.
 .SS baton db [base]
 Consulta una base de datos del plan (una credencial \fBdb\fR, \fBmysql\fR o \fBsqlite\fR) con las credenciales de \fI.baton/\fR y muestra el resultado. \fBbase\fR es el id de la credencial; sin él se usa la única del plan. Sin ninguna consulta lista las bases del plan y cómo consultarlas. La consulta es \fBuna sola sentencia\fR (para varias, usa un paso \fBsql\fR) y viaja por la entrada estándar del motor, nunca en un argumento. Corre en tu máquina con \fBpsql\fR, \fBmysql\fR (o \fBdocker exec\fR si la credencial tiene \fBCONTAINER\fR) o \fBsqlite3\fR. Por defecto es de \fBsolo lectura\fR: SQLite abre el archivo en solo lectura y en PostgreSQL se activa \fBdefault_transaction_read_only\fR (un seguro contra accidentes, no una barrera de seguridad); en MySQL, una transacción de solo lectura. Sale con 0 si todo bien, con 1 si faltan datos de la credencial o el programa, con 2 por un error de uso (consulta vacía o de varias sentencias, base ambigua, consulta destructiva sin confirmar) y con 3 si el motor devolvió un error o no respondió a tiempo.
 .TP
-.BI \-c " consulta" ", " \-\-consulta " consulta"
+.BI \-c " consulta" ", " \-\-query " consulta"
 La consulta.
 .TP
-.BI \-f " archivo" ", " \-\-archivo " archivo"
+.BI \-f " archivo" ", " \-\-file " archivo"
 Lee la consulta de un archivo; \fB\-\fR la lee de la entrada estándar (\fBbaton\fR nunca la lee por su cuenta).
 .TP
 .BI \-\-plan " plan"
 Plan del que se toman las credenciales (por defecto, el único del proyecto).
 .TP
-.BI \-\-formato " tabla|registro|csv|json"
+.BI \-\-format " tabla|registro|csv|json"
 Cómo se muestra el resultado. La tabla alinea los números a la derecha, muestra NULL y recorta las celdas largas; si estás en una terminal y la tabla es más ancha que la pantalla, se muestra sola como \fBregistro\fR (por una tubería, como \fB| less \-S\fR, la tabla se deja entera); \fBregistro\fR escribe un bloque por fila, con cada columna en su línea (\fB\- fila 1 de 3\fR); \fBcsv\fR es la salida del motor (con un NULL como campo vacío); \fBjson\fR es un arreglo de objetos con las columnas en orden, los números como números y NULL como \fBnull\fR.
 .TP
-.BI \-\-limite " n"
+.BI \-\-limit " n"
 Cuántas filas se muestran en la tabla (200 por defecto; 0 las muestra todas). Con \fBcsv\fR y \fBjson\fR siempre salen todas.
 .TP
-.B \-\-completo
+.B \-\-full
 No recorta las celdas largas de la tabla (60 columnas por defecto).
 .TP
-.B \-\-escribir
+.B \-\-write
 Permite modificar datos. Una sentencia destructiva (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR o \fBUPDATE\fR sin \fBWHERE\fR...) además necesita \fB\-\-assume\-yes\fR.
 .TP
 .B \-\-assume\-yes
 Ejecuta una consulta destructiva sin más confirmación.
 .TP
-.BI \-\-ambiente " ambiente"
+.BI \-\-env " ambiente"
 Ambiente del que se resuelven las credenciales.
 .TP
 .BI \-\-timeout " duración"
 Cuánto se espera la respuesta (60s por defecto).
 .TP
-.BR \-i ", " \-\-interactivo
+.BR \-i ", " \-\-interactive
 Abre una sesión interactiva: escribes consultas terminadas en \fB;\fR (en una o varias líneas) y comandos que empiezan con \fB\\\fR. Se abre sola cuando das una base, no das consulta y estás en una terminal. Los comandos son \fB\\tablas\fR, \fB\\columnas T\fR, \fB\\formato tabla|registro|csv|json\fR, \fB\\limite N\fR, \fB\\completo\fR, \fB\\escribir\fR (permite modificar datos; una sentencia destructiva pide confirmar), \fB\\lectura\fR, \fB\\bases\fR, \fB\\?\fR y \fB\\q\fR (o ctrl+d). Un error no cierra la sesión. Cada consulta abre su propia conexión, así que una transacción no se mantiene abierta entre una y otra. El historial se guarda en \fI.baton/db_history\fR (permisos 600) y deja fuera lo que parece una contraseña o un token.
 .SS baton ops [plan]
-Mantención sin armar un plan (en la vista del plan, la tecla \fBm\fR abre la misma mantención dentro de la interfaz: servicios y acciones a la izquierda, la salida en vivo debajo; \fBenter\fR ejecuta, \fBx\fR corta, \fBesc\fR vuelve al plan y nada se cierra solo): ver los logs de un servicio, reiniciarlo, actualizar su imagen o borrarla y descargarla de nuevo, y correr las tareas propias del plan. Actúa sobre los servicios de los pasos \fBcompose\fR activos del plan, en el destino de cada paso, con las credenciales del plan (todas, como un paso compose) y sin tocar el historial ni el estado de las ejecuciones. No sincroniza: en un destino ssh usa lo que la última ejecución dejó allí. Sin \fB\-\-accion\fR, \fB\-\-tarea\fR ni \fB\-\-script\fR, en una terminal abre un menú (elige qué hacer y sobre qué servicio, y vuelve al menú al terminar); sin terminal lista los servicios, las acciones, las tareas y los scripts. Los scripts \fI.sh\fR sueltos del proyecto (no son pasos del plan) se eligen por carpeta, un nivel por vez (\fBa > b > c\fR: el nivel de \fBc\fR solo aparece después de elegir \fBb\fR); corren en su propia carpeta, con el intérprete de su shebang y con las credenciales del plan, y \fBsiempre piden confirmar\fR (sin terminal, solo con \fB\-\-assume\-yes\fR). Las acciones son \fBlogs\fR, \fBestado\fR, \fBreiniciar\fR, \fBactualizar\fR (\fBdocker compose pull\fR y \fBup \-d\fR) y \fBreimagen\fR (anota las imágenes del servicio, lo borra con \fBrm \-sf\fR, borra esas imágenes, vuelve a descargar y levanta; sin un contenedor previo no hay imagen que borrar y solo descarga; con podman actúa sobre el compose entero con \fBdown \-\-rmi all\fR y no admite \fB\-\-servicio\fR). Las que cambian lo que corre (\fBreiniciar\fR, \fBactualizar\fR, \fBreimagen\fR) piden confirmar en una terminal y, sin terminal, se rechazan salvo con \fB\-\-assume\-yes\fR; \fBlogs\fR y \fBestado\fR no preguntan. Sin \fB\-\-servicio\fR actúan sobre todos los servicios de cada archivo compose. Una tarea es un \fB[[tasks]]\fR del plan que corre en su carpeta y destino y recibe solo las credenciales que su comando menciona. Con \fBctrl+c\fR se corta lo que corre (un seguimiento de logs no termina solo) y \fBbaton\fR sale con 0. Sale con 2 por un error de uso y con 3 si el comando falló.
+Mantención sin armar un plan (en la vista del plan, la tecla \fBm\fR abre la misma mantención dentro de la interfaz: servicios y acciones a la izquierda, la salida en vivo debajo; \fBenter\fR ejecuta, \fBx\fR corta, \fBesc\fR vuelve al plan y nada se cierra solo): ver los logs de un servicio, reiniciarlo, actualizar su imagen o borrarla y descargarla de nuevo, y correr las tareas propias del plan. Actúa sobre los servicios de los pasos \fBcompose\fR activos del plan, en el destino de cada paso, con las credenciales del plan (todas, como un paso compose) y sin tocar el historial ni el estado de las ejecuciones. No sincroniza: en un destino ssh usa lo que la última ejecución dejó allí. Sin \fB\-\-action\fR, \fB\-\-task\fR ni \fB\-\-script\fR, en una terminal abre la interfaz directo en esa pantalla de mantención (\fBesc\fR pasa a la vista del plan y nada se cierra solo; con \fB\-\-no\-tui\fR, un menú de preguntas en la terminal); sin terminal lista los servicios, las acciones, las tareas y los scripts. Los scripts \fI.sh\fR sueltos del proyecto (no son pasos del plan) se eligen por carpeta, un nivel por vez (\fBa > b > c\fR: el nivel de \fBc\fR solo aparece después de elegir \fBb\fR); corren en su propia carpeta, con el intérprete de su shebang y con las credenciales del plan, y \fBsiempre piden confirmar\fR (sin terminal, solo con \fB\-\-assume\-yes\fR). Las acciones son \fBlogs\fR, \fBestado\fR, \fBreiniciar\fR, \fBactualizar\fR (\fBdocker compose pull\fR y \fBup \-d\fR) y \fBreimagen\fR (anota las imágenes del servicio, lo borra con \fBrm \-sf\fR, borra esas imágenes, vuelve a descargar y levanta; sin un contenedor previo no hay imagen que borrar y solo descarga; con podman actúa sobre el compose entero con \fBdown \-\-rmi all\fR y no admite \fB\-\-service\fR). Las que cambian lo que corre (\fBreiniciar\fR, \fBactualizar\fR, \fBreimagen\fR) piden confirmar en una terminal y, sin terminal, se rechazan salvo con \fB\-\-assume\-yes\fR; \fBlogs\fR y \fBestado\fR no preguntan. Sin \fB\-\-service\fR actúan sobre todos los servicios de cada archivo compose. Una tarea es un \fB[[tasks]]\fR del plan que corre en su carpeta y destino y recibe solo las credenciales que su comando menciona. Con \fBctrl+c\fR se corta lo que corre (un seguimiento de logs no termina solo) y \fBbaton\fR sale con 0. Sale con 2 por un error de uso y con 3 si el comando falló.
 .TP
-.BI \-a " acción" ", " \-\-accion " acción"
+.BI \-a " acción" ", " \-\-action " acción"
 Qué hacer: \fBlogs\fR, \fBestado\fR, \fBreiniciar\fR, \fBactualizar\fR o \fBreimagen\fR.
 .TP
-.BI \-s " servicio" ", " \-\-servicio " servicio"
+.BI \-s " servicio" ", " \-\-service " servicio"
 Servicio sobre el que actuar (su nombre en el compose); sin él, todos los de cada compose.
 .TP
-.BI \-t " tarea" ", " \-\-tarea " tarea"
+.BI \-t " tarea" ", " \-\-task " tarea"
 Ejecuta una tarea del plan en lugar de una acción.
 .TP
 .BI \-\-script " ruta"
-Ejecuta un script \fI.sh\fR suelto del proyecto (ruta relativa a la raíz, por ejemplo \fIscripts/db/dump.sh\fR) en lugar de una acción. Solo valen los que el escaneo ofrece (los mismos que lista \fBbaton ops\fR). No se combina con \fB\-\-accion\fR ni \fB\-\-tarea\fR.
+Ejecuta un script \fI.sh\fR suelto del proyecto (ruta relativa a la raíz, por ejemplo \fIscripts/db/dump.sh\fR) en lugar de una acción. Solo valen los que el escaneo ofrece (los mismos que lista \fBbaton ops\fR). No se combina con \fB\-\-action\fR ni \fB\-\-task\fR.
 .TP
-.B \-\-seguir
+.B \-\-follow
 Con la acción \fBlogs\fR, sigue mostrándolos en vivo hasta \fBctrl+c\fR.
 .TP
-.BI \-\-lineas " n"
+.BI \-\-lines " n"
 Cuántas líneas de logs se muestran al empezar (100 por defecto).
 .TP
 .B \-\-assume\-yes
 Ejecuta sin pedir confirmación.
 .TP
-.BI \-\-ambiente " ambiente"
+.BI \-\-env " ambiente"
 Ambiente del que se resuelven las credenciales.
+.TP
+.B \-\-no\-tui
+Sin la interfaz: en una terminal usa un menú de preguntas en vez de abrir la pantalla de mantención.
 .SS baton history [plan]
 Lista las ejecuciones anteriores de un plan que baton recuerda (la última y hasta 20 más), de la más reciente a la más antigua, una por línea: cómo terminó, cuándo, cuánto tardó, una barra con el avance por paso y, si falló o se abortó, en qué paso. Para el detalle de la última, con el error, usa \fBbaton last\fR. Sin plan usa el único del proyecto o pregunta cuál. Si el plan todavía no se ejecutó, lo dice por stderr, no imprime nada por stdout y sale con 0.
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
-.SS baton settings [list|get|set|unset]
-La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR, que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
 .TP
-.B \-\-proyecto
+.B \-\-json
+Imprime un JSON por stdout con las ejecuciones (de la más reciente a la más antigua) y los conteos. Sin ejecuciones sale con 0 y \fBruns\fR vacío.
+.SS baton settings [list|get|set|unset]
+La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR (con \fB\-\-json\fR da un JSON con clave, valor y origen), que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR), \fBui.colors\fR (paleta de la interfaz: \fBfixed\fR o \fBterminal\fR, ver \fBBATON_COLORS\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
+.TP
+.B \-\-project
 En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
 .SS baton docs [plan]
-Escribe la documentación de un plan en markdown: un encabezado con su descripción y un índice, un resumen en tabla (pasos, gates, destinos con su host, ambientes, credenciales, mantención), \fBcómo se usa\fR (los comandos de siempre para ese plan y, si hay ambientes, uno por ambiente con \fB\-\-ambiente\fR), un diagrama \fBmermaid\fR con el orden de los pasos (los gates como rombos, las dependencias como líneas punteadas y los pasos desactivados con el borde cortado), una tabla de pasos con el detalle de cada uno (comando, timeout, reintentos, gate, rollback), las \fBvariables\fR (las plantillas \fB{plan}\fR, \fB{fecha}\fR... con los pasos que las usan y las variables de entorno que baton lee), las credenciales con el nombre de las variables que lee cada una, los destinos (tipo, host y puerto, carpeta remota y bastion), el proyecto (los planes que existen con su última ejecución y los ambientes generados, con cuáles son protegidos y qué archivos de credenciales tiene cada uno) y la \fBmantención\fR de \fBbaton ops\fR (los servicios de los compose del plan con sus acciones, las tareas y los scripts \fB.sh\fR del proyecto). Sale por la salida estándar y se puede guardar con \fB\-\-salida\fR. Está pensada para versionarse: \fBnunca incluye valores de credenciales\fR (solo su referencia \fIarchivo.env#PREFIJO\fR, el nombre de sus variables y el del proveedor), ni rutas de \fI.baton/\fR, ni el usuario, la credencial o la contraseña de un destino. Los hosts y puertos sí aparecen, porque dicen a dónde apunta el plan. Lo que dice el plan, comandos incluidos, se muestra tal cual. Un nombre, una descripción o un comando con símbolos de markdown o de mermaid no rompe el documento. Un plan con errores de validación se documenta igual y sus problemas van a stderr. Sale con 2 si el plan no existe.
+Escribe la documentación de un plan en markdown: un encabezado con su descripción y un índice, un resumen en tabla (pasos, gates, destinos con su host, ambientes, credenciales, mantención), \fBcómo se usa\fR (los comandos de siempre para ese plan y, si hay ambientes, uno por ambiente con \fB\-\-env\fR), un diagrama \fBmermaid\fR con el orden de los pasos (los gates como rombos, las dependencias como líneas punteadas y los pasos desactivados con el borde cortado), una tabla de pasos con el detalle de cada uno (comando, timeout, reintentos, gate, rollback), las \fBvariables\fR (las plantillas \fB{plan}\fR, \fB{fecha}\fR... con los pasos que las usan y las variables de entorno que baton lee), las credenciales con el nombre de las variables que lee cada una, los destinos (tipo, host y puerto, carpeta remota y bastion), el proyecto (los planes que existen con su última ejecución y los ambientes generados, con cuáles son protegidos y qué archivos de credenciales tiene cada uno) y la \fBmantención\fR de \fBbaton ops\fR (los servicios de los compose del plan con sus acciones, las tareas y los scripts \fB.sh\fR del proyecto). Sale por la salida estándar y se puede guardar con \fB\-\-output\fR. Está pensada para versionarse: \fBnunca incluye valores de credenciales\fR (solo su referencia \fIarchivo.env#PREFIJO\fR, el nombre de sus variables y el del proveedor), ni rutas de \fI.baton/\fR, ni el usuario, la credencial o la contraseña de un destino. Los hosts y puertos sí aparecen, porque dicen a dónde apunta el plan. Lo que dice el plan, comandos incluidos, se muestra tal cual. Un nombre, una descripción o un comando con símbolos de markdown o de mermaid no rompe el documento. Un plan con errores de validación se documenta igual y sus problemas van a stderr. Sale con 2 si el plan no existe.
 .TP
-.BI \-o " archivo" ", \-\-salida " archivo
+.BI \-o " archivo" ", \-\-output " archivo
 Escribe en un archivo en vez de la salida estándar.
 .TP
-.B \-\-estado
+.B \-\-with\-state
 Agrega cómo terminó la última ejecución (por paso). Cambia con cada ejecución, por eso no va por defecto.
 .TP
-.B \-\-sin\-mermaid
+.B \-\-no\-mermaid
 Sin el diagrama, para visores de markdown que no lo dibujan.
 .SS baton plugin list
 Lista los plugins de los dos ámbitos, el \fBproyecto\fR (\fIbaton/plugins/\fR) y el \fBglobal\fR (esta máquina), con su versión y el tipo de paso que aportan. Uno que no se puede cargar sale marcado con \fB✗\fR y sus errores con \fIarchivo:línea:columna\fR. Si un plugin del proyecto tapa a uno global del mismo tipo, lo dice. Fuera de un proyecto solo muestra el global.
@@ -258,8 +270,14 @@ No pregunta.
 Crea \fI./nombre/baton\-plugin.toml\fR con un manifiesto para empezar (que pasa \fBplugin validate\fR) y dice los siguientes pasos. No pisa uno existente. No necesita proyecto.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
+.TP
+.B \-\-json
+Imprime un JSON por stdout (\fBok\fR, \fBerrors\fR, \fBwarnings\fR y, por archivo, sus diagnósticos con línea y columna) en vez del texto; el código de salida es el mismo.
 .SS baton config
 Abre la configuración del proyecto, con pestañas \fBDestinos\fR, \fBLogs\fR, \fBCredenciales\fR y \fBPlanes\fR. Permite probar la conexión de un destino y guardar con \fBctrl s\fR. \fBenter\fR sobre un plan, en la pestaña Planes, lo abre; \fBc\fR lo copia, \fBr\fR lo renombra y \fBd\fR lo elimina. Necesita una terminal.
+.TP
+.B \-\-json
+En vez de abrir la pantalla, imprime la configuración del proyecto como JSON (destinos, logs, ambientes y planes; nunca valores de credenciales ni los comandos de los proveedores de secretos). No necesita terminal.
 .SS baton demo
 Recorre todas las pantallas con datos de mentira, sin tocar ningún proyecto. Sirve para conocer baton y para mostrarlo.
 .TP
@@ -478,7 +496,7 @@ Los pasos se ejecutan en el orden del archivo. \fBdepends_on\fR se valida (exist
 [defaults]
 target = "local"
 secrets = "vault"         # proveedor de secretos por defecto
-ambiente = "dev"          # ambiente si no das \-\-ambiente ni BATON_AMBIENTE
+ambiente = "dev"          # ambiente si no das \-\-env ni BATON_AMBIENTE
 engine = "auto"           # motor de contenedores: auto, docker o podman
 
 [ambientes.produccion]    # el nombre lo eliges tú; baton no conoce ninguno
@@ -578,7 +596,7 @@ Sin terminal no se pregunta nada: cada campo debe resolverse desde el \fI.env\fR
 .SH IDIOMA
 baton habla español por defecto y también inglés. Se elige con \fBBATON_LANG\fR (\fBes\fR, \fBen\fR o \fBauto\fR) o con \fBui.language\fR en la configuración global o del proyecto (\fBbaton settings set ui.language en\fR). Manda la variable, después el proyecto, después la global; sin nada se usa español, \fBincluso si el sistema está en inglés\fR: el idioma del sistema solo cuenta con \fBauto\fR. Un valor que no existe se ignora (queda español) y \fBvalidate\fR lo avisa.
 .PP
-Se traducen las pantallas de la interfaz, la salida de \fBrun\fR y de \fBops\fR, \fBsettings\fR, \fBplugin\fR, \fBinit\fR y \fBdocs\fR (la documentación se genera en el idioma activo, con los comandos y nombres del plan tal como están escritos), y los mensajes del runner (el log de cada ejecución se escribe en el idioma activo). Siguen en español la ayuda (\fB\-\-help\fR), este manual, los diagnósticos de \fBvalidate\fR, el resto de los comandos y los errores de la exportación de logs; un texto sin traducción se muestra en español, nunca vacío. Los nombres de comandos, opciones, claves y archivos no se traducen.
+Se traducen las pantallas de la interfaz, la salida de \fBrun\fR y de \fBops\fR, \fBsettings\fR, \fBplugin\fR, \fBinit\fR y \fBdocs\fR (la documentación se genera en el idioma activo, con los comandos y nombres del plan tal como están escritos), y los mensajes del runner (el log de cada ejecución se escribe en el idioma activo). Los encabezados de \fB\-\-help\fR (\fBUso\fR, \fBOpciones\fR, \fBComandos\fR) y los errores de argumentos (\fBargumento inesperado\fR, \fBvalor no válido\fR...) también siguen el idioma, y salen con el mismo formato \fBerror:\fR de los demás errores. Siguen en español la descripción de cada comando y opción en la ayuda, este manual, los diagnósticos de \fBvalidate\fR, el resto de los comandos y los errores de la exportación de logs; un texto sin traducción se muestra en español, nunca vacío. Los nombres de comandos, opciones, claves y archivos no se traducen.
 .PP
 Las traducciones van dentro del binario, en \fIcrates/baton\-core/i18n/<código>.toml\fR (la clave es el texto en español y el valor su traducción); agregar un idioma es agregar ese archivo y una prueba lo mantiene completo.
 .
@@ -696,6 +714,18 @@ Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBe
 .B BATON_LANG
 Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
 .TP
+.B NO_COLOR
+Si está definida y no vacía, sin colores (https://no\-color.org). Manda sobre \fBFORCE_COLOR\fR.
+.TP
+.B FORCE_COLOR
+Si está definida y no es \fB0\fR, con colores aunque la salida no sea una terminal (por ejemplo, una tubería a \fBless \-R\fR); también vence a \fBTERM=dumb\fR.
+.TP
+.B BATON_COLORS
+Paleta de la interfaz: \fBfixed\fR (por defecto, con fondos propios para la fila elegida y los estados) o \fBterminal\fR (solo los colores de tu tema: sin fondos propios, con lo secundario atenuado en vez de gris; sirve en temas claros o de poco contraste). Manda sobre \fBui.colors\fR.
+.TP
+.B BATON_ASCII
+Símbolos ASCII (\fB+ x ~ # | -\fR en vez de \fB✓ ✗ ◐ ◆ │ ─\fR) para consolas sin fuente Unicode. \fB1\fR los activa y \fB0\fR los apaga; sin valor se activan solos si el juego de caracteres de la terminal no es UTF\-8 (\fBLC_ALL\fR, \fBLC_CTYPE\fR o \fBLANG\fR, el primero definido) o si \fBTERM=linux\fR. Cada símbolo pasa a un solo carácter, así que el dibujo no cambia de ancho; no afecta a las letras con tilde, que dependen de la terminal. Los textos de ayuda de los menús de preguntas (\fBbaton ops \-\-no\-tui\fR, \fBbaton select\fR) conservan sus flechas.
+.TP
 .B BATON_CONFIG
 Archivo de configuración global en vez de \fI~/.config/baton/config.toml\fR (ver \fBbaton settings\fR).
 .TP
@@ -753,7 +783,7 @@ Ejecutar en CI, sin terminal, con las credenciales en variables y los gates manu
 .nf
 .RS
 GHCR_REGISTRY=ghcr.io GHCR_USER=ci GHCR_TOKEN=$TOKEN \\
-  baton run instalar \-\-assume\-yes \-\-ambiente prod
+  baton run instalar \-\-assume\-yes \-\-env prod
 .RE
 .fi
 .PP

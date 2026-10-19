@@ -15,7 +15,7 @@ use baton_store::Project;
 use crate::remote::make_transport;
 use crate::runner::{mentions_variable, resolve_credentials};
 use crate::transport::Command;
-pub use crate::transport::{Exit, Stream};
+pub use crate::transport::{Exit, Input, InputTx, Stream};
 
 /// Qué correr y dónde.
 pub struct Job {
@@ -28,6 +28,8 @@ pub struct Job {
     /// Entrega todas las credenciales del plan (un compose las interpola sin que el comando lo
     /// diga). Si no, solo las que el comando menciona.
     pub all_credentials: bool,
+    /// Entrada por teclado (`Input::channel`); `None`: el comando no lee nada.
+    pub input: Option<Input>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +62,7 @@ pub fn run(
         env: Vec::new(),
         secrets,
         timeout: job.timeout,
+        input: job.input,
     };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

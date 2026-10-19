@@ -6,7 +6,7 @@ use baton_core::maintenance::Action;
 
 use crate::app::{App, Effect, Mode};
 use crate::fake;
-use crate::maint_view::MaintResult;
+use crate::maint_view::{MaintInput, MaintResult};
 use crate::testutil::{render, text};
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -226,4 +226,256 @@ fn esc_climbs_one_level_and_from_the_root_returns_to_the_actions() {
     assert!(t.contains("Acciones") && !t.contains("Scripts ·"), "{t}");
     // y seguimos en la pantalla de mantención, no en el plan
     assert!(matches!(app.mode, Mode::Maintenance(_)));
+}
+
+#[test]
+fn the_log_lines_asked_for_follow_lineas_in_both_log_actions() {
+    let mut app = App::new(fake::preview());
+    app.show_maintenance(fake::maintenance().with_tail(25));
+    app.handle_key(key(KeyCode::Down)); // api
+    app.handle_key(key(KeyCode::Tab));
+    let Some(Effect::MaintRun(req)) = app.handle_key(key(KeyCode::Enter)) else {
+        panic!("no pidió ejecutar")
+    };
+    assert_eq!(
+        req.action,
+        Some(Action::Logs {
+            follow: false,
+            tail: 25
+        })
+    );
+    assert_eq!(app.handle_key(chr('x')), Some(Effect::MaintCancel));
+    // "logs en vivo" también usa las 25 líneas
+    app.maint_finished(MaintResult::Cancelled);
+    app.handle_key(key(KeyCode::Down));
+    let Some(Effect::MaintRun(req)) = app.handle_key(key(KeyCode::Enter)) else {
+        panic!("no pidió ejecutar")
+    };
+    assert_eq!(
+        req.action,
+        Some(Action::Logs {
+            follow: true,
+            tail: 25
+        })
+    );
+}
+
+#[test]
+fn ascii_mode_replaces_every_symbol_without_changing_the_layout() {
+    use crate::testutil::{render, text};
+    let app = opened();
+    let mut unicode = render(100, 26, |b, a| app.render(b, a));
+    let before = text(&unicode);
+    assert!(before.contains('│') && before.contains('╭'), "{before}");
+    crate::theme::ascii_symbols(&mut unicode);
+    let after = text(&unicode);
+    for c in "│─╭╮╰╯├┤┬┴▸⚠".chars() {
+        assert!(!after.contains(c), "{c}: {after}");
+    }
+    assert!(after.contains('|') && after.contains('+'), "{after}");
+    // las letras con tilde no se tocan y cada línea mide lo mismo que antes
+    assert!(after.contains("Mantención"), "{after}");
+    let widths = |t: &str| t.lines().map(|l| l.chars().count()).collect::<Vec<_>>();
+    assert_eq!(widths(&before), widths(&after));
+}
+
+#[test]
+fn the_terminal_palette_drops_fixed_backgrounds_and_gray_but_keeps_state_colors() {
+    use crate::testutil::render;
+    use crate::theme;
+    use ratatui::style::{Color, Modifier};
+    let app = App::new(fake::preview());
+    let mut buf = render(100, 26, |b, a| app.render(b, a));
+    let has = |buf: &ratatui::buffer::Buffer, f: &dyn Fn(&ratatui::buffer::Cell) -> bool| {
+        buf.content.iter().any(f)
+    };
+    assert!(
+        has(&buf, &|c| c.fg == theme::MUTED),
+        "la pantalla usa gris fijo"
+    );
+    theme::terminal_palette(&mut buf);
+    assert!(!has(&buf, &|c| c.fg == theme::MUTED || c.fg == theme::SECONDARY));
+    assert!(!has(&buf, &|c| matches!(c.bg, Color::Indexed(_))));
+    assert!(
+        has(&buf, &|c| c.modifier.contains(Modifier::DIM)),
+        "lo secundario se atenúa"
+    );
+    assert!(
+        has(&buf, &|c| c.modifier.contains(Modifier::REVERSED)),
+        "la fila elegida va en inverso"
+    );
+}
+
+fn opened_with_ambientes(current: Option<&str>) -> App {
+    let mut app = App::new(fake::preview());
+    app.show_maintenance(fake::maintenance().with_ambientes(
+        vec!["qa".into(), "prod".into()],
+        current.map(str::to_string),
+    ));
+    app
+}
+
+#[test]
+fn without_known_environments_a_does_nothing_and_is_not_offered() {
+    let mut app = opened();
+    assert!(app.handle_key(chr('a')).is_none());
+    assert!(!shown(&app, 100, 26).contains("ambiente"));
+}
+
+#[test]
+fn a_opens_the_environment_picker_and_enter_asks_to_switch() {
+    let mut app = opened_with_ambientes(Some("qa"));
+    assert!(shown(&app, 100, 26).contains("Mantención · instalar · ambiente qa"));
+    assert!(app.handle_key(chr('a')).is_none());
+    let t = shown(&app, 100, 26);
+    assert!(
+        t.contains("Ambiente") && t.contains("(ninguno)") && t.contains("prod"),
+        "{t}"
+    );
+    app.handle_key(key(KeyCode::Down));
+    let effect = app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(effect, Some(Effect::MaintAmbiente(Some(a))) if a == "prod"));
+}
+
+#[test]
+fn choosing_the_current_environment_or_esc_changes_nothing() {
+    let mut app = opened_with_ambientes(Some("qa"));
+    app.handle_key(chr('a'));
+    assert!(app.handle_key(key(KeyCode::Enter)).is_none());
+    app.handle_key(chr('a'));
+    app.handle_key(key(KeyCode::Down));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(
+        matches!(app.mode, Mode::Maintenance(_)),
+        "esc solo cierra el selector"
+    );
+}
+
+#[test]
+fn it_refuses_to_switch_environment_while_something_runs() {
+    let mut app = opened_with_ambientes(None);
+    app.handle_key(key(KeyCode::Tab));
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintRun(_))
+    ));
+    assert!(app.handle_key(chr('a')).is_none());
+    assert!(
+        !shown(&app, 100, 26).contains("(ninguno)"),
+        "no abre el selector"
+    );
+}
+
+fn ctrl(c: char) -> KeyEvent {
+    KeyEvent {
+        modifiers: KeyModifiers::CONTROL,
+        ..chr(c)
+    }
+}
+
+fn running() -> App {
+    let mut app = opened();
+    app.handle_key(key(KeyCode::Tab));
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintRun(_))
+    ));
+    app
+}
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        assert!(app.handle_key(chr(c)).is_none());
+    }
+}
+
+#[test]
+fn i_opens_a_modal_while_something_runs_and_enter_sends_the_line() {
+    let mut app = running();
+    assert!(shown(&app, 100, 26).contains("enviar texto"));
+    assert!(app.handle_key(chr('i')).is_none());
+    let t = shown(&app, 100, 26);
+    assert!(t.contains("Entrada del comando"), "{t}");
+    typed(&mut app, "a?q");
+    assert!(shown(&app, 100, 26).contains("a?q"));
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintInput(MaintInput::Line("a?q".into())))
+    );
+    let t = shown(&app, 100, 26);
+    assert!(
+        !t.contains("Entrada del comando"),
+        "se cierra al enviar\n{t}"
+    );
+    assert!(t.contains("› a?q"), "queda en el log\n{t}");
+}
+
+#[test]
+fn a_question_left_by_the_command_opens_the_modal_with_that_question() {
+    let mut app = running();
+    app.maint_prompt("¿Borrar todo? [s/N] ");
+    let t = shown(&app, 100, 26);
+    assert!(
+        t.contains("Entrada del comando") && t.contains("¿Borrar todo? [s/N]"),
+        "{t}"
+    );
+    typed(&mut app, "s");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintInput(MaintInput::Line("s".into())))
+    );
+}
+
+#[test]
+fn tab_hides_what_is_typed_and_keeps_it_out_of_the_log() {
+    let mut app = running();
+    app.handle_key(chr('i'));
+    app.handle_key(key(KeyCode::Tab));
+    typed(&mut app, "secreto");
+    let t = shown(&app, 100, 26);
+    assert!(!t.contains("secreto") && t.contains("•••••••"), "{t}");
+    assert_eq!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintInput(MaintInput::Line("secreto".into())))
+    );
+    assert!(!shown(&app, 100, 26).contains("secreto"));
+}
+
+#[test]
+fn ctrl_d_ends_the_input_and_esc_just_closes_the_modal() {
+    let mut app = running();
+    app.handle_key(chr('i'));
+    assert_eq!(
+        app.handle_key(ctrl('d')),
+        Some(Effect::MaintInput(MaintInput::Eof))
+    );
+    app.handle_key(chr('i'));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(
+        matches!(app.mode, Mode::Maintenance(_)),
+        "esc no sale de la pantalla"
+    );
+    assert!(!shown(&app, 100, 26).contains("Entrada del comando"));
+}
+
+#[test]
+fn ctrl_c_in_the_modal_cuts_the_command_and_i_needs_something_running() {
+    let mut app = running();
+    app.handle_key(chr('i'));
+    assert_eq!(app.handle_key(ctrl('c')), Some(Effect::MaintCancel));
+    let mut idle = opened();
+    assert!(idle.handle_key(chr('i')).is_none());
+    let t = shown(&idle, 100, 26);
+    assert!(
+        t.contains("nada en curso") && !t.contains("Entrada del comando"),
+        "{t}"
+    );
+}
+
+#[test]
+fn the_modal_closes_by_itself_when_the_command_ends() {
+    let mut app = running();
+    app.maint_prompt("¿seguir? ");
+    app.maint_finished(MaintResult::Ok);
+    assert!(!shown(&app, 100, 26).contains("Entrada del comando"));
 }

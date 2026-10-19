@@ -47,10 +47,10 @@ for pair in "x86_64:amd64" "aarch64:arm64"; do
   [ -f "$src" ] || { echo "error: falta $src" >&2; exit 1; }
   stage="$work/$arch"
   mkdir -p "$stage"
-  tar -xzf "$src" -C "$stage" baton baton.1
-  gzip -9n "$stage/baton.1"
+  tar -xzf "$src" -C "$stage" baton baton.1 baton.en.1
+  gzip -9n "$stage/baton.1" "$stage/baton.en.1"
   for format in deb rpm; do
-    ARCH="$arch" VERSION="$version" BINARY="$stage/baton" MANPAGE="$stage/baton.1.gz" \
+    ARCH="$arch" VERSION="$version" BINARY="$stage/baton" MANPAGE="$stage/baton.1.gz" MANPAGE_EN="$stage/baton.en.1.gz" \
       "$work/nfpm" package --config "$root/packaging/nfpm.yaml" --packager "$format" \
       --target "$out/" >/dev/null
   done

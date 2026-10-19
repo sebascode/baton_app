@@ -77,9 +77,45 @@ pub fn tag_color(label: &str) -> Color {
     }
 }
 
-/// `NO_COLOR` definido y no vacío (https://no-color.org): la interfaz se dibuja sin colores.
+/// ¿Se dibuja sin colores? (`NO_COLOR`, https://no-color.org, o `--no-color`; la interfaz
+/// siempre corre en una terminal).
 pub fn no_color() -> bool {
-    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+    !baton_core::color::enabled(true)
+}
+
+/// Deja que mande el tema de la terminal (`ui.colors = terminal`): sin los fondos propios (la
+/// fila elegida y los estados van en vídeo inverso) y con lo secundario atenuado en vez de gris
+/// fijo, que en temas claros o de poco contraste casi no se lee. Los colores de estado (verde,
+/// rojo...) son los del tema y se quedan.
+pub fn terminal_palette(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        if cell.fg == MUTED {
+            cell.modifier |= Modifier::DIM;
+            cell.fg = Color::Reset;
+        } else if cell.fg == SECONDARY {
+            cell.fg = Color::Reset;
+        }
+        if [SELECTED_BG, OK_BG, WARN_BG, ERR_BG].contains(&cell.bg) {
+            cell.modifier |= Modifier::REVERSED;
+            cell.bg = Color::Reset;
+        } else if cell.bg == PANEL_BG {
+            cell.bg = Color::Reset;
+        }
+    }
+}
+
+/// Cambia cada símbolo de un buffer ya dibujado por su carácter ASCII (`BATON_ASCII`, o una
+/// terminal que no es UTF-8): `✓` pasa a `+`, `│` a `|`, `╭` a `+`... Cada uno es de un solo
+/// carácter, así que el dibujo no cambia de ancho.
+pub fn ascii_symbols(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        let mut chars = cell.symbol().chars();
+        if let (Some(c), None) = (chars.next(), chars.next())
+            && let Some(a) = baton_core::ascii::map(c)
+        {
+            cell.set_char(a);
+        }
+    }
 }
 
 /// Quita los colores de un buffer ya dibujado y los reemplaza por atributos, para `NO_COLOR`:

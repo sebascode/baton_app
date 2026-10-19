@@ -90,7 +90,7 @@ fn every_baton_plugin_command_the_guide_names_exists() {
     let help = String::from_utf8_lossy(&help.stdout).into_owned();
     let real: Vec<&str> = help
         .lines()
-        .skip_while(|l| !l.starts_with("Commands:"))
+        .skip_while(|l| !l.starts_with("Comandos:"))
         .skip(1)
         .take_while(|l| l.starts_with("  "))
         .filter_map(|l| l.split_whitespace().next())
@@ -145,6 +145,11 @@ fn every_manifest_field_is_explained_in_the_reference() {
         "optional",
         "label",
         "env",
+        "backup",
+        "restore",
+        "backup_ext",
+        "scan",
+        "test",
     ] {
         assert!(
             text.contains(&format!("`{field}`")),

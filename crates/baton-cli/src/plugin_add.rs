@@ -21,6 +21,7 @@ use baton_store::plugins::{
 };
 
 use crate::plugin_cmd::{describe, target_dir};
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// Lo que se va a instalar: ya traído, verificado y validado, pero todavía no escrito.
@@ -479,13 +480,10 @@ pub fn portable(mut f: Fetched, root: Option<&Path>) -> Fetched {
     };
     match path.strip_prefix(root) {
         Ok(rel) => f.source = Source::Local(rel.to_path_buf()),
-        Err(_) => eprintln!(
-            "{}",
-            tr!(
-                "aviso: {path} está fuera del proyecto: su ruta absoluta solo existe en esta máquina, y quien clone el proyecto la verá registrada sin poder actualizarla",
-                path = path.display()
-            )
-        ),
+        Err(_) => report::warn(tr!(
+            "{path} está fuera del proyecto: su ruta absoluta solo existe en esta máquina, y quien clone el proyecto la verá registrada sin poder actualizarla",
+            path = path.display()
+        )),
     }
     f
 }
@@ -543,32 +541,29 @@ pub fn add_in(
 ) -> u8 {
     // sin nadie que lea los comandos no se instala nada, y se dice antes de tocar la red
     if !ask.interactive() {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: baton plugin add necesita una terminal: baton no instala un plugin sin que alguien lea antes qué comandos va a ejecutar. Instálalo desde una terminal; en CI, usa un plugin ya instalado"
-            )
-        );
+        report::error(tr!(
+            "baton plugin add necesita una terminal: baton no instala un plugin sin que alguien lea antes qué comandos va a ejecutar. Instálalo desde una terminal; en CI, usa un plugin ya instalado"
+        ));
         return EXIT_USAGE;
     }
     let source = match Source::parse(source_text) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return EXIT_USAGE;
         }
     };
     let fetched = match fetcher(&source) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return EXIT_INVALID;
         }
     };
     let change = match plan_install(dir, &fetched) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return EXIT_INVALID;
         }
     };
@@ -618,7 +613,7 @@ pub fn add_in(
             0
         }
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             EXIT_INVALID
         }
     }
@@ -641,29 +636,20 @@ pub fn remove(name: &str, yes: bool, start: &Path, global: bool) -> ExitCode {
 
 pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut dyn Write) -> u8 {
     if !baton_core::kind::is_valid_name(name) {
-        eprintln!(
-            "{}",
-            tr!("error: '{name}' no es el nombre de un plugin", name = name)
-        );
+        report::error(tr!("'{name}' no es el nombre de un plugin", name = name));
         return EXIT_USAGE;
     }
     if std::fs::symlink_metadata(dir.join(name)).is_err() {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: no hay un plugin '{name}' instalado en {path}",
-                name = name,
-                path = dir.display()
-            )
-        );
+        report::error(tr!(
+            "no hay un plugin '{name}' instalado en {path}",
+            name = name,
+            path = dir.display()
+        ));
         return EXIT_USAGE;
     }
     if !yes {
         if !ask.interactive() {
-            eprintln!(
-                "{}",
-                tr!("error: sin terminal, quitar un plugin necesita --assume-yes")
-            );
+            report::error(tr!("sin terminal, quitar un plugin necesita --assume-yes"));
             return EXIT_USAGE;
         }
         if !ask.confirm(&tr!("¿Quitar el plugin '{name}'?", name = name)) {
@@ -672,7 +658,7 @@ pub fn remove_in(dir: &Path, name: &str, yes: bool, ask: &mut dyn Ask, out: &mut
         }
     }
     if let Err(e) = remove_plugin(dir, name) {
-        eprintln!("{}", tr!("error: {e}", e = e));
+        report::error(&e);
         return EXIT_INVALID;
     }
     // el registro: si no se puede actualizar, el plugin ya se quitó y se dice
@@ -805,45 +791,33 @@ pub fn new(name: &str) -> ExitCode {
 
 pub fn new_in(base: &Path, name: &str, out: &mut dyn Write) -> u8 {
     if !baton_core::kind::is_valid_name(name) {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: '{name}' no es un nombre válido: solo minúsculas, números y guiones",
-                name = name
-            )
-        );
+        report::error(tr!(
+            "'{name}' no es un nombre válido: solo minúsculas, números y guiones",
+            name = name
+        ));
         return EXIT_USAGE;
     }
     if baton_core::kind::StepKind::from_name(name).is_some_and(|k| k.is_builtin()) {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: '{name}' ya es un tipo de baton y no se puede redefinir",
-                name = name
-            )
-        );
+        report::error(tr!(
+            "'{name}' ya es un tipo de baton y no se puede redefinir",
+            name = name
+        ));
         return EXIT_USAGE;
     }
     let folder = base.join(name);
     if std::fs::symlink_metadata(&folder).is_ok() {
-        eprintln!(
-            "{}",
-            tr!("error: ya existe {path}", path = folder.display())
-        );
+        report::error(tr!("ya existe {path}", path = folder.display()));
         return EXIT_USAGE;
     }
     let file = folder.join(MANIFEST_FILE);
     if let Err(e) =
         std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&file, template(name)))
     {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: no se pudo crear {path}: {e}",
-                path = file.display(),
-                e = e
-            )
-        );
+        report::error(tr!(
+            "no se pudo crear {path}: {e}",
+            path = file.display(),
+            e = e
+        ));
         return EXIT_INVALID;
     }
     let _ = writeln!(out, "{}", tr!("✓ creado {path}", path = file.display()));

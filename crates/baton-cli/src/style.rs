@@ -42,10 +42,8 @@ pub struct Style {
 impl Style {
     /// Con color si stdout es una terminal que lo admite.
     pub fn detect() -> Style {
-        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        let dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
         Style {
-            color: std::io::stdout().is_terminal() && !no_color && !dumb,
+            color: baton_core::color::enabled(std::io::stdout().is_terminal()),
         }
     }
 

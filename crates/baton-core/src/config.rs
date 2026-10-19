@@ -49,9 +49,17 @@ pub struct Ui {
     /// Idioma de la interfaz y de los mensajes: `es` (por defecto), `en` o `auto` (el del
     /// sistema). `BATON_LANG` manda sobre esto.
     pub language: Option<String>,
+    /// Paleta de la interfaz: `fixed` (por defecto) o `terminal` (solo los colores de tu tema).
+    /// `BATON_COLORS` manda sobre esto.
+    pub colors: Option<String>,
 }
 
 impl Ui {
+    /// La paleta elegida en la configuración (sin mirar `BATON_COLORS`).
+    pub fn palette(&self) -> crate::color::Palette {
+        crate::color::palette(None, self.colors.as_deref())
+    }
+
     pub fn confirms_exit(&self) -> bool {
         self.confirm_exit.unwrap_or(true)
     }
@@ -131,7 +139,7 @@ pub struct Defaults {
     pub target: Option<String>,
     /// Proveedor de secretos por defecto (nombre de un `[secrets.<nombre>]`).
     pub secrets: Option<String>,
-    /// Ambiente que se usa si no se pide otro (`--ambiente`, `BATON_AMBIENTE`): decide la carpeta
+    /// Ambiente que se usa si no se pide otro (`--env`, `BATON_AMBIENTE`): decide la carpeta
     /// de credenciales y el valor de `{ambiente}`. Es de esta máquina, como todo `config.toml`.
     pub ambiente: Option<String>,
     /// Motor de contenedores: `auto` (docker y, si no existe, podman), `docker` o `podman`

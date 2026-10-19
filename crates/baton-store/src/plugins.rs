@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 
 use baton_core::hash::sha256_hex;
 use baton_core::locate::{Position, locate, position_of_offset};
-use baton_core::plugin::{API, MANIFEST_FILE, MAX_MANIFEST_BYTES, Manifest, validate_manifest};
+use baton_core::plugin::{
+    API, MANIFEST_FILE, MAX_MANIFEST_BYTES, MIN_API, Manifest, validate_manifest,
+};
 use baton_core::plugin_source::{Lock, LockEntry, LockStatus};
 use baton_core::{Seg, Severity};
 
@@ -135,8 +137,8 @@ pub fn check_manifest_text(file: &Path, text: &str) -> Checked<Manifest> {
         Err(e) => {
             // un manifiesto de otra versión del formato se explica, no se queja del primer campo nuevo
             let message = match Manifest::declared_api(text) {
-                Some(n) if n != API => format!(
-                    "api = {n} no está soportada: esta versión de baton entiende api = {API}; actualiza baton o usa una versión anterior del plugin"
+                Some(n) if !(MIN_API..=API).contains(&n) => format!(
+                    "api = {n} no está soportada: esta versión de baton entiende api = {MIN_API} a {API}; actualiza baton o usa una versión anterior del plugin"
                 ),
                 _ => e.message().to_string(),
             };
@@ -477,14 +479,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let text = format!(
             "{}\n[campo-nuevo]\nx = 1\n",
-            manifest("futuro", "s-futuro").replace("api = 1", "api = 2")
+            manifest("futuro", "s-futuro").replace("api = 1", "api = 3")
         );
         let f = install(tmp.path(), "futuro", &text);
         let checked = check_manifest_file(&f);
         assert!(checked.value.is_none());
         let m = &checked.diagnostics[0].message;
         assert!(
-            m.contains("api = 2 no está soportada") && m.contains("actualiza baton"),
+            m.contains("api = 3 no está soportada") && m.contains("actualiza baton"),
             "{m}"
         );
     }

@@ -698,14 +698,14 @@ fn shortcut_items(state: &RunState) -> Vec<(&'static str, &'static str)> {
     if state.preview {
         return vec![
             ("↑↓", tk!("nodo")),
-            ("espacio", tk!("abrir gate")),
+            (tk!("espacio"), tk!("abrir gate")),
             ("v", tk!("volver")),
         ];
     }
     match state.phase {
         Phase::Running => vec![
             ("↑↓", tk!("nodo")),
-            ("espacio", tk!("abrir gate")),
+            (tk!("espacio"), tk!("abrir gate")),
             ("v", tk!("log")),
             (
                 "p",
@@ -721,12 +721,12 @@ fn shortcut_items(state: &RunState) -> Vec<(&'static str, &'static str)> {
         ],
         Phase::Failed(_) => vec![
             ("↑↓", tk!("nodo")),
-            ("espacio", tk!("abrir gate")),
+            (tk!("espacio"), tk!("abrir gate")),
             ("v", tk!("menú de fallo")),
         ],
         Phase::Finished { .. } => vec![
             ("↑↓", tk!("nodo")),
-            ("espacio", tk!("abrir gate")),
+            (tk!("espacio"), tk!("abrir gate")),
             ("v", tk!("resumen")),
             ("q", tk!("salir")),
         ],

@@ -35,7 +35,7 @@ pub struct Plan {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
-    /// Identificador estable (slug), el que se da a `baton ops --tarea`.
+    /// Identificador estable (slug), el que se da a `baton ops --task`.
     pub id: String,
     pub name: String,
     pub description: Option<String>,

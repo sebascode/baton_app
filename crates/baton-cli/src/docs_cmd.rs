@@ -12,6 +12,7 @@ use baton_core::plan::Plan;
 use baton_store::state::{RunStatus, State, StepState};
 use baton_store::{Project, check_config, check_plan};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 pub struct Flags<'a> {
@@ -90,14 +91,11 @@ fn write_out(path: &Path, text: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no se pudo escribir {path}: {e}",
-                    path = path.display(),
-                    e = e
-                )
-            );
+            report::error(tr!(
+                "no se pudo escribir {path}: {e}",
+                path = path.display(),
+                e = e
+            ));
             ExitCode::from(EXIT_USAGE)
         }
     }

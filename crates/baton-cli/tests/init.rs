@@ -136,7 +136,7 @@ fn a_declared_target_is_applied_to_the_scanned_steps() {
 #[test]
 fn ambiente_creates_a_credentials_folder_per_name_and_gitignores_baton() {
     let tmp = tempfile::tempdir().unwrap();
-    let o = baton(tmp.path(), &["init", "x", "--ambiente", "dev, staging ,"]);
+    let o = baton(tmp.path(), &["init", "x", "--env", "dev, staging ,"]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert!(
         out(&o).contains("ambientes creados: dev, staging"),

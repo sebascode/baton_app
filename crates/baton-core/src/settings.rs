@@ -55,7 +55,7 @@ pub enum Kind {
     Choice(&'static [&'static str]),
 }
 
-pub const KEYS: [Key; 10] = [
+pub const KEYS: [Key; 11] = [
     Key {
         name: "defaults.engine",
         kind: Kind::Choice(&["auto", "docker", "podman"]),
@@ -118,6 +118,13 @@ pub const KEYS: [Key; 10] = [
         env: Some("BATON_LANG"),
         default: "es",
         help: "idioma de la interfaz (auto sigue al sistema)",
+    },
+    Key {
+        name: "ui.colors",
+        kind: Kind::Choice(&crate::color::PALETTE_VALUES),
+        env: Some("BATON_COLORS"),
+        default: "fixed",
+        help: "colores de la interfaz (terminal usa solo los de tu tema, sin fondos propios)",
     },
     Key {
         name: "ui.confirm_exit",

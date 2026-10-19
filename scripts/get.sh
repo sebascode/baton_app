@@ -155,6 +155,11 @@ if [ -f "$tmp/x/baton.1" ]; then
     chmod 644 "$man_base/man1/baton.1"
     echo "manual instalado en $man_base/man1/baton.1 (man baton)"
   fi
+  # la página en inglés: man la elige sola si el sistema está en inglés
+  if [ -f "$tmp/x/baton.en.1" ] && mkdir -p "$man_base/en/man1" 2>/dev/null &&
+    cp "$tmp/x/baton.en.1" "$man_base/en/man1/baton.1" 2>/dev/null; then
+    chmod 644 "$man_base/en/man1/baton.1"
+  fi
 fi
 
 "$dest/baton" version

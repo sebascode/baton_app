@@ -639,7 +639,7 @@ impl GateState {
         }
         vec![
             ("r", tk!("re-escanear")),
-            ("espacio", tk!("activar check")),
+            (tk!("espacio"), tk!("activar check")),
             ("e", tk!("editar check")),
             ("c", tk!("marcar crítico")),
             ("b", tk!("borrar check")),

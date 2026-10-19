@@ -1,0 +1,827 @@
+.\" baton manual page, in English. It is installed by scripts/install.sh.
+.\" It mirrors man/baton.1 (Spanish): change both together.
+.\" Try it without installing: man ./man/en/baton.1
+.TH BATON 1 "" "baton" "baton manual"
+.
+.SH NAME
+baton \- orchestrate installations and deployments defined in folders
+.
+.SH SYNOPSIS
+.B baton
+.RI [ \-C " dir" ]
+.RB [ \-q ]
+.RI [ command ]
+.RI [ options ]
+.br
+.B baton
+.I plan
+.RI [ run\ options ]
+.br
+.B baton
+.RB "(no arguments: shows the project status)"
+.
+.SH DESCRIPTION
+.B baton
+runs, in order and showing at every moment what it is doing, the steps of a
+.I plan
+(docker\-compose files, Dockerfiles and commands) spread across the folders of a project.
+It works in the terminal, with screens you navigate with the keyboard, and also without a terminal (for example in CI), where it never asks anything.
+.PP
+A plan runs on the local machine, on a server over \fBssh\fR or on a \fBdocker context\fR. Before running it validates everything at once, asks for or confirms the credentials it needs, and after each step it can wait for a condition (a \fIgate\fR) before going on. Backup and rollback are always optional.
+.PP
+Besides running plans, \fBbaton\fR offers four questions to use inside bash scripts (\fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR and \fBinput\fR) and can turn GitHub Actions, GitLab CI and Azure Pipelines pipelines into plans.
+.
+.SH GETTING STARTED
+.nf
+.RS
+baton init              set the project up and open its first plan for editing
+baton start             open the plan: review it, edit it and run it
+baton run               run the plan directly
+baton config            targets, logs and credentials of the project
+.RE
+.fi
+.PP
+To see the screens without touching anything: \fBbaton demo\fR.
+.
+.SH CONCEPTS
+.TP
+.B project
+A folder that contains \fIbaton/plans/\fR or \fI.baton/\fR. \fBbaton\fR looks for the project in the current folder and upwards, so it works from any subfolder (for example \fIapp1/web\fR). When it finds it in a parent folder it says so on stderr (\fBproject: /path (a parent folder; you are in web/)\fR). \fB\-C\fR points to another folder.
+.TP
+.B plan
+An ordered list of steps, stored in \fIbaton/plans/<plan>.toml\fR. It is part of the project and is versioned with it. The name of the plan must match the name of the file.
+.TP
+.B step
+An action of the plan: start a compose file, build a Dockerfile, run a command, check something, make a backup or wait for a confirmation. Steps run sequentially, in the order of the plan.
+.TP
+.B gate
+A condition that must hold before moving to the next step: a confirmation from the user (manual) or one or more automatic checks (docker healthcheck, HTTP, a command, a running container).
+.TP
+.B target
+Where a step runs: \fBlocal\fR, \fBssh\fR (host, user, remote directory, optional bastion) or \fBcontext\fR (a docker context). Each step chooses its target.
+.TP
+.B ambiente
+(Spanish for \fIenvironment\fR; the word is part of the file formats, so it is kept.) A dimension separate from the target (dev, staging, prod...). It decides which folder the credentials are read from (\fI.baton/credentials/<ambiente>/\fR) and the value of \fB{ambiente}\fR in commands; it never changes the steps of a plan. If two environments need different steps, they are two plans. It is chosen with \fB\-\-env\fR; if that is not given, with the variable \fBBATON_AMBIENTE\fR and, if that is not set either, with \fBambiente\fR in \fB[defaults]\fR of \fI.baton/config.toml\fR. Baton never remembers the last one you used as a default value (so you do not deploy to production out of habit), and when it does not come from the flag it says where it came from. Each run does record which environment it ran with, as part of the history: \fBbaton last\fR, \fBbaton history\fR, plain \fBbaton\fR and the interface show it, and \fB\-\-resume\fR or \fBrollback\fR with a different environment than the one of the last run warn about it (they only warn: they use the one you give them). In the interface, the \fBa\fR key of the plan view opens a picker with the environments baton knows (the folders of \fI.baton/credentials/\fR and those of \fB[ambientes]\fR) and \fBnone\fR; the chosen one is valid only for that session and is not saved. Only letters, digits, \fB.\fR, \fB\-\fR and \fB_\fR. A step that uses \fB{ambiente}\fR with no environment chosen does not run: the preparation reports it before starting. Names are free: baton does not know which one is production. To make it careful with one, mark it with \fBprotegido = true\fR in \fB[ambientes.<name>]\fR of \fI.baton/config.toml\fR; in the interface, before running (except with dry\-run) and before a rollback in that environment you are asked to type its name. Without a terminal nothing is asked, so a CI run with \fB\-\-env\fR does not stop.
+.TP
+.B credential
+A reference \fIfile.env#PREFIX\fR that groups the variables \fIPREFIX_FIELD\fR (for example \fIdocker.env#GHCR\fR groups \fBGHCR_REGISTRY\fR, \fBGHCR_USER\fR and \fBGHCR_TOKEN\fR). The plan stores the reference, never the value.
+.
+.SH GLOBAL OPTIONS
+.TP
+.BR \-C ", " \-\-dir " " \fIdir\fR
+Project folder. By default, the current one or the first one above it that is a project. Relative paths given to a command (for example the file of \fBimport\fR) are resolved against this folder.
+.TP
+.BR \-q ", " \-\-quiet
+Silences the context notices that baton writes to stderr (the project, the plan or the environment it chose by itself). Errors, notices that change what happens and the result are shown anyway.
+.TP
+.B \-\-no\-color
+No colors in the output and in the interface (the same as setting \fBNO_COLOR\fR). It takes precedence over \fBFORCE_COLOR\fR.
+.TP
+.BR \-h ", " \-\-help
+Shows the help of \fBbaton\fR or of a command.
+.TP
+.BR \-V ", " \-\-version
+Shows the version and the commit it was built from.
+.
+.SH COMMANDS
+.SS baton start [plan]
+Opens the \fIplan view\fR: the list of steps with their toggles for backup, automatic rollback and dry-run. From there you edit (\fBe\fR), run (\fBenter\fR), see the pipeline (\fBv\fR) and switch plans (\fBp\fR). If the plan does not exist, it creates it empty and opens it in the editor. With an empty plan it goes straight to the editor; \fBesc\fR goes back to the plan view.
+.PP
+Without a name it uses the only plan of the project; if there are several and there is a terminal it offers a numbered list. It needs an interactive terminal. A plan that can be read is opened even if it has validation errors: the editor is where they are fixed.
+.PP
+\fBedit\fR is an old alias (it does not appear in the help).
+.SS baton run [plan]
+Runs a plan directly, without going through the preview. With a terminal it shows the run on screen (going first through the credentials screen if the plan needs them); without a terminal, with \fB\-\-no\-tui\fR or with \fBCI\fR set it prints plain text and a summary. \fBbaton <plan>\fR is a shortcut for \fBbaton run <plan>\fR. If the word is not a plan of the project and looks like a command (a typo such as \fBvaldiate\fR), baton suggests the command and exits with 2 instead of trying to run it as a plan.
+.TP
+.B \-\-no\-tui
+Plain text instead of the screen.
+.TP
+.BR \-n ", " \-\-dry\-run
+Runs nothing: shows which commands it would run. It leaves no trace (it does not create \fI.baton/\fR, does not touch \fI.gitignore\fR, writes no log or state). The only exception are the steps with a \fBdry_run\fR (their own or the one of their plugin type, see \fBPLUGINS\fR): their read\-only command does run, with the credentials it mentions, and what it shows is not saved in any log.
+.TP
+.B \-\-resume
+Skips the steps that finished well in the last run (it shows them as skipped).
+.TP
+.B \-\-assume\-yes
+Answers yes to manual gates when there is no terminal. Without this option, a plan with a manual gate fails before running if there is no terminal.
+.TP
+.BR \-\-backup ", " \-\-no\-backup
+Force making (or not making) a backup, over what the plan says.
+.TP
+.BI \-\-env " environment"
+Environment: credentials folder and value of \fB{ambiente}\fR in commands. See \fBambiente\fR in the CONCEPTS section.
+.SS baton create plan
+Creates the file of an empty plan and nothing else (it does not open it or touch \fI.baton/\fR). It does not overwrite an existing plan. The name is normalized to lowercase letters, digits, \fB\-\fR and \fB_\fR, and you are told if it changed.
+.SS baton copy plan new
+Copies a plan under another name: the file is duplicated and only its \fBname\fR line changes (comments and format are kept). The copy starts without run history. It does not overwrite an existing plan.
+.SS baton rename plan new
+Renames a plan: renames the file, adjusts its \fBname\fR line and moves its state and history from \fI.baton/state.json\fR to the new name. Logs already written are not renamed (the history keeps pointing to them).
+.SS baton delete plan
+Deletes the file of a plan and its state in \fI.baton/state.json\fR; the logs and backups it left are not touched. In a terminal it asks for confirmation; without a terminal it requires \fB\-\-assume\-yes\fR (\fB\-\-yes\fR still works as an alias).
+.TP
+.B \-\-assume\-yes
+Does not ask.
+.PP
+The new names of \fBcopy\fR and \fBrename\fR are normalized as in \fBcreate\fR, and cannot be a baton command (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBhelp\fR, \fBdemo\fR): they would win over the \fBbaton <plan>\fR shortcut.
+.SS baton init [plan]
+Sets the project up and opens its first plan: it is \fBstart\fR plus whatever the project needs. It looks for \fIdocker\-compose.yml\fR, \fIcompose.yml\fR, \fIDockerfile\fR and \fI*.sql\fR files under the folder (without entering \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR or hidden folders) and builds the steps: \fIbuild\fR (the Dockerfiles) and \fIservicios\fR (the compose files). The \fI.sql\fR files are proposed as one \fBsql\fR step per folder, \fBdisabled\fR (they are usually the \fIinit.sql\fR that the database container already loads on startup), together with the \fBdb\fR credential that step needs. The \fI*.sh\fR scripts are \fBnot\fR turned into steps: they are maintenance scripts (many are for recovery or data) and stay available in \fBbaton ops\fR and in the \fBm\fR key of the plan view, organized by folder; for a script to be part of the plan, create a \fBscript\fR or \fBcomando\fR step by hand. A script inside a folder with a Dockerfile is ignored (it belongs to the image). It always adds \fI.baton/\fR to \fI.gitignore\fR. With a terminal, if the folder is not in a git repository it offers to start one, and if it is inside one whose root is another folder (and there is no project yet) it offers to create the project at that root; without a terminal it asks nothing. The default plan name is the folder name. With a terminal it opens the plan straight in the editor and, on exit, says what comes next. It does not overwrite a plan that already exists.
+.TP
+.BI \-\-target " target"
+Target of the steps found.
+.TP
+.BI \-\-env " a,b,c"
+Creates the credentials folders of those environments.
+.TP
+.B \-\-no\-scan
+Does not scan the folder: the plan stays empty.
+.TP
+.B \-\-here
+Creates the project in this folder even if a parent folder already has one. Without this option, \fBinit\fR run in a subfolder of a project adds the plan to that project.
+.SS baton import file
+Converts a pipeline from another platform into a plan. It is best\-effort and lossy: nothing is dropped silently. What has no equivalent stays as a \fBdisabled\fR step (with the original as a comment) or as a note in the report.
+.PP
+GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) and Azure Pipelines (\fIazure\-pipelines.yml\fR) are accepted. Every step with a condition (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) is imported disabled. An \fBenvironment\fR or \fBwhen: manual\fR produces a manual gate before the job (active if the environment looks like production). A bare \fBdocker compose up\fR becomes a \fBcompose\fR step, and a bare script (\fB./scripts/x.sh\fR, without arguments) a \fBscript\fR step. Actions that only prepare the agent (checkout, cache, artifacts, setup) are omitted.
+.PP
+The report lists what was disabled, what was omitted and the variables the commands expect in the environment, and suggests \fB[[credentials]]\fR blocks when the name allows it (for example \fBGHCR_TOKEN\fR). Those blocks are not written to the plan: paste them \fBat the end\fR of the file.
+.TP
+.BR \-\-from " " github | gitlab | azure
+Source platform. By default it is detected from the name and content of the file.
+.TP
+.BI \-\-plan " name"
+Name of the plan (by default, the one of the file).
+.TP
+.BI \-\-target " target"
+Target of all the imported steps.
+.TP
+.BR \-n ", " \-\-dry\-run
+Shows the report without writing anything.
+.SS baton rollback [plan]
+Undoes what the last run did: it runs the \fBrollback\fR of each step that finished (and of the one that failed, which may have left things half done), in reverse order.
+.TP
+.BI \-\-env " environment"
+Environment of the rollback commands that use \fB{ambiente}\fR and of the credentials; it is chosen the same way as in \fBbaton run\fR.
+.SS baton last [plan]
+Shows how the last run of a plan ended: the result, a bar with one cell per step (\fB■\fR done, \fB✗\fR failed, \fB▫\fR skipped, \fB□\fR not done), how many runs the plan has and how each one ended, the state and duration of each step and what to do next. If the run failed or was aborted, it also shows the last command of the step where it stopped, what it wrote and the error, taken from the log (whose path is also given). Without a plan it uses the only one of the project or asks which. It exits with 0 if the last run finished well (with or without warnings), with 3 if it failed or was aborted, and with 1 if the plan has not run yet (the notice goes to stderr and stdout stays empty).
+.TP
+.BI \-\-lines " n"
+How many lines of the output of the failed step are shown (15 by default); the rest is in the log.
+.TP
+.B \-\-json
+Instead of text, prints a JSON on stdout with the run (id, result, duration, environment, steps with their state), the counts, the log and, if it stopped, the excerpt of the step. Exit codes do not change.
+.SS baton db [database]
+Queries a database of the plan (a \fBdb\fR, \fBmysql\fR or \fBsqlite\fR credential) with the credentials of \fI.baton/\fR and shows the result. \fBdatabase\fR is the id of the credential; without it the only one of the plan is used. Without any query it lists the databases of the plan and how to query them. The query is \fBa single statement\fR (for several, use an \fBsql\fR step) and travels through the standard input of the engine, never as an argument. It runs on your machine with \fBpsql\fR, \fBmysql\fR (or \fBdocker exec\fR if the credential has \fBCONTAINER\fR) or \fBsqlite3\fR. By default it is \fBread\-only\fR: SQLite opens the file read\-only and in PostgreSQL \fBdefault_transaction_read_only\fR is turned on (a safeguard against accidents, not a security barrier); in MySQL, a read\-only transaction. It exits with 0 if all went well, with 1 if data of the credential or the program is missing, with 2 for a usage error (empty query or one with several statements, ambiguous database, destructive query without confirmation) and with 3 if the engine returned an error or did not answer in time.
+.TP
+.BI \-c " query" ", " \-\-query " query"
+The query.
+.TP
+.BI \-f " file" ", " \-\-file " file"
+Reads the query from a file; \fB\-\fR reads it from standard input (\fBbaton\fR never reads it on its own).
+.TP
+.BI \-\-plan " plan"
+Plan the credentials are taken from (by default, the only one of the project).
+.TP
+.BI \-\-format " tabla|registro|csv|json"
+How the result is shown (the values keep their Spanish names). The table aligns numbers to the right, shows NULL and trims long cells; if you are in a terminal and the table is wider than the screen, it is shown by itself as \fBregistro\fR (through a pipe, as in \fB| less \-S\fR, the table is left whole); \fBregistro\fR writes one block per row, with each column on its own line (\fB\- fila 1 de 3\fR, that is, row 1 of 3); \fBcsv\fR is the output of the engine (with a NULL as an empty field); \fBjson\fR is an array of objects with the columns in order, numbers as numbers and NULL as \fBnull\fR.
+.TP
+.BI \-\-limit " n"
+How many rows are shown in the table (200 by default; 0 shows them all). With \fBcsv\fR and \fBjson\fR all of them are always output.
+.TP
+.B \-\-full
+Does not trim the long cells of the table (60 columns by default).
+.TP
+.B \-\-write
+Allows modifying data. A destructive statement (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR or \fBUPDATE\fR without \fBWHERE\fR...) also needs \fB\-\-assume\-yes\fR.
+.TP
+.B \-\-assume\-yes
+Runs a destructive query without further confirmation.
+.TP
+.BI \-\-env " environment"
+Environment the credentials are resolved from.
+.TP
+.BI \-\-timeout " duration"
+How long to wait for the answer (60s by default).
+.TP
+.BR \-i ", " \-\-interactive
+Opens an interactive session: you type queries ending in \fB;\fR (on one or several lines) and commands that start with \fB\\\fR. It opens by itself when you give a database, give no query and are in a terminal. The commands are \fB\\tablas\fR (tables), \fB\\columnas T\fR (columns), \fB\\formato tabla|registro|csv|json\fR (format), \fB\\limite N\fR (limit), \fB\\completo\fR (full), \fB\\escribir\fR (allows modifying data; a destructive statement asks for confirmation), \fB\\lectura\fR (read\-only again), \fB\\bases\fR (databases), \fB\\?\fR and \fB\\q\fR (or ctrl+d). An error does not close the session. Each query opens its own connection, so a transaction is not kept open between one and another. The history is saved in \fI.baton/db_history\fR (permissions 600) and leaves out whatever looks like a password or a token.
+.SS baton ops [plan]
+Maintenance without building a plan (in the plan view, the \fBm\fR key opens the same maintenance inside the interface: services and actions on the left, live output below; \fBenter\fR runs, \fBx\fR cuts, \fBesc\fR goes back to the plan and nothing closes by itself): see the logs of a service, restart it, update its image or delete it and pull it again, and run the tasks of the plan. It acts on the services of the active \fBcompose\fR steps of the plan, on the target of each step, with the credentials of the plan (all of them, like a compose step) and without touching the history or the state of the runs. It does not sync: on an ssh target it uses what the last run left there. Without \fB\-\-action\fR, \fB\-\-task\fR or \fB\-\-script\fR, in a terminal it opens the interface straight on that maintenance screen (\fBesc\fR goes to the plan view and nothing closes by itself; with \fB\-\-no\-tui\fR, a menu of questions in the terminal); without a terminal it lists the services, the actions, the tasks and the scripts. The loose \fI.sh\fR scripts of the project (they are not steps of the plan) are chosen by folder, one level at a time (\fBa > b > c\fR: the level of \fBc\fR only appears after choosing \fBb\fR); they run in their own folder, with the interpreter of their shebang and with the credentials of the plan, and \fBalways ask for confirmation\fR (without a terminal, only with \fB\-\-assume\-yes\fR). The actions (their names are in Spanish) are \fBlogs\fR, \fBestado\fR (state), \fBreiniciar\fR (restart), \fBactualizar\fR (update: \fBdocker compose pull\fR and \fBup \-d\fR) and \fBreimagen\fR (re-image: notes the images of the service, deletes it with \fBrm \-sf\fR, deletes those images, pulls again and starts; without a previous container there is no image to delete and it only pulls; with podman it acts on the whole compose with \fBdown \-\-rmi all\fR and does not accept \fB\-\-service\fR). The ones that change what runs (\fBreiniciar\fR, \fBactualizar\fR, \fBreimagen\fR) ask for confirmation in a terminal and, without a terminal, are rejected unless \fB\-\-assume\-yes\fR is given; \fBlogs\fR and \fBestado\fR do not ask. Without \fB\-\-service\fR they act on all the services of each compose file. A task is a \fB[[tasks]]\fR entry of the plan that runs in its folder and target and receives only the credentials its command mentions. \fBctrl+c\fR cuts what is running (a log follow does not end by itself) and \fBbaton\fR exits with 0. It exits with 2 for a usage error and with 3 if the command failed.
+.TP
+.BI \-a " action" ", " \-\-action " action"
+What to do: \fBlogs\fR, \fBestado\fR, \fBreiniciar\fR, \fBactualizar\fR or \fBreimagen\fR.
+.TP
+.BI \-s " service" ", " \-\-service " service"
+Service to act on (its name in the compose file); without it, all those of each compose.
+.TP
+.BI \-t " task" ", " \-\-task " task"
+Runs a task of the plan instead of an action.
+.TP
+.BI \-\-script " path"
+Runs a loose \fI.sh\fR script of the project (path relative to the root, for example \fIscripts/db/dump.sh\fR) instead of an action. Only the ones the scan offers are valid (the same ones \fBbaton ops\fR lists). It cannot be combined with \fB\-\-action\fR or \fB\-\-task\fR.
+.TP
+.B \-\-follow
+With the \fBlogs\fR action, keeps showing them live until \fBctrl+c\fR.
+.TP
+.BI \-\-lines " n"
+How many lines of logs are shown at the start (100 by default).
+.TP
+.B \-\-assume\-yes
+Runs without asking for confirmation.
+.TP
+.BI \-\-env " environment"
+Environment the credentials are resolved from.
+.TP
+.B \-\-no\-tui
+Without the interface: in a terminal it uses a menu of questions instead of opening the maintenance screen.
+.SS baton history [plan]
+Lists the previous runs of a plan that baton remembers (the last one and up to 20 more), from the most recent to the oldest, one per line: how it ended, when, how long it took, a bar with the progress per step and, if it failed or was aborted, in which step. For the detail of the last one, with the error, use \fBbaton last\fR. Without a plan it uses the only one of the project or asks which. If the plan has not run yet, it says so on stderr, prints nothing on stdout and exits with 0.
+.TP
+.BI \-\-limit " n"
+How many runs are shown (20 by default).
+.TP
+.B \-\-json
+Prints a JSON on stdout with the runs (from the most recent to the oldest) and the counts. Without runs it exits with 0 and \fBruns\fR is empty.
+.SS baton settings [list|get|set|unset]
+The global configuration of the app and where each value comes from. The global file is \fI~/.config/baton/config.toml\fR (or \fI$XDG_CONFIG_HOME/baton/config.toml\fR, or the one \fBBATON_CONFIG\fR says) and applies to all the projects of this machine. It accepts the sections \fB[defaults]\fR (only \fBtarget\fR, \fBsecrets\fR and \fBengine\fR: the environment is never set globally), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR and \fB[ui]\fR; targets and credentials belong to each project. \fBPrecedence\fR: environment variable, then the project (\fI.baton/config.toml\fR), then the global one and finally the default value. Named tables (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) are merged and the project overrides by name. Without a subcommand it is the same as \fBlist\fR (with \fB\-\-json\fR it gives a JSON with key, value and origin), which shows each key with its effective value and its \fBorigin\fR (\fBentorno\fR for environment, \fBproyecto\fR for project, \fBglobal\fR or \fBpor defecto\fR for default), so you do not look for it by hand in \fI.baton/\fR. \fBget key\fR prints only the value (the origin goes to stderr, so it works in scripts). \fBset key value\fR writes to the global file, keeping its comments, and \fBunset key\fR removes it; both validate the resulting configuration before writing and warn if something stronger (an environment variable, the project) still covers the value. Keys: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR, \fBui.language\fR (language of the interface: \fBes\fR, \fBen\fR or \fBauto\fR, see \fBLANGUAGE\fR), \fBui.colors\fR (palette of the interface: \fBfixed\fR or \fBterminal\fR, see \fBBATON_COLORS\fR) and \fBui.confirm_exit\fR (ask before closing with \fBesc\fR or \fBenter\fR; yes by default). An error in the global file is reported with its own path (\fBvalidate\fR includes it) and \fBbaton config\fR shows in Logs what comes from the global one. It does not need a project: outside one only the global file counts.
+.TP
+.B \-\-project
+In \fBset\fR and \fBunset\fR, writes to the project's \fI.baton/config.toml\fR instead of the global file.
+.SS baton docs [plan]
+Writes the documentation of a plan in markdown: a header with its description and an index, a summary table (steps, gates, targets with their host, environments, credentials, maintenance), \fBhow to use it\fR (the usual commands for that plan and, if there are environments, one per environment with \fB\-\-env\fR), a \fBmermaid\fR diagram with the order of the steps (gates as diamonds, dependencies as dotted lines and disabled steps with a dashed border), a table of steps with the detail of each one (command, timeout, retries, gate, rollback), the \fBvariables\fR (the \fB{plan}\fR, \fB{fecha}\fR... templates with the steps that use them and the environment variables baton reads), the credentials with the name of the variables each one reads, the targets (type, host and port, remote folder and bastion), the project (the plans that exist with their last run and the environments found, with which ones are protected and which credentials files each one has) and the \fBmaintenance\fR of \fBbaton ops\fR (the services of the compose files of the plan with their actions, the tasks and the \fB.sh\fR scripts of the project). It goes to standard output and can be saved with \fB\-\-output\fR. It is meant to be versioned: it \fBnever includes credential values\fR (only their reference \fIfile.env#PREFIX\fR, the name of their variables and the name of the provider), nor paths under \fI.baton/\fR, nor the user, credential or password of a target. Hosts and ports do appear, because they say where the plan points. What the plan says, commands included, is shown as is. A name, description or command with markdown or mermaid symbols does not break the document. A plan with validation errors is documented anyway and its problems go to stderr. It exits with 2 if the plan does not exist. The document is written in the active language (see \fBLANGUAGE\fR).
+.TP
+.BI \-o " file" ", \-\-output " file
+Writes to a file instead of standard output.
+.TP
+.B \-\-with\-state
+Adds how the last run ended (per step). It changes with every run, which is why it is not the default.
+.TP
+.B \-\-no\-mermaid
+Without the diagram, for markdown viewers that do not draw it.
+.SS baton plugin list
+Lists the plugins of both scopes, the \fBproject\fR (\fIbaton/plugins/\fR) and the \fBglobal\fR one (this machine), with their version and the step type they provide. One that cannot be loaded is marked with \fB✗\fR and its errors with \fIfile:line:column\fR. If a project plugin covers a global one of the same type, it says so. Outside a project it only shows the global ones.
+.SS baton plugin validate path
+Checks the manifest of a plugin (the \fIbaton\-plugin.toml\fR file or the folder that contains it) and shows, as is, the commands it would run: \fBthis is what you have to read before installing a plugin\fR. It exits with 1 if the manifest has errors and with 2 if the path does not exist. It needs no project and installs nothing.
+.SS baton plugin add source
+Installs a plugin \fBin the project\fR (\fIbaton/plugins/\fR, which is versioned with it: whoever clones the project already has it, and \fIplugins.lock\fR pins its commit and its sha256) or, with \fB\-\-global\fR (\fB\-g\fR), \fBon this machine\fR for all projects. Outside a project you have to pass \fB\-\-global\fR. If a project plugin and a global one define the same type, \fBthe project one wins\fR, and if the project one cannot be loaded the global one does not replace it either. It installs a plugin from: \fBgithub:owner/repo@version\fR (a tag or a commit; with a branch, baton pins the commit it is at that day and does not follow it) or a local folder. From GitHub, baton asks for the commit that version points to and \fBonly installs it if GitHub verified its signature, with no exception\fR; it downloads the manifest from that exact SHA (not from the tag, which can move), validates it and \fBshows the commands it will run\fR before asking. It installs the manifest in the plugins folder and records its origin, the commit and its sha256 in \fIplugins.lock\fR. \fBIt needs a terminal\fR: without one it neither queries the network nor installs anything, because baton does not install a plugin without someone first reading what it is going to run (in CI, use an already installed plugin). If it is already installed and identical it does nothing; if it changed, it shows what changed and asks; it does not replace one of the same name that came from another origin nor one that \fBplugin add\fR did not install (for example, one someone linked to develop it). A local folder has no commit or signature to verify: it is installed anyway, after confirming, and is recorded as local. Inside a project, the path of a local folder that is inside it is recorded relative to its root (the registry is versioned and an absolute path does not exist on another machine); if it is outside, it warns. With a \fBbare name\fR (\fBplugin add terraform\fR) that is already installed on the machine, it \fBcopies it to the project without downloading it again\fR, with the same origin, commit and sha256 of its record; it refuses if that plugin changed since it was installed or if \fBplugin add\fR did not install it. It still shows the commands and asks. It exits with 1 if it is rejected (no verified signature, invalid manifest, name taken, or a negative answer) and with 2 if there is no terminal or the source is not understood.
+.SS baton plugin remove name
+Removes a plugin from the project (or from this machine with \fB\-\-global\fR) and its entry in \fIplugins.lock\fR. It asks first; without a terminal it needs \fB\-\-assume\-yes\fR. If the plugin is a link to another folder (someone is developing it), only the link is removed, never the destination folder.
+.TP
+.B \-\-assume\-yes
+Does not ask.
+.SS baton plugin new name
+Creates \fI./name/baton\-plugin.toml\fR with a manifest to get started (which passes \fBplugin validate\fR) and says the next steps. It does not overwrite an existing one. It needs no project.
+.SS baton validate [plan]
+Validates the configuration and the plans (all of them, or only the one given) and shows the errors with \fIfile:line:column\fR. It runs nothing. It exits with 1 if there are errors.
+.TP
+.B \-\-json
+Prints a JSON on stdout (\fBok\fR, \fBerrors\fR, \fBwarnings\fR and, per file, its diagnostics with line and column) instead of the text; the exit code is the same.
+.SS baton config
+Opens the configuration of the project, with the tabs \fBTargets\fR, \fBLogs\fR, \fBCredentials\fR and \fBPlans\fR. It lets you test the connection of a target and save with \fBctrl s\fR. \fBenter\fR on a plan, in the Plans tab, opens it; \fBc\fR copies it, \fBr\fR renames it and \fBd\fR deletes it. It needs a terminal.
+.TP
+.B \-\-json
+Instead of opening the screen, prints the configuration of the project as JSON (targets, logs, environments and plans; never credential values nor the commands of the secrets providers). It needs no terminal.
+.SS baton demo
+Walks through all the screens with fake data, without touching any project. It is useful to get to know baton and to show it.
+.TP
+.B \-\-fast
+Shortens the waits of the scenario.
+.TP
+.BR \-\-screen " " vista | credenciales | config | editor | gate | pipeline
+Screen to start with (the values keep their Spanish names).
+.SS baton shell-init [bash|zsh|fish]
+Prints the shell code that shows the project in the prompt, like \fB(venv)\fR or the git branch: \fB(baton:app1)\fR while you are inside a project or any of its subfolders. Without an argument it uses the shell in \fB$SHELL\fR. See \fBTERMINAL PROMPT\fR. It needs no project.
+.TP
+.B \-\-no\-prefix
+Only defines the \fB__baton_ps1\fR function and does not touch the prompt (for those who build their \fBPS1\fR by hand).
+.TP
+.B \-\-color
+The label in cyan.
+.SS baton prompt
+Prints the label of the project that contains the current folder, for example \fB(baton:app1)\fR. Outside a project it prints nothing and exits with 1, so it works as a condition in prompt tools (for example starship).
+.TP
+.BI \-\-format " text"
+Format of the label: \fB{name}\fR is the folder of the project and \fB{root}\fR its full path. By default, \fB(baton:{name})\fR.
+.SS baton version
+Prints \fBbaton <version> (<commit>)\fR, or \fB(<commit>, with local changes)\fR if it was built with uncommitted changes. It needs no project.
+.SS baton update
+Checks GitHub for a newer version of baton and, if there is one, installs it. Checking is cheap: it asks which is the latest release and downloads nothing if you already have that version. If there is a new one, it downloads the binary for your platform (Linux x86_64 and aarch64, macOS with Apple Silicon), checks its sha256 sum and that the binary answers with the expected version, and only then replaces the installed one, atomically. It leaves the previous one as \fBbaton.prev\fR, next to the executable. If a manual page is already installed, it updates it. It needs no project and does nothing on its own: it only queries the network when you run it. It uses the system programs \fBcurl\fR, \fBtar\fR and \fBsha256sum\fR (or \fBshasum\fR).
+.PP
+If baton was installed with Homebrew, \fBupdate\fR does not touch it and points you to \fBbrew upgrade baton\fR; if a \fB.deb\fR or \fB.rpm\fR package installed it (it lives in \fI/usr/bin\fR), it does not either, and tells you where to get the package of the new version; a development build (\fItarget/\fR) is not replaced either. It exits with 0 if all went well (also if you already have the latest), with 1 if it could not query, download or verify (nothing is installed) and with 2 if another tool manages the binary.
+.TP
+.B \-\-check
+Only tells you whether there is a newer version; it downloads and installs nothing.
+.TP
+.B \-\-rollback
+Goes back to the version there was before the last update (\fBbaton.prev\fR).
+.SS baton (no arguments)
+Shows the project and its plans. For each plan: how many steps it has, whether it has errors, and if it already ran, a bar with the progress of the last run, how it ended (and in which step it failed), how long ago, how long it took and how many runs it has with their breakdown. It suggests the next commands, with \fBbaton last\fR first if some plan failed. In color only if the output is a terminal; \fBNO_COLOR\fR turns it off. Outside a project, it explains how to get started.
+.
+.SH QUESTIONS FOR SCRIPTS
+.nf
+.RS
+env=$(baton select "Environment?" dev staging prod \-\-default dev)
+services=$(baton multiselect "What to install?" postgres redis nginx \-\-min 1)
+name=$(baton input "Stack name" \-\-default demo)
+if baton confirm "Deploy to $env?" \-\-default no; then ...; fi
+.RE
+.fi
+.PP
+The question is drawn on the terminal and \fBonly the answer goes to standard output\fR, so \fB$(...)\fR captures it. This holds even if the script redirects stderr (\fB2>/dev/null\fR): in that case \fBbaton\fR runs itself again with stderr pointing at \fI/dev/tty\fR. They need no project.
+.TP
+.BI select " question option..."
+Chooses one option and prints it.
+.TP
+.BI multiselect " question option..."
+Chooses several and prints them, one per line. \fB\-\-sep\fR \fIs\fR joins them with another separator (\fB\\n\fR and \fB\\t\fR written by hand work); \fB\-\-min\fR \fIn\fR requires at least \fIn\fR.
+.TP
+.BI confirm " question"
+Asks yes or no. It prints nothing: it answers with the exit code (0 yes, 1 no), to use it in an \fBif\fR. It accepts \fBs\fR, \fBsi\fR, \fBsí\fR, \fBy\fR, \fByes\fR, \fBn\fR and \fBno\fR.
+.TP
+.BI input " question"
+Asks for a text and prints it. \fB\-\-secret\fR does not show what is typed.
+.PP
+Common options: \fB\-\-default\fR \fIvalue\fR (the answer when there is no terminal, and the one shown selected when asking; in \fBmultiselect\fR, several separated by commas) and \fB\-\-name\fR \fIname\fR (see below).
+.SS How each answer is resolved
+.IP 1. 4
+The variable \fBBATON_<NAME>\fR, if it is set. It always wins, even with a terminal, and a notice on stderr says where it came from. A value that is not one of the options, or an invalid yes/no, is an error.
+.IP 2. 4
+The question, if there is someone who can answer.
+.IP 3. 4
+\fB\-\-default\fR, if there is no terminal.
+.IP 4. 4
+An error that says what is missing (for example: set BATON_AMBIENTE or pass \-\-default).
+.PP
+\fI<NAME>\fR comes from \fB\-\-name\fR or, if not given, from the text of the question without accents or signs: \fBWhat to install?\fR gives \fBBATON_WHAT_TO_INSTALL\fR. An empty variable counts as not set, except in \fBinput\fR.
+.PP
+Nothing is asked if \fBCI\fR or \fBBATON_NONINTERACTIVE\fR are set, nor if there is no terminal to open.
+.
+.SH TERMINAL PROMPT
+To always see which project you are in (like python's \fB(venv)\fR or the git branch), add a line to the startup file of your shell:
+.nf
+.RS
+eval "$(baton shell-init bash)"          # in ~/.bashrc
+eval "$(baton shell-init zsh)"           # in ~/.zshrc
+baton shell-init fish | source           # in ~/.config/fish/config.fish
+.RE
+.fi
+.PP
+The prompt then shows \fB(baton:app1) \fR in front, inside the project and all its subfolders, and removes it when you leave. \fBbaton\fR does not modify any file on its own: you add the line.
+.PP
+The code that is printed \fBdoes not run baton on every prompt\fR: it looks for the project upwards checking whether \fIbaton/plans/\fR or \fI.baton/\fR exists, just like \fBbaton\fR does, so you do not notice it. The label uses the folder of the closest project. In bash and zsh the folder name is sanitized before putting it in the prompt, because the prompt expands \fB$(...)\fR.
+.PP
+If you already build your \fBPS1\fR by hand (for example with functions like \fB$(__prompt_git)\fR), use \fB\-\-no\-prefix\fR and put the label wherever you want:
+.nf
+.RS
+eval "$(baton shell-init bash --no-prefix --color)"
+PS1='$(__baton_ps1)\\u@\\h \\w\\$ '
+.RE
+.fi
+.PP
+For prompt tools that run a command (starship, for example), use \fBbaton prompt\fR:
+.nf
+.RS
+[custom.baton]
+command = "baton prompt"
+when = "baton prompt"
+.RE
+.fi
+.PP
+With tools that rewrite the whole prompt on every command (starship, oh\-my\-posh), the automatic prefix may get lost: use \fB\-\-no\-prefix\fR with their own module, or \fBbaton prompt\fR. The bash and fish scripts are tested; the zsh one could not be tested on the development machine.
+.
+.SH FILES
+.TP
+.I baton/plans/<plan>.toml
+The plans. They are versioned with the project.
+.TP
+.I .baton/
+Local folder of this machine. It is created on the first real run and added to \fI.gitignore\fR. \fBIt never leaves the machine\fR: only the folders of the plan travel to the targets and, when running, the variables each step needs.
+.TP
+.I .baton/config.toml
+Targets, logs and secrets providers of this machine. \fBlocal\fR always exists even if it is not declared.
+.TP
+.I .baton/state.json
+The last run of each plan (state per step, to resume and for the pipeline), the 20 previous runs (the history) and the "do not ask again" flags per credential.
+.TP
+.I .baton/credentials/[<ambiente>/]{git,docker,servers,db}.env
+Credentials in \fBKEY=value\fR format, with permissions 600.
+.TP
+.I .baton/logs/
+One log per run (by default \fI{plan}\-{fecha}.log\fR, with \fB\-2\fR, \fB\-3\fR... if there are several in the same minute). In the text format, commands, successes, errors and retries are prefixed with \fB▸\fR, \fB✓\fR, \fB✗\fR and \fB↻\fR, just like on screen, so you can search with \fBgrep ✗\fR. They can be seen from baton (history) without leaving the application.
+.TP
+.I .baton/backups/
+Volume backups (one \fI.tgz\fR per volume).
+.TP
+.I ~/.config/baton/plugins/plugins.lock
+What \fBbaton plugin add\fR installed: origin, version, commit, signature and sha256 of each manifest. It is not edited by hand.
+.TP
+.I ~/.config/baton/plugins/<name>/baton\-plugin.toml
+The global plugins of this user (or the folder of \fBBATON_PLUGINS_DIR\fR). The plan only names the step type.
+.TP
+.I baton/plugins/
+The plugins of the project (\fIplugins.lock\fR and one folder per plugin). They are versioned with the project, so it is worth reviewing them in a PR like any change to a plan: a manifest decides which commands run.
+.
+.SH FORMAT OF A PLAN
+.nf
+.RS
+name = "instalar"
+
+[options]
+backup = false            # general backup switch
+auto_rollback = false     # undo only on abort or without a terminal
+dry_run = false
+[backup]
+volumes = ["pg_data"]
+database = false          # true: also dumps the databases (db credentials); or ["app"]
+dir = ".baton/backups"
+
+[[credentials]]
+id = "ghcr"
+kind = "docker"           # git | docker | ssh | db | mysql | sqlite | otro
+ref = "docker.env#GHCR"
+provider = "vault"        # optional, see SECRETS PROVIDERS
+
+[[steps]]
+id = "servicios"
+name = "Start services"
+type = "compose"
+source = "services/*/docker\-compose.yml"
+target = "prod\-app"
+depends_on = ["build"]
+timeout = "5m"
+retries = 1
+
+[steps.gate]
+mode = "auto"             # or "manual"
+condition = "all"         # all | at_least | critical
+[[steps.gate.checks]]
+kind = "http"
+url = "http://{destino}:8080/health"
+
+[[tasks]]
+id = "limpiar"
+name = "Clean temp files"
+description = "Deletes the temporary files"
+command = "sh limpiar.sh"
+dir = "scripts"           # optional: folder relative to the project
+target = "prod\-app"      # optional
+timeout = "5m"            # optional
+confirm = true            # optional: asks for confirmation before running it
+.RE
+.fi
+.PP
+The \fB[[tasks]]\fR are loose maintenance tasks that \fBbaton ops \-t <id>\fR runs when asked (they are not part of running the plan). Each one has \fBid\fR (stable), \fBname\fR, \fBcommand\fR and, optionally, \fBdescription\fR, \fBdir\fR (relative to the root, without \fB..\fR or \fI.baton/\fR), \fBtarget\fR, \fBtimeout\fR and \fBconfirm\fR.
+.PP
+Step types: \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR, \fBsql\fR, \fBcomando\fR (a plain command), \fBcheck\fR, \fBbackup\fR and \fBgate\fR (a step without an action, with only a gate). Each step has \fBid\fR (stable), \fBname\fR, \fBenabled\fR, \fBsource\fR (path, glob or list, relative to the project: never absolute, with \fB..\fR or inside \fI.baton/\fR), \fBtarget\fR, \fBcommand\fR, \fBdepends_on\fR, \fBtimeout\fR, \fBretries\fR, \fBgate\fR, \fBrollback\fR, \fBdry_run\fR and \fBbackup_before\fR. \fBdry_run\fR is a read\-only command that \fB\-\-dry\-run\fR really runs instead of listing the command of the step (for example \fBterraform plan \-var\-file=prod.tfvars\fR); it accepts the same placeholders as \fBcommand\fR, only applies to steps that run a command, and a word that usually modifies something (\fBapply\fR, \fBdestroy\fR...) produces a warning.
+.PP
+In \fBcompose\fR, \fBdockerfile\fR, \fBscript\fR and \fBsql\fR the command runs once per file, inside the folder of that file (by default \fBdocker compose up \-d\fR and \fBdocker build \-t {name}:latest .\fR). Commands accept the placeholders \fB{plan}\fR, \fB{fecha}\fR (date), \fB{destino}\fR (target), \fB{ambiente}\fR (environment), \fB{file}\fR, \fB{dir}\fR, \fB{name}\fR, \fB{script}\fR (the file name with its extension) and \fB{stem}\fR (without it, for example \fBrollback = "sh {stem}.rollback.sh"\fR); an unknown placeholder is left as is and only gives a warning.
+.PP
+A \fBscript\fR step runs \fB.sh\fR files (\fBsource\fR is required and can be a file, a glob or a list), one by one and in order by name, \fBinside the folder of each script\fR: a script that assumes the project root must go back to it, for example with \fBcd "$(dirname "$0")/.." || exit 1\fR. Without \fBcommand\fR, each script runs with the interpreter of its \fBshebang\fR (\fB#!/bin/bash\fR runs with bash) or with \fBsh\fR if it has none, and it does not need to be executable. With \fBcommand\fR that command is used for each file (for example \fBbash \-x {script}\fR). A script receives all the credentials declared in the plan as environment variables.
+.PP
+An \fBsql\fR step runs \fB.sql\fR files against PostgreSQL, MySQL (or MariaDB) or a SQLite file (depending on the type of the credential: \fBdb\fR, \fBmysql\fR or \fBsqlite\fR), one by one and in order by name, inside the folder of each file (\fBsource\fR is required). It connects with a credential of type \fBdb\fR: the only one the plan declares or, if it declares several, the one the step chooses with \fBdatabase = "<id>"\fR (the \fBid\fR of the credential; the editor shows a \fBbase (sql)\fR selector when there is more than one). A \fBdb\fR credential is only asked for when running if some active \fBsql\fR step uses it or the backup includes it: baton hands it to \fBpsql\fR through the libpq environment variables (\fBPGUSER\fR, \fBPGPASSWORD\fR, \fBPGHOST\fR, \fBPGPORT\fR, \fBPGDATABASE\fR), so the password never goes in an argument. Without \fBcommand\fR it runs \fBpsql \-X \-v ON_ERROR_STOP=1 \-f file\fR: the first error stops the file and the plan. If the credential defines \fBCONTAINER\fR, it runs with \fBdocker exec\fR inside that container instead of using a local \fBpsql\fR (and it does not use HOST or PORT). The step runs on its target like any other, so \fBpsql\fR (or docker) must exist there.
+.PP
+With a \fBsqlite\fR credential the step runs \fBsqlite3 \-bail <file> < <script>\fR (the first error stops the file and the plan), inside the folder of each \fB.sql\fR; the database file is resolved from the project root and, if it does not exist, \fBsqlite3\fR creates it. There is no password: the credential only has \fBFILE\fR, and the path can change per environment (\fI.baton/credentials/<ambiente>/db.env\fR). To back up it uses \fB.backup\fR of \fBsqlite3\fR (a consistent copy even if the database is in use) to \fI<plan>\-<fecha>\-<file>.sqlite3\fR, and the rollback uses \fB.restore\fR, which returns the database exactly as it was: unlike PostgreSQL, what the plan created after the backup also disappears. \fBsqlite3\fR must exist on the target where the step runs. Testing the connection of the credential opens the file read\-only and counts its objects.
+.PP
+With a \fBmysql\fR credential the step runs \fBmysql \-u <user> [\-h <host> \-P <port>] <database> < <script>\fR (or \fBdocker exec\fR if it defines \fBCONTAINER\fR), with the password in the \fBMYSQL_PWD\fR variable and never in an argument; the first error stops the file. The backup uses \fBmysqldump \-\-single-transaction \-\-routines \-\-triggers\fR to \fI<plan>\-<fecha>\-<database>.mysql.sql\fR (which is why the credential needs \fBDATABASE\fR to back up) and the rollback replays that dump with \fBmysql\fR: it replaces the tables that were in the dump, but what the plan created afterwards is not removed. \fBmysql\fR and \fBmysqldump\fR must exist where the step runs.
+.PP
+Before running an \fBsql\fR step, baton scans the files looking for destructive statements (\fBDROP\fR, \fBTRUNCATE\fR, \fBDELETE\fR or \fBUPDATE\fR without \fBWHERE\fR, \fBALTER ... DROP\fR; comments and quoted texts do not count, but the body of a \fB$$ ... $$\fR block does) and writes them to the log. In a terminal it asks for confirmation. Without a terminal the run is rejected before starting unless \fB\-\-assume\-yes\fR is given, and with \fB\-\-dry\-run\fR they are only listed. It is a word\-based check, not a full analysis: it is a safety net, not a guarantee.
+.PP
+With \fBdatabase = true\fR in \fB[backup]\fR (all the \fBdb\fR credentials of the plan) or a list of ids (\fBdatabase = ["app", "reportes"]\fR), a \fBbackup\fR step (or \fBbackup_before\fR) also dumps each database with \fBpg_dump \-Fc\fR to \fI<plan>\-<fecha>\-<database>.dump\fR in the backups folder (with several databases the name carries the id of the credential: \fI<plan>\-<fecha>\-<id>\-<database>.dump\fR; only once per run, even if several steps ask for it), and the rollback of a \fBbackup\fR step without its own \fBrollback\fR \fBrestores the last dump of each database\fR with \fBpg_restore \-\-clean \-\-if\-exists\fR. That includes \fBbaton rollback\fR, which uses the dump of the previous run. Restoring replaces the current content of the database: it is the rollback you choose on the failure screen, or the one \fBauto_rollback\fR applies when aborting. A \fBrollback\fR declared in the step takes precedence over the restore. The restore only replaces the objects that existed when the dump was made: what the plan created afterwards (new tables, for example) is not removed.
+.PP
+The checks of a gate are \fBhealthcheck\fR, \fBhttp\fR, \fBcommand\fR and \fBrunning\fR. When scanning a source, each service infers its check: the compose \fBhealthcheck\fR if it exists; otherwise, HTTP against the first port; otherwise, container up for a minimum time. A new service is never activated by itself.
+.PP
+Steps run in the order of the file. \fBdepends_on\fR is validated (existence, cycles, dependencies on a later step): a step whose dependency did not run is skipped, with the reason.
+.
+.SH FORMAT OF .baton/config.toml
+.nf
+.RS
+[defaults]
+target = "local"
+secrets = "vault"         # default secrets provider
+ambiente = "dev"          # environment if you give neither \-\-env nor BATON_AMBIENTE
+engine = "auto"           # container engine: auto, docker or podman
+
+[ambientes.produccion]    # you choose the name; baton knows none
+protegido = true          # asks to type the name before running or rolling back
+
+[targets.prod\-app]
+type = "ssh"
+host = "10.0.4.12"
+port = 22
+user = "deploy"
+credential = "servers.env#PROD_APP"
+remote_dir = "/opt/stack"
+bastion = "bastion"       # another ssh target
+sync = true               # rsync of the plan folders before using it
+
+[targets.qa]
+type = "context"
+context = "qa\-swarm"
+
+[logs]
+local = ".baton/logs/{plan}\-{fecha}.log"
+remote = "/var/log/baton"
+format = "text"           # or "json"
+[logs.retention]
+days = 30
+max_size = "500MB"
+[logs.export]
+enabled = false
+kind = "otlp"             # or "syslog"
+endpoint = "http://localhost:4318"
+.RE
+.fi
+.PP
+\fB[logs.export]\fR (off by default) sends the log of each run to another system \fBwhen it finishes\fR, never in a dry-run. A failure when exporting is noted in the log and does not make the run fail. With \fBkind = "otlp"\fR it sends an OTLP/HTTP \fBPOST\fR with JSON to \fB<endpoint>/v1/logs\fR (with \fBhttps://\fR if the collector asks for it), using \fBcurl\fR; authentication headers are read from the standard variable \fBOTEL_EXPORTER_OTLP_HEADERS\fR (\fBAuthorization=Bearer abc,X\-Org=one\fR), so the token does not live in \fIconfig.toml\fR, and together with the URL they travel to \fBcurl\fR through standard input, not as arguments. Each line of the log is a record with its time, severity (errors as ERROR, retries as WARN) and attributes \fBbaton.step\fR and \fBbaton.kind\fR; the resource carries \fBservice.name=baton\fR, the plan, the id of the run, the environment and the machine. With \fBkind = "syslog"\fR it sends one RFC 5424 message per line to \fBudp://host:514\fR (or plain \fBhost:514\fR), \fBtcp://host:514\fR or \fBunix:///dev/log\fR. What is exported already goes without the secret values, just like the log. Up to 50000 lines per run are kept; if there are more, you are told how many were left out.
+.PP
+An \fBssh\fR target uses the system \fBssh\fR binary (it respects \fI~/.ssh/config\fR). If \fBsync\fR is on, \fBrsync\fR copies the project root, never \fI.baton/\fR, only once per target and per run. The bastion is translated to \fB\-J\fR or, if its credential has a key (\fBKEY\fR), to a \fBProxyCommand\fR that uses it, so a bastion can have a key different from the one of the target. A key with a passphrase (\fBPASSPHRASE\fR in the credential, or in the bastion's) works without an agent or a terminal: baton offers itself to \fBssh\fR as the password program (\fBSSH_ASKPASS\fR, OpenSSH 8.4 or later) and only answers the question about the passphrase of that key; never a password or a confirmation. Only keys are supported, not passwords. A \fBcontext\fR runs with \fBDOCKER_CONTEXT\fR set.
+.
+.SH PLUGINS
+A plugin adds a step type (for example \fBterraform\fR) next to \fBcompose\fR, \fBscript\fR and the others. It is a manifest, without code: it describes which command to run and baton keeps the execution, the credentials, the logs and the gates. It is installed in \fI~/.config/baton/plugins/<name>/baton\-plugin.toml\fR (the folder is named like the plugin) and used with \fBtype = "<type>"\fR. A plugin that cannot be loaded is reported on stderr and does not prevent using baton.
+.PP
+.nf
+.RS
+api = 1
+name = "terraform"
+version = "0.1.0"
+description = "Terraform per folder"
+requires = ["terraform"]
+
+[type]
+scanned = true
+detect = ["**/main.tf"]
+command = "terraform init \-input=false && terraform apply \-input=false \-auto\-approve"
+dry_run = "terraform init \-input=false && terraform plan \-input=false"
+destructive = ["will be destroyed", "must be replaced"]
+
+[[credentials]]
+kind = "aws"
+fields = [
+  { key = "ACCESS_KEY_ID" },
+  { key = "SECRET_ACCESS_KEY", secret = true },
+  { key = "REGION", optional = true },
+]
+
+[credentials.env]
+AWS_ACCESS_KEY_ID = "{ACCESS_KEY_ID}"
+AWS_SECRET_ACCESS_KEY = "{SECRET_ACCESS_KEY}"
+AWS_DEFAULT_REGION = "{REGION}"
+.RE
+.fi
+.PP
+\fBapi\fR is the version of the format (today 1); a manifest of another version is rejected with an explanation. \fBrequires\fR are programs that must exist where the step runs. \fBscanned\fR makes \fBsource\fR a glob and makes the command run once per file, inside its folder, like \fBcompose\fR. \fBdetect\fR are the patterns \fBbaton init\fR uses to propose steps of this type. \fBcommand\fR is the default command (a step can declare its own) and accepts the same placeholders as a step. A type cannot be named like one of baton's, nor require backup or gate.
+.PP
+\fBdry_run\fR is the command used with \fB\-\-dry\-run\fR and \fBit has to be read\-only\fR (\fBplan\fR, \fBwhat\-if\fR, \fBvalidate\fR): one equal to \fBcommand\fR or that uses words like \fBapply\fR, \fBdestroy\fR, \fBcreate\fR or \fBdeploy\fR is rejected. It is an appearance check, not a guarantee: a command can hide what it does, so read the commands with \fBbaton plugin validate\fR before installing someone else's plugin.
+.PP
+With \fB\-\-dry\-run\fR, a step of that type runs its \fBdry_run\fR once per file (for example \fBterraform plan\fR) and shows the result; it does not sync the remote target, so the files already there are used. If the step declares its own \fBcommand\fR, the \fBdry_run\fR of the type is not used (it would no longer describe what the step would do) and the log says so: to plan it, the step declares its own \fBdry_run\fR, which takes precedence over the one of the type. Before running, baton checks that the programs in \fBrequires\fR exist (on an ssh target this is not checked). \fBdestructive\fR are phrases searched for in the output of the \fBdry_run\fR (literal text, ignoring case and colors; a \fBdry_run\fR is required). Before running a step of that type, baton runs the \fBdry_run\fR of all its folders and, if some phrase appears (in Terraform, a resource that \fBwill be destroyed\fR or \fBmust be replaced\fR; a summary like \fB0 to destroy\fR does not count), it writes each line to the log with \fBatención:\fR (warning) and asks once before backing up or applying anything. Rejecting stops the plan as aborted. \fBWithout a terminal the step fails before applying\fR, unless \fB\-\-assume\-yes\fR is given. In a \fB\-\-dry\-run\fR it is only shown. The check is done on a plan prior to the one of the command: if something changes between the two, what is applied could differ. A step of that type that rewrites \fBcommand\fR must declare its own \fBdry_run\fR (with the equivalent plan); otherwise \fBbaton validate\fR rejects it, so the check is not lost without anyone noticing.
+.PP
+\fB[[credentials]]\fR declares which credential the plugin uses. \fBkind\fR is the name of the type (\fBaws\fR); if it is not one of baton's, \fBfields\fR defines it (each field with its \fBkey\fR in capitals, \fBsecret\fR if it must be masked and struck out of everything that is shown or saved, and \fBoptional\fR if it can stay empty); with a baton type (\fBdocker\fR, \fBgit\fR...) \fBfields\fR is omitted and only \fBenv\fR is given. \fB[credentials.env]\fR says with which names the command receives each value, because each tool expects its own: \fBVARIABLE = "template with {FIELDS}"\fR. A variable whose template uses an empty optional field is not defined. You cannot define \fBPATH\fR, \fBHOME\fR, \fBSHELL\fR, \fBIFS\fR, \fBLD_*\fR, \fBDYLD_*\fR, \fBBASH_ENV\fR or \fBBATON_*\fR. The plan uses the type with its usual \fB[[credentials]]\fR (\fBkind = "aws"\fR, \fBref = "servers.env#PROD"\fR); if it declares none, the command receives nothing and the tool uses whatever is already in the environment (\fBaws sso\fR, a profile...). The command receives only the \fBenv\fR variables of the credential its type asks for, not the other ones of the plan. A plan can only declare one credential of each type the plugin uses (for different accounts there are environments). A credential type is global and two plugins can share it if they define it the same way; with different fields, the second one is not loaded. \fBbaton plugin add\fR shows which credentials the plugin asks for and which variables it turns them into.
+.PP
+The guide for whoever writes a plugin (tutorial, manifest reference and how to publish it signed) is in \fIdocs/plugins.md\fR, in the baton repository.
+.PP
+\fBInstalling someone else's plugin is giving someone commands that run with your permissions.\fR That is why \fBbaton plugin add\fR shows the commands before installing, requires a signature verified on GitHub and pins what was installed. A verified signature proves the commit is from whoever it says, not that its commands are harmless: what protects you is reading them. \fBplugins.lock\fR (in the plugins folder) records where each plugin came from, the commit and the sha256 of the manifest; on every start, a registered plugin whose manifest no longer matches \fBis not loaded\fR and you are told, and if \fIplugins.lock\fR itself cannot be read none is loaded. A plugin copied or linked by hand has no record (\fBplugin list\fR marks it) and is loaded as before.
+.PP
+A plugin command receives only the credentials it mentions (\fB$NAME\fR), unlike \fBcompose\fR or \fBscript\fR, which receive all the declared ones.
+.PP
+\fBbaton init\fR proposes one step for each plugin type that recognizes something in the project (according to \fBdetect\fR), always \fBdisabled\fR: an infrastructure step modifies things outside this machine and enabling it is a decision for whoever knows the environment. It does not descend into hidden folders or into \fBnode_modules\fR, \fBvendor\fR or \fBtarget\fR.
+.SH CREDENTIALS
+Before running, \fBbaton\fR asks for or confirms the credentials the plan needs (the ones declared with \fB[[credentials]]\fR plus the one of each ssh target used by an active step). On the screen you can confirm, edit, test the connection (real only for docker) or mark "do not ask again", a flag per credential that is saved in \fIstate.json\fR. If a silenced credential fails authentication, the flag is turned back on without a notice.
+.PP
+Secret values are masked on screen (\fBghp_••••3kQ\fR) and struck out of everything \fBbaton\fR shows or saves (screen, log, failure message).
+.PP
+Commands receive the declared credentials as environment variables \fBPREFIX_FIELD\fR, \fBbut only the ones they mention\fR (\fB$GHCR_TOKEN\fR, \fB${GHCR_TOKEN}\fR). \fBcompose\fR and \fBdockerfile\fR steps receive all of them, because their files interpolate \fB${VAR}\fR. Secrets never travel in the arguments of a process: locally they go through the environment and over ssh through standard input.
+.PP
+Fields per type: \fBgit\fR (USER, TOKEN), \fBdocker\fR (REGISTRY, USER, TOKEN), \fBssh\fR (KEY, PASSPHRASE), \fBdb\fR (PostgreSQL: USER, PASSWORD and, optionally, HOST, PORT, DATABASE and CONTAINER), \fBmysql\fR (MySQL or MariaDB: the same fields as \fBdb\fR; the password travels in \fBMYSQL_PWD\fR), \fBsqlite\fR (FILE: the path of the file, relative to the project root or absolute) and \fBotro\fR (VALUE; Spanish for "other"). The path of a SQLite file goes in a credential, and not in the plan, because it can be different on each machine or environment.
+.PP
+Without a terminal nothing is asked: each field must resolve from the \fI.env\fR, the environment variable or the provider, or the run fails before starting saying which credential, which field and where it was expected.
+.
+.SH LANGUAGE
+baton speaks Spanish by default and also English. It is chosen with \fBBATON_LANG\fR (\fBes\fR, \fBen\fR or \fBauto\fR) or with \fBui.language\fR in the global or project configuration (\fBbaton settings set ui.language en\fR). The variable wins, then the project, then the global one; with nothing, Spanish is used, \fBeven if the system is in English\fR: the system language only counts with \fBauto\fR. A value that does not exist is ignored (it stays Spanish) and \fBvalidate\fR warns about it.
+.PP
+The screens of the interface, the output of \fBrun\fR and \fBops\fR, \fBsettings\fR, \fBplugin\fR, \fBinit\fR and \fBdocs\fR (the documentation is generated in the active language, with the commands and names of the plan as written) and the messages of the runner (the log of each run is written in the active language) are translated. The headings of \fB\-\-help\fR (\fBUsage\fR, \fBOptions\fR, \fBCommands\fR) and the argument errors (\fBunexpected argument\fR, \fBinvalid value\fR...) also follow the language, and come out with the same \fBerror:\fR format as the other errors. The description of each command and option in the help, the Spanish manual (this one is its English copy), the \fBvalidate\fR diagnostics, the rest of the commands and the log export errors stay in Spanish; a text without a translation is shown in Spanish, never empty. The names of commands, options, keys and files are not translated.
+.PP
+Translations go inside the binary, in \fIcrates/baton\-core/i18n/<code>.toml\fR (the key is the text in Spanish and the value its translation); adding a language is adding that file and a test keeps it complete.
+.
+.SH SECRETS PROVIDERS
+Besides the \fI.env\fR, a value can come from a secrets manager. They are declared in \fI.baton/config.toml\fR (they never travel with the plan) and a credential chooses one with \fBprovider\fR (\fBfile\fR forces only the \fI.env\fR). Without \fBprovider\fR, \fB[defaults].secrets\fR is used.
+.nf
+.RS
+[secrets.vault]
+type = "vault"
+path = "secret/baton/{ambiente}/{prefijo}"
+addr = "https://vault.example.com"   # optional
+# optional: mount, field, namespace, timeout
+
+[secrets.kv]
+type = "azure\-keyvault"
+vault = "kv\-company"
+name = "{ambiente}\-{prefijo}\-{campo}"
+# optional: subscription, timeout
+
+[secrets.bw]
+type = "bitwarden"
+item = "{ambiente}\-{prefijo}\-{campo}"   # by default "{prefijo}\-{campo}"
+read = "password"                       # or username, notes, uri, totp
+# optional: timeout
+
+[secrets.otro]
+type = "command"
+get = "op read op://infra/{prefijo}/{campo}"
+timeout = "15s"
+.RE
+.fi
+.PP
+\fBvault\fR runs \fBvault kv get\fR, \fBazure\-keyvault\fR runs \fBaz keyvault secret show\fR and \fBbitwarden\fR runs \fBbw get\fR with \fB\-\-nointeraction\fR (the item must have a unique name; if the vault is locked it fails instead of asking, and the \fI.env\fR fallback is used), with the login the machine already has (\fBvault login\fR, \fBaz login\fR, \fBexport BW_SESSION=$(bw unlock \-\-raw)\fR). Bitwarden Secrets Manager (\fBbws\fR) is used with \fBcommand\fR. \fBcommand\fR runs any command that prints the value. The placeholders are \fB{ambiente}\fR (environment), \fB{prefijo}\fR (prefix), \fB{campo}\fR (field, in lowercase), \fB{variable}\fR and \fB{archivo}\fR (file).
+.PP
+The resolution order of each field is: environment variable, provider and, lastly, the \fI.env\fR. If the provider fails, the \fI.env\fR is used as a fallback, so without a network everything keeps working with what is on disk; if there is no value either, the error says why the provider failed. A value that comes from a provider is \fBnever written to disk\fR. They are read\-only: \fBbaton\fR does not write to the manager.
+.
+.SH KEYS
+.SS Plan view
+.TP
+.BR space
+Enable or disable the step.
+.TP
+.B shift + arrows
+Move the step.
+.TP
+.BR e ", " g
+Edit the step, or add a gate to it.
+.TP
+.B b, r, d
+Toggle backup, automatic rollback and dry-run.
+.TP
+.B v
+See the pipeline of the plan.
+.TP
+.B h
+History of the runs of the plan: a list with \fB✓\fR, \fB✗\fR or \fB!\fR, and the per-step detail of the chosen one. \fBenter\fR opens the log of that run.
+.TP
+.B l
+Log of the last run (only if the plan already ran).
+.TP
+.B u
+Resume: runs like \fBenter\fR, but skips the steps that finished well in the last run (only if some are done and others pending).
+.TP
+.B p
+List of plans: \fBenter\fR opens the chosen one (refused if the editor has unsaved changes), \fBc\fR copies it, \fBr\fR renames it and \fBd\fR deletes it (asks for confirmation with \fBs\fR, or \fBy\fR). Copy and rename ask for the new name in a box. The open plan cannot be deleted, and renaming the open one also requires the editor to have no changes.
+.TP
+.B enter
+Run.
+.TP
+.BR q ", " esc
+Quit.
+.SS Step editor
+.TP
+.B tab
+Go to the next field.
+.TP
+.B ctrl + s
+Save to the plan file, keeping comments and format.
+.TP
+.B ctrl + t
+Test the step (always as a dry-run).
+.TP
+.B ctrl + d
+Duplicate the step.
+.TP
+.B ctrl + x
+Delete the step (asks for confirmation; the steps that depended on it stop depending). With the focus on the list of steps, \fBb\fR or \fBsupr\fR (delete) is enough. It does not touch the file until saved.
+.TP
+.B ctrl + g
+Configure the gate. In its table of checks, \fBb\fR deletes the chosen check (asks for confirmation) and \fBx\fR removes the whole gate.
+.TP
+.B esc
+Go back to the plan view. Nothing reaches the file until \fBctrl s\fR: while there are unsaved changes the title shows \fB● unsaved\fR and new or duplicated steps carry \fB●\fR at the end of their row. If you leave with pending changes, it asks: \fBg\fR saves and leaves, \fBd\fR discards the draft and any other key keeps editing.
+.SS During a run
+.TP
+.B p
+Pause between steps.
+.TP
+.B v
+Toggle the log and the pipeline.
+.TP
+.BR q ", " ctrl + c
+Quit (asks for confirmation).
+.TP
+.B ctrl + z
+Suspend \fBbaton\fR and go back to the shell, like any program; \fBfg\fR brings it back. While it is suspended it neither advances nor reads the output of what it runs.
+.PP
+On a failure you can retry, update the credential and retry, roll back, \fBsee the full log\fR (\fBl\fR, inside the application, positioned on the step that failed), \fBopen a shell\fR to investigate (in the project folder if the step ran on your machine; in an ssh session in the remote directory, with the same key and bastion, if it ran on an ssh target; with \fBDOCKER_CONTEXT\fR set if it was a docker context; never with the credentials) (on leaving with \fBexit\fR you go back to the application) or abort. When finished or aborted, \fBenter\fR goes back to the plan view, which shows at the top how the last run ended and leaves the cursor on the step that failed; only \fBq\fR closes \fBbaton\fR. To fix a step: \fBe\fR (edit), \fBctrl + s\fR (save) and \fBu\fR (resume).
+.
+.SH ENVIRONMENT
+.TP
+.B BATON_ENGINE
+Container engine: \fBdocker\fR, \fBpodman\fR or \fBauto\fR (it takes precedence over \fBengine\fR in \fB[defaults]\fR). In \fBauto\fR docker is used if installed and, if not, podman. With podman, every \fBdocker\fR of a command (those of the plan too) runs as \fBpodman\fR and \fBcompose\fR goes through \fBpodman compose\fR. An ssh target cannot be inspected from here: it uses docker unless the engine was set by hand, and a docker context is always docker.
+.TP
+.B BATON_LANG
+Language of baton: \fBes\fR, \fBen\fR or \fBauto\fR (the system's). It takes precedence over \fBui.language\fR. See \fBLANGUAGE\fR.
+.TP
+.B NO_COLOR
+If set and not empty, no colors (https://no\-color.org). It takes precedence over \fBFORCE_COLOR\fR.
+.TP
+.B FORCE_COLOR
+If set and not \fB0\fR, with colors even if the output is not a terminal (for example, a pipe to \fBless \-R\fR); it also beats \fBTERM=dumb\fR.
+.TP
+.B BATON_COLORS
+Palette of the interface: \fBfixed\fR (the default, with its own backgrounds for the chosen row and the states) or \fBterminal\fR (only the colors of your theme: no own backgrounds, with secondary text dimmed instead of gray; useful on light or low\-contrast themes). It takes precedence over \fBui.colors\fR.
+.TP
+.B BATON_ASCII
+ASCII symbols (\fB+ x ~ # | -\fR instead of \fB✓ ✗ ◐ ◆ │ ─\fR) for consoles without a Unicode font. \fB1\fR turns them on and \fB0\fR turns them off; with no value they turn on by themselves if the character set of the terminal is not UTF\-8 (\fBLC_ALL\fR, \fBLC_CTYPE\fR or \fBLANG\fR, the first one defined) or if \fBTERM=linux\fR. Each symbol becomes a single character, so the drawing does not change width; it does not affect letters with accents, which depend on the terminal. The help texts of the question menus (\fBbaton ops \-\-no\-tui\fR, \fBbaton select\fR) keep their arrows.
+.TP
+.B BATON_CONFIG
+Global configuration file instead of \fI~/.config/baton/config.toml\fR (see \fBbaton settings\fR).
+.TP
+.B SHELL
+If \fBshell\-init\fR is not given a shell, it uses the one in this variable.
+.TP
+.B CI
+If set, \fBrun\fR uses plain text and the helpers do not ask.
+.TP
+.B BATON_NONINTERACTIVE
+The helpers never ask.
+.TP
+.B BATON_<NAME>
+The answer to a question of \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR or \fBinput\fR.
+.TP
+.B <PREFIX>_<FIELD>
+The value of a credential field (for example \fBGHCR_TOKEN\fR). It wins over the \fI.env\fR and over the provider, so in CI \fI.baton/\fR is not needed.
+.TP
+.B BATON_PLUGINS_DIR
+The folder where plugins live (by default \fI$XDG_CONFIG_HOME/baton/plugins\fR or \fI~/.config/baton/plugins\fR).
+.TP
+.B VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE
+Used by \fBvault\fR in the providers of that type.
+.
+.SH EXIT CODES
+.TP
+.B 0
+All good (in \fBconfirm\fR, the answer was yes).
+.TP
+.B 1
+The project or the plan have errors, or the run could not be prepared (in \fBconfirm\fR, the answer was no).
+.TP
+.B 2
+Usage error: there is no project, the plan does not exist, contradictory options, or a helper is missing an answer.
+.TP
+.B 3
+The run failed or was aborted.
+.TP
+.B 130
+A question was cancelled (\fBesc\fR or \fBctrl + c\fR).
+.
+.SH EXAMPLES
+Build a plan from scratch and run it:
+.PP
+.nf
+.RS
+baton init
+baton start            # review and adjust the steps
+baton run
+.RE
+.fi
+.PP
+Run in CI, without a terminal, with the credentials in variables and manual gates accepted:
+.PP
+.nf
+.RS
+GHCR_REGISTRY=ghcr.io GHCR_USER=ci GHCR_TOKEN=$TOKEN \\
+  baton run instalar \-\-assume\-yes \-\-env prod
+.RE
+.fi
+.PP
+Convert a GitHub workflow and see first what would be imported:
+.PP
+.nf
+.RS
+baton import .github/workflows/deploy.yml \-\-dry\-run
+baton import .github/workflows/deploy.yml \-\-plan deploy
+.RE
+.fi
+.PP
+Resume a plan that failed halfway, or undo it:
+.PP
+.nf
+.RS
+baton run instalar \-\-resume
+baton rollback instalar
+.RE
+.fi
+.PP
+Questions in a script, without a terminal in CI:
+.PP
+.nf
+.RS
+BATON_AMBIENTE=staging BATON_DESPLEGAR=yes ./desplegar.sh
+.RE
+.fi
+.
+.SH LIMITATIONS
+A bastion cannot in turn jump through another bastion, and ssh only gets in with keys (not with a password). The Vault, Azure Key Vault and Bitwarden providers have only been tested with test binaries. The zsh prompt integration has not been tested in a real terminal. With nested projects, the prompt and the search use only the closest one.
+.
+.SH SEE ALSO
+.BR docker (1),
+.BR docker\-compose (1),
+.BR ssh (1),
+.BR rsync (1),
+.BR sh (1)
+.
+.SH AUTHOR
+Project under development; \fB"baton"\fR is a working name and may change.

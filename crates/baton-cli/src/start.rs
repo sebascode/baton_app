@@ -12,6 +12,7 @@ use baton_core::{Config, Plan};
 use baton_store::scaffold::{CreateError, create_plan};
 use baton_store::{Project, check_config, check_plan};
 
+use crate::report;
 use crate::tui_run::{Flags, RunDriver};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
@@ -83,7 +84,7 @@ pub fn create(project: &Project, given: &str) -> ExitCode {
             ExitCode::from(EXIT_USAGE)
         }
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::from(EXIT_INVALID)
         }
     }
@@ -107,7 +108,7 @@ pub fn start(project: &Project, given: &str) -> ExitCode {
                 )
             ),
             Err(e) => {
-                eprintln!("{}", tr!("error: {e}", e = e));
+                report::error(&e);
                 return ExitCode::from(EXIT_INVALID);
             }
         }
@@ -120,10 +121,7 @@ fn has_terminal() -> bool {
 }
 
 fn needs_terminal(plan: &str) -> ExitCode {
-    eprintln!(
-        "{}",
-        tr!("error: baton start necesita una terminal interactiva")
-    );
+    report::error(tr!("baton start necesita una terminal interactiva"));
     eprintln!(
         "{}",
         tr!(
@@ -137,6 +135,29 @@ fn needs_terminal(plan: &str) -> ExitCode {
 /// Abre la vista del plan. Con `editor_first` (o si el plan no tiene pasos) entra directo al
 /// editor de pasos; `esc` vuelve a la vista del plan.
 pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode {
+    open_on(project, plan_name, editor_first, false, None, None)
+}
+
+/// `baton ops` en una terminal: la misma interfaz que `baton start`, abierta directo en la
+/// pantalla de mantención. `esc` pasa a la vista del plan y desde ahí se sale; nada se cierra
+/// solo.
+pub fn open_maintenance(
+    project: &Project,
+    plan_name: &str,
+    ambiente: Option<&str>,
+    lines: u32,
+) -> ExitCode {
+    open_on(project, plan_name, false, true, ambiente, Some(lines))
+}
+
+fn open_on(
+    project: &Project,
+    plan_name: &str,
+    editor_first: bool,
+    maintenance_first: bool,
+    ambiente_arg: Option<&str>,
+    ops_tail: Option<u32>,
+) -> ExitCode {
     if !has_terminal() {
         return needs_terminal(plan_name);
     }
@@ -146,8 +167,8 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     };
     let empty = plan.steps.is_empty();
     // un ambiente inválido no impide abrir el plan (el editor sirve para arreglarlo): se avisa
-    let ambiente = crate::ambiente::resolve(None, &config).unwrap_or_else(|e| {
-        eprintln!("{}", tr!("aviso: {e}; se ignora", e = e));
+    let ambiente = crate::ambiente::resolve(ambiente_arg, &config).unwrap_or_else(|e| {
+        report::warn(tr!("{e}; se ignora", e = e));
         None
     });
     let mut driver = RunDriver::new(
@@ -156,12 +177,15 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
         plan,
         Flags {
             ambiente,
+            ops_tail,
             ..Flags::default()
         },
     );
     let mut app = driver.initial_app();
     if editor_first || empty {
         app.open_editor_first();
+    } else if maintenance_first {
+        driver.open_maintenance(&mut app);
     }
     // Un plan vacío siempre "tiene errores" (no tiene pasos): eso ya lo explica la pantalla.
     if !empty && let Some(first) = problems.first() {
@@ -180,7 +204,7 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     match baton_tui::demo::run_app(app, &mut driver) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::FAILURE
         }
     }

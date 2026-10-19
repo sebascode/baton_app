@@ -82,9 +82,9 @@ fn salida_writes_a_file_and_the_diagram_can_be_left_out() {
     let o = fx.baton(&[
         "docs",
         "instalar",
-        "--salida",
+        "--output",
         file.to_str().unwrap(),
-        "--sin-mermaid",
+        "--no-mermaid",
     ]);
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).is_empty(), "{}", out(&o));
@@ -98,7 +98,7 @@ fn salida_writes_a_file_and_the_diagram_can_be_left_out() {
 #[test]
 fn estado_adds_the_last_run_only_when_there_is_one() {
     let fx = Fx::new();
-    let o = fx.baton(&["docs", "instalar", "--estado"]);
+    let o = fx.baton(&["docs", "instalar", "--with-state"]);
     assert!(o.status.success());
     assert!(!out(&o).contains("## Última ejecución"));
     assert!(err(&o).contains("todavía no se ejecutó"), "{}", err(&o));
@@ -114,7 +114,7 @@ fn estado_adds_the_last_run_only_when_there_is_one() {
         .output()
         .unwrap();
     assert!(run.status.success(), "{}{}", out(&run), err(&run));
-    let o = fx.baton(&["docs", "instalar", "--estado"]);
+    let o = fx.baton(&["docs", "instalar", "--with-state"]);
     let t = out(&o);
     assert!(t.contains("## Última ejecución"), "{t}");
     assert!(t.contains("| Construir | hecho |"), "{t}");
@@ -171,7 +171,7 @@ fn it_documents_the_project_ambientes_services_hosts_and_scripts_without_secrets
     let t = out(&o);
     for want in [
         "| Ambientes | `dev`, `prod` (protegido) |",
-        "baton run instalar --ambiente prod",
+        "baton run instalar --env prod",
         "| `dev` | no | `docker.env` |",
         "| `prod` | sí | `servers.env` |",
         "| `instalar` (este) | 3 | sin ejecutar |",

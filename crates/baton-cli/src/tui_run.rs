@@ -29,6 +29,8 @@ pub struct Flags {
     pub resume: bool,
     /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
     pub ambiente: Option<String>,
+    /// Líneas de logs que pide la pantalla de mantención (`baton ops --lines`); sin valor, 100.
+    pub ops_tail: Option<u32>,
 }
 
 pub struct RunDriver {
@@ -58,9 +60,13 @@ pub struct RunDriver {
 struct MaintJob {
     rx: std::sync::mpsc::Receiver<MaintMsg>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Por dónde se le escribe al comando en curso (cambia con cada orden).
+    input: Option<baton_exec::adhoc::InputTx>,
 }
 
 enum MaintMsg {
+    Input(baton_exec::adhoc::InputTx),
+    Prompt(String),
     Note(String),
     Line(String, bool),
     Done(baton_tui::maint_view::MaintResult),
@@ -140,6 +146,10 @@ impl RunDriver {
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_quit_confirm(self.config.ui.confirms_exit())
+            .with_palette(baton_core::color::palette(
+                std::env::var("BATON_COLORS").ok().as_deref(),
+                self.config.ui.colors.as_deref(),
+            ))
             .with_editor(self.editor())
             .with_live_pipeline(
                 &self.plan.name,
@@ -208,7 +218,7 @@ impl RunDriver {
 
     /// Elige el ambiente de esta sesión (`a` en la vista del plan) y rehace la pantalla con él:
     /// credenciales, etiqueta de la cabecera y confirmación de los protegidos. No se guarda en
-    /// ningún lado: la próxima vez vuelve a mandar `--ambiente`, la variable o `[defaults]`.
+    /// ningún lado: la próxima vez vuelve a mandar `--env`, la variable o `[defaults]`.
     fn set_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
         if ambiente
             .as_deref()
@@ -394,12 +404,54 @@ impl RunDriver {
     }
 
     /// Abre la pantalla de mantención del plan (servicios, acciones y la salida en vivo).
+    pub fn open_maintenance(&self, app: &mut App) {
+        self.maintenance(app);
+    }
+
     fn maintenance(&self, app: &mut App) {
-        app.show_maintenance(crate::ops::maintenance_state(
-            &self.project,
-            &self.config,
-            &self.plan,
-        ));
+        let state = crate::ops::maintenance_state(&self.project, &self.config, &self.plan);
+        let state = state.with_ambientes(self.known_ambientes(), self.flags.ambiente.clone());
+        app.show_maintenance(match self.flags.ops_tail {
+            Some(n) => state.with_tail(n),
+            None => state,
+        });
+    }
+
+    /// Le escribe al comando en curso. Si no puede recibirlo (el destino lo ocupa para otra cosa,
+    /// como ssh con credenciales, o el comando ya cerró su entrada) lo dice.
+    fn maint_input(&mut self, app: &mut App, input: &baton_tui::maint_view::MaintInput) {
+        use baton_tui::maint_view::MaintInput;
+        let sent = self
+            .maint
+            .as_ref()
+            .and_then(|j| j.input.as_ref())
+            .map(|tx| match input {
+                MaintInput::Line(text) => tx.line(text),
+                MaintInput::Eof => tx.eof(),
+            });
+        if sent != Some(true) {
+            app.notify(&tr!(
+                "este comando no puede recibir texto (el destino no lo admite o ya terminó)"
+            ));
+        }
+    }
+
+    /// Cambia el ambiente desde la mantención: se rearma la aplicación (como en la vista del plan)
+    /// y se vuelve a abrir la mantención con el ambiente nuevo.
+    fn maint_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
+        if self.maint.is_some() {
+            return app.notify(&tr!("ya hay algo en curso"));
+        }
+        let wanted = ambiente.clone();
+        self.set_ambiente(app, ambiente);
+        if self.flags.ambiente != wanted {
+            return;
+        }
+        self.maintenance(app);
+        app.notify(&match &self.flags.ambiente {
+            Some(a) => tr!("ambiente: {name}", name = a),
+            None => tr!("sin ambiente"),
+        });
     }
 
     /// Corre lo pedido en la mantención en un hilo; la salida llega por `poll`.
@@ -431,12 +483,15 @@ impl RunDriver {
         std::thread::spawn(move || {
             for o in orders {
                 let _ = tx.send(MaintMsg::Note(o.label.clone()));
+                let (input_tx, input) = baton_exec::adhoc::Input::channel();
+                let _ = tx.send(MaintMsg::Input(input_tx));
                 let job = baton_exec::adhoc::Job {
                     target: o.target,
                     cwd: o.cwd,
                     line: o.line,
                     timeout: o.timeout,
                     all_credentials: o.all_credentials,
+                    input: Some(input),
                 };
                 let lines = tx.clone();
                 let result = baton_exec::adhoc::run(
@@ -449,11 +504,15 @@ impl RunDriver {
                     move |stream, line| {
                         // compose escribe su progreso por stderr: no es un error por eso, y los
                         // colores de la terminal no se dibujan aquí
-                        let _ = stream;
                         let clean = baton_core::plugin::strip_ansi(&line);
-                        if !clean.trim().is_empty() {
-                            let _ = lines.send(MaintMsg::Line(clean, false));
+                        if clean.trim().is_empty() {
+                            return;
                         }
+                        let _ = lines.send(if stream == baton_exec::adhoc::Stream::Prompt {
+                            MaintMsg::Prompt(clean)
+                        } else {
+                            MaintMsg::Line(clean, false)
+                        });
                     },
                 );
                 let done = match result {
@@ -477,17 +536,23 @@ impl RunDriver {
             }
             let _ = tx.send(MaintMsg::Done(MaintResult::Ok));
         });
-        self.maint = Some(MaintJob { rx, cancel });
+        self.maint = Some(MaintJob {
+            rx,
+            cancel,
+            input: None,
+        });
     }
 
     /// Pasa a la pantalla lo que dijo el hilo de la mantención.
     fn poll_maint(&mut self, app: &mut App) {
-        let Some(job) = &self.maint else {
+        let Some(job) = &mut self.maint else {
             return;
         };
         let mut finished = false;
         while let Ok(msg) = job.rx.try_recv() {
             match msg {
+                MaintMsg::Input(tx) => job.input = Some(tx),
+                MaintMsg::Prompt(t) => app.maint_prompt(&t),
                 MaintMsg::Note(t) => app.maint_note(&t),
                 MaintMsg::Line(t, err) => app.maint_line(&t, err),
                 MaintMsg::Done(r) => {
@@ -803,8 +868,57 @@ fn test_connection(
             mysql_ping(reference, &resolved, None, DB_PING_TIMEOUT)
         }
         CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
-        // `git`, `otro` y los que añade un plugin (no hay forma genérica de probarlos)
+        // un tipo de credencial de plugin que declara su propia prueba (`test`)
+        _ if baton_core::kind::credential_test(kind.name()).is_some() => plugin_test(kind, item),
+        // `git`, `otro` y los que añade un plugin sin `test` (no hay forma genérica de probarlos)
         _ => (false, tr!("sin prueba automática todavía")),
+    }
+}
+
+/// La prueba que declara el plugin: su comando de solo lectura con las variables de `env` armadas
+/// con los valores de la pantalla (por el entorno del proceso, nunca en un argumento). Los
+/// secretos se tachan de lo que se muestra.
+fn plugin_test(kind: CredentialKind, item: &CredItem) -> (bool, String) {
+    let Some((command, env)) = baton_core::kind::credential_test(kind.name()) else {
+        return (false, tr!("sin prueba automática todavía"));
+    };
+    let specs = baton_core::fields_for(kind);
+    let value_of = |key: &str| -> Option<String> {
+        let i = specs.iter().position(|s| s.key == key)?;
+        let v = item.fields.get(i)?.value.value();
+        (!v.is_empty()).then_some(v)
+    };
+    let vars: Vec<(String, String)> = env
+        .iter()
+        .filter_map(|(name, template)| {
+            baton_core::plugin::render_env(template, value_of).map(|v| (name.to_string(), v))
+        })
+        .collect();
+    let secrets: Vec<String> = specs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.secret)
+        .filter_map(|(i, _)| item.fields.get(i).map(|f| f.value.value()))
+        .collect();
+    let args = vec!["-c".to_string(), command.to_string()];
+    match run_limited(std::ffi::OsStr::new("sh"), &args, &vars, DB_PING_TIMEOUT) {
+        Err(Unfinished::NotFound) => (false, tr!("no se encontró sh en el PATH")),
+        Err(Unfinished::TimedOut) => (
+            false,
+            tr!(
+                "la prueba no respondió en {n} s",
+                n = DB_PING_TIMEOUT.as_secs()
+            ),
+        ),
+        Err(Unfinished::Other(e)) => (false, e),
+        Ok(done) if done.ok => (
+            true,
+            baton_core::mask::redact(&first_line(&done.stdout, &tr!("conectado")), &secrets),
+        ),
+        Ok(done) => (
+            false,
+            baton_core::mask::redact(&first_line(&done.stderr, &tr!("la prueba falló")), &secrets),
+        ),
     }
 }
 
@@ -1151,6 +1265,8 @@ impl Driver for RunDriver {
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::SetAmbiente(amb) => self.set_ambiente(app, amb),
+            Effect::MaintAmbiente(amb) => self.maint_ambiente(app, amb),
+            Effect::MaintInput(input) => self.maint_input(app, &input),
             Effect::OpenHistory => self.open_history(app),
             Effect::Maintenance => self.maintenance(app),
             Effect::MaintRun(req) => self.maint_run(app, &req),
@@ -1351,6 +1467,49 @@ exit 2"#,
         assert!(!ok);
         assert!(msg.contains("nadie"), "el error nombra al usuario: {msg}");
         assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
+    }
+
+    #[test]
+    fn a_plugin_credential_runs_the_test_its_manifest_declares_and_redacts_secrets() {
+        let manifest = r#"
+api = 2
+name = "probar-cred"
+version = "0.1.0"
+[type]
+command = "true"
+[[credentials]]
+kind = "probarcred"
+fields = [{ key = "USER" }, { key = "PASSWORD", secret = true }]
+test = 'if [ "$PC_USER" = ok ]; then echo "conectado como $PC_USER con $PC_PWD"; else echo "rechazado: $PC_PWD" >&2; exit 1; fi'
+[credentials.env]
+PC_USER = "{USER}"
+PC_PWD = "{PASSWORD}"
+"#;
+        baton_core::plugin::Manifest::parse(manifest)
+            .unwrap()
+            .register()
+            .unwrap();
+        let kind = CredentialKind::from_name("probarcred").unwrap();
+        let item = |user: &str| {
+            CredItem::new(
+                "pc",
+                CredStatus::FromFile,
+                "db.env",
+                vec![
+                    CredField::new("user", user, false),
+                    CredField::new("password", "clave-super-secreta", true),
+                ],
+            )
+        };
+        let reference: baton_core::CredentialRef = "db.env#PC".parse().unwrap();
+        let root = std::path::Path::new(".");
+        let (ok, msg) = test_connection(kind, &reference, &item("ok"), root);
+        assert!(ok, "{msg}");
+        assert!(msg.contains("conectado como ok"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "se tacha: {msg}");
+        let (ok, msg) = test_connection(kind, &reference, &item("otro"), root);
+        assert!(!ok && msg.starts_with("rechazado"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "{msg}");
     }
 
     fn mysql_ping_with(body: &str, extra: &[(&str, &str)]) -> (bool, String) {

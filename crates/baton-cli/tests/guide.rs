@@ -247,8 +247,8 @@ fn edit_still_works_as_a_hidden_alias_of_start() {
     assert!(help.contains("start") && help.contains("create"), "{help}");
     let commands: Vec<&str> = help
         .lines()
-        .skip_while(|l| !l.starts_with("Commands:"))
-        .take_while(|l| !l.is_empty() && !l.starts_with("Options:"))
+        .skip_while(|l| !l.starts_with("Comandos:"))
+        .take_while(|l| !l.is_empty() && !l.starts_with("Opciones:"))
         .collect();
     assert!(
         !commands.iter().any(|l| l.trim_start().starts_with("edit")),

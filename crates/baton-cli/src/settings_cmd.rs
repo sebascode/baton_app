@@ -10,10 +10,13 @@ use baton_core::settings::{self, KEYS, Key, Origin};
 use baton_store::Project;
 use baton_store::global::{Layers, Scope, SetError, set_key};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 pub enum Action {
-    List,
+    List {
+        json: bool,
+    },
     Get {
         clave: String,
     },
@@ -31,7 +34,7 @@ pub enum Action {
 pub fn run(action: &Action, start: &Path) -> ExitCode {
     let project = Project::discover(start);
     match action {
-        Action::List => list(project.as_ref()),
+        Action::List { json } => list(project.as_ref(), *json),
         Action::Get { clave } => get(project.as_ref(), clave),
         Action::Set {
             clave,
@@ -43,13 +46,10 @@ pub fn run(action: &Action, start: &Path) -> ExitCode {
 }
 
 fn unknown(name: &str) -> ExitCode {
-    eprintln!(
-        "{}",
-        tr!(
-            "error: '{name}' no es una clave que se pueda cambiar con settings",
-            name = name
-        )
-    );
+    report::error(tr!(
+        "'{name}' no es una clave que se pueda cambiar con settings",
+        name = name
+    ));
     eprintln!(
         "{}",
         tr!("claves: {list}", list = KEYS.map(|k| k.name).join(", "))
@@ -65,18 +65,46 @@ fn unknown(name: &str) -> ExitCode {
 fn layers(project: Option<&Project>) -> Result<Layers, ExitCode> {
     match project {
         Some(p) => Layers::read(p).map_err(|d| {
-            eprintln!("{}", tr!("error: {d}", d = d));
+            report::error(&d);
             ExitCode::from(EXIT_INVALID)
         }),
         None => Ok(Layers::global_only()),
     }
 }
 
-fn list(project: Option<&Project>) -> ExitCode {
+fn list(project: Option<&Project>, json: bool) -> ExitCode {
     let layers = match layers(project) {
         Ok(l) => l,
         Err(code) => return code,
     };
+    if json {
+        let keys: Vec<_> = KEYS
+            .iter()
+            .map(|k| {
+                let (origin, value) = layers.resolve(k);
+                // un valor por defecto que es un texto entre paréntesis ("(ninguno)") es solo
+                // para mostrarlo: en JSON es `null`
+                let value =
+                    value.or_else(|| (!k.default.starts_with('(')).then(|| k.default.to_string()));
+                serde_json::json!({
+                    "key": k.name,
+                    "value": value,
+                    "origin": match origin {
+                        Origin::Env => "env",
+                        Origin::Project => "project",
+                        Origin::Global => "global",
+                        Origin::Default => "default",
+                    },
+                })
+            })
+            .collect();
+        report::json(&serde_json::json!({
+            "global_file": layers.global_path.as_ref().map(|p| p.display().to_string()),
+            "project_file": project.map(|_| layers.project_path.display().to_string()),
+            "settings": keys,
+        }));
+        return ExitCode::SUCCESS;
+    }
     match &layers.global_path {
         Some(p) if layers.global.is_some() => {
             println!("{}", tr!("global:   {path}", path = p.display()))
@@ -116,7 +144,7 @@ fn list(project: Option<&Project>) -> ExitCode {
     println!();
     println!(
         "{}",
-        tr!("baton settings set <clave> <valor> [--proyecto]   baton settings unset <clave>")
+        tr!("baton settings set <clave> <valor> [--project]   baton settings unset <clave>")
     );
     ExitCode::SUCCESS
 }
@@ -171,7 +199,7 @@ fn change(
     let value = match raw.map(|r| settings::parse_value(k, r)).transpose() {
         Ok(v) => v,
         Err(msg) => {
-            eprintln!("{}", tr!("error: {msg}", msg = msg));
+            report::error(&msg);
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -214,27 +242,24 @@ fn change(
                     Origin::Global
                 };
                 if value.is_some() && origin != expected && origin != Origin::Default {
-                    eprintln!(
-                        "{}",
-                        tr!(
-                            "aviso: el valor efectivo sigue viniendo de otro lado ({origin})",
-                            origin = describe(origin, k, &layers)
-                        )
-                    );
+                    report::warn(tr!(
+                        "el valor efectivo sigue viniendo de otro lado ({origin})",
+                        origin = describe(origin, k, &layers)
+                    ));
                 }
             }
             ExitCode::SUCCESS
         }
         Err(SetError::NoPlace) => {
-            eprintln!("{}", tr!("error: {e}", e = SetError::NoPlace));
+            report::error(SetError::NoPlace);
             ExitCode::from(EXIT_USAGE)
         }
         Err(e @ SetError::Invalid(_)) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::from(EXIT_USAGE)
         }
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::from(EXIT_INVALID)
         }
     }

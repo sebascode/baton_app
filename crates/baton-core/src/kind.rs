@@ -38,6 +38,9 @@ pub struct CredUse {
     pub kind: &'static str,
     /// `(variable, plantilla)`.
     pub env: &'static [(&'static str, &'static str)],
+    /// Comando de solo lectura que prueba la credencial (`mariadb -e 'select 1'`); recibe las
+    /// variables de `env`. Sin él, la prueba de conexión dice que no hay una automática.
+    pub test: Option<&'static str>,
 }
 
 /// Lo que un tipo de paso sabe hacer.
@@ -69,6 +72,17 @@ pub struct KindSpec {
     pub destructive: &'static [&'static str],
     /// Credenciales que usa el tipo y cómo las recibe su comando.
     pub credentials: &'static [CredUse],
+    /// Comando que respalda lo que el paso va a tocar (`{backup_file}` es el archivo). Si lo
+    /// declara el tipo, vale como respaldo del paso con `backup_before` y, con `restore`, como lo
+    /// que deshace su rollback. Los tipos nativos tienen el suyo propio (volúmenes y bases).
+    pub backup: Option<&'static str>,
+    /// Comando que restaura el último respaldo (`{backup_file}`) en el rollback del paso.
+    pub restore: Option<&'static str>,
+    /// Extensión del archivo de respaldo (sin punto).
+    pub backup_ext: &'static str,
+    /// Frases que, si aparecen en los archivos del origen, piden confirmar antes de ejecutar
+    /// (`DROP`, `TRUNCATE`): texto literal, sin distinguir mayúsculas.
+    pub scan: &'static [&'static str],
 }
 
 /// Tipos nativos, en el orden en que los ofrece el editor. El índice es el identificador del
@@ -87,6 +101,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "dockerfile",
@@ -101,6 +119,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "script",
@@ -115,6 +137,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "sql",
@@ -129,6 +155,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "comando",
@@ -143,6 +173,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "check",
@@ -157,6 +191,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "backup",
@@ -171,6 +209,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
     KindSpec {
         name: "gate",
@@ -185,6 +227,10 @@ static BUILTIN: [KindSpec; 8] = [
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     },
 ];
 
@@ -298,12 +344,36 @@ impl StepKind {
         self.spec().destructive
     }
 
+    /// Comando de respaldo y de restauración del tipo, si los declara (solo plugins).
+    pub fn plugin_backup(self) -> Option<(&'static str, &'static str, &'static str)> {
+        let spec = self.spec();
+        Some((spec.backup?, spec.restore?, spec.backup_ext))
+    }
+
+    /// Frases de la revisión estática de los archivos del origen.
+    pub fn scan_phrases(self) -> &'static [&'static str] {
+        self.spec().scan
+    }
+
     /// Recibe todas las credenciales declaradas del plan, mencionadas o no: solo los tipos nativos
     /// escaneados, porque sus archivos interpolan `${VAR}` sin que el comando lo diga. Un tipo de
     /// plugin recibe únicamente las que su comando menciona: es un comando de terceros.
     pub fn receives_all_credentials(self) -> bool {
         self.is_builtin() && self.is_scanned()
     }
+}
+
+/// La prueba de una credencial de plugin: su comando y las variables (`VARIABLE`, plantilla) con
+/// que lo recibe, tomadas del primer plugin que la declara con `test`.
+pub fn credential_test(
+    credential_kind: &str,
+) -> Option<(&'static str, &'static [(&'static str, &'static str)])> {
+    plugins().into_iter().find_map(|spec| {
+        spec.credentials
+            .iter()
+            .find(|c| c.kind == credential_kind && c.test.is_some())
+            .map(|c| (c.test.unwrap_or_default(), c.env))
+    })
 }
 
 fn plugins() -> Vec<&'static KindSpec> {
@@ -397,6 +467,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         }
     }
 

@@ -27,7 +27,7 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 - **Gates**: un paso puede esperar una confirmación manual o verificaciones automáticas (healthcheck de Docker, HTTP, comando, contenedor corriendo) antes de seguir.
 - **Fallos**: si algo falla, puedes reintentar, ver el log completo, abrir una shell, hacer rollback o abortar, y luego reanudar desde donde quedó.
 - **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. Las variables de entorno se filtran con más facilidad que un archivo (listados de procesos, `docker inspect`, logs de CI): para secretos de larga vida conviene un archivo en `.baton/` o un gestor; ver [SECURITY.md](SECURITY.md). `.baton/` nunca sale de tu máquina.
-- **Ambientes**: `baton run --ambiente qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
+- **Ambientes**: `baton run --env qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
 - **Sin terminal** (CI): no pregunta nada; si falta algo, falla diciendo qué.
 
 ## Instalación
@@ -102,8 +102,9 @@ baton run --dry-run           # simula, no deja rastro
 baton run --resume            # continúa un plan que falló a la mitad
 baton last                    # cómo terminó la última ejecución y, si falló, el error
 baton history                 # las ejecuciones anteriores del plan, una por línea
+baton last --json              # también validate, history, config y settings list: JSON por stdout para scripts
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
-baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
+baton ops -a logs -s web --follow   # logs de un servicio en vivo (ctrl+c corta)
 baton docs instalar -o docs/instalar.md   # documentación del plan: resumen, flujo mermaid, variables, destinos con su host, ambientes y mantención
 baton settings set ui.language en   # baton en inglés (también BATON_LANG=en)
 baton settings                  # configuración global (~/.config/baton/config.toml) y de dónde sale cada valor
@@ -195,6 +196,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-17 | **0.10.4.** Opción global `--quiet` / `-q` para callar los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`), alias `-n` para `--dry-run`, `NO_COLOR` en la TUI y un solo formato para errores de plan inexistente. |
 | 2026-10-18 | **0.10.5.** `baton docs` más completo: índice, resumen en tabla, cómo se usa, variables, destinos con su host (sin usuarios), planes y ambientes del proyecto y la mantención de `baton ops`. Cada ejecución registra con qué ambiente corrió (`last`, `history`, la TUI) y `--resume` y `rollback` avisan si fue otro; tecla `a` para elegirlo en la TUI. `baton plugin add <nombre>` copia al proyecto un plugin global sin volver a bajarlo, y el editor tiene el campo `dry-run`. Más textos en inglés (`last`, `history`, `update`, `import`, `db`, `validate`). |
 | 2026-10-18 | **0.11.0.** `baton docs` más completo: cabecera con la versión de baton y el hash del plan, notas manuales que se conservan al regenerar con `-o` (entre `<!-- baton:notas-manuales -->` y su cierre), duración estimada, y secciones de requisitos (programas que necesita el plan), resultados (dónde quedan logs, estado y respaldos) y qué hacer si algo falla. |
+| 2026-10-19 | **0.12.0.** Plugins con capacidades (`api = 2`): respaldo y restauración en el rollback, revisión de contenido destructivo y prueba de conexión de credenciales, con un plugin de ejemplo para MariaDB 11+. `baton ops` en la interfaz: selector de ambiente (`a`) y ventana para escribirle al comando en curso (`i`). `--help` y manual en inglés, flags en inglés (los nombres en español siguen como alias), `--json` en `validate`, `history`, `last`, `config` y `settings list`, `--no-color`, `FORCE_COLOR`, `BATON_ASCII` y paleta `terminal`. |
 
 ## Desarrollo
 

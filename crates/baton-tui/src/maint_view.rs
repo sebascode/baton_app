@@ -14,8 +14,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use crate::forms::TextField;
 use crate::run_view::{log_glyph, log_style, wrap_text};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, truncate, vsep};
@@ -55,7 +56,39 @@ pub enum MaintAction {
     /// Cortar lo que corre (un seguimiento de logs no termina solo).
     Cancel,
     Back,
+    /// Elegir el ambiente de esta sesión (`None`: ninguno).
+    SetAmbiente(Option<String>),
+    /// Texto para la entrada estándar de lo que corre.
+    Input(MaintInput),
 }
+
+/// Lo que se le manda a la entrada estándar del comando en curso.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaintInput {
+    /// Una línea (el salto lo agrega quien la entrega).
+    Line(String),
+    /// Fin de la entrada (ctrl+d).
+    Eof,
+}
+
+/// La ventana donde se escribe lo que pide el comando.
+#[derive(Debug, Clone)]
+struct InputBox {
+    /// La pregunta que dejó el comando, si dejó alguna.
+    prompt: Option<String>,
+    field: TextField,
+    /// Lo escrito se ve como puntos y no queda en el log (contraseñas).
+    hidden: bool,
+}
+
+impl PartialEq for InputBox {
+    fn eq(&self, other: &Self) -> bool {
+        self.prompt == other.prompt
+            && self.hidden == other.hidden
+            && self.field.value() == other.field.value()
+    }
+}
+impl Eq for InputBox {}
 
 /// Cómo terminó lo que se pidió.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +141,13 @@ pub struct MaintState {
     ask: Option<Ask>,
     /// Un aviso de una línea (cómo terminó lo último).
     pub notice: Option<String>,
+    /// Los ambientes que se conocen y el elegido ahora (para poder cambiarlo desde aquí).
+    ambientes: Vec<String>,
+    ambiente: Option<String>,
+    /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
+    ambiente_picker: Option<usize>,
+    /// Ventana de entrada abierta (el comando en curso espera texto).
+    input: Option<InputBox>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +211,55 @@ impl MaintState {
             running: None,
             ask: None,
             notice: None,
+            ambientes: Vec::new(),
+            ambiente: None,
+            ambiente_picker: None,
+            input: None,
         }
+    }
+
+    /// Los ambientes conocidos y el elegido ahora; con alguno conocido, `a` abre el selector.
+    pub fn with_ambientes(mut self, known: Vec<String>, current: Option<String>) -> MaintState {
+        self.ambientes = known;
+        self.ambiente = current;
+        self
+    }
+
+    fn ambiente_choices(&self) -> Vec<Option<String>> {
+        std::iter::once(None)
+            .chain(self.ambientes.iter().cloned().map(Some))
+            .collect()
+    }
+
+    fn ambiente_key(&mut self, key: KeyEvent) -> Option<MaintAction> {
+        let cursor = self.ambiente_picker?;
+        let last = self.ambientes.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.ambiente_picker = Some(cursor.saturating_sub(1));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.ambiente_picker = Some((cursor + 1).min(last));
+            }
+            KeyCode::Enter => {
+                self.ambiente_picker = None;
+                let chosen = self.ambiente_choices().get(cursor)?.clone();
+                return (chosen != self.ambiente).then_some(MaintAction::SetAmbiente(chosen));
+            }
+            KeyCode::Esc | KeyCode::Char('q' | 'a') => self.ambiente_picker = None,
+            _ => {}
+        }
+        None
+    }
+
+    /// Cuántas líneas de logs se piden al empezar (por defecto 100; es `--lines` de `baton ops`).
+    pub fn with_tail(mut self, tail: u32) -> MaintState {
+        for (_, _, row) in &mut self.rows {
+            if let Row::Action(Action::Logs { tail: t, .. }) = row {
+                *t = tail;
+            }
+        }
+        self
     }
 
     /// Los scripts de mantención del proyecto: agrega la fila que abre su menú por carpetas.
@@ -317,7 +405,119 @@ impl MaintState {
     }
 
     /// Terminó lo que corría. Nada se cierra solo: queda el resultado y las opciones.
+    /// Lo que el comando dejó escrito sin salto de línea (una pregunta): se muestra y se abre la
+    /// ventana para contestar.
+    pub fn prompt_line(&mut self, text: &str) {
+        self.push(LogKind::Output, text);
+        if self.running.is_some() {
+            let hidden = self.input.as_ref().is_some_and(|b| b.hidden);
+            self.input = Some(InputBox {
+                prompt: Some(text.trim().to_string()),
+                field: TextField::new(""),
+                hidden,
+            });
+        }
+    }
+
+    /// La ventana de entrada está abierta: las teclas son texto para el comando.
+    pub fn is_typing(&self) -> bool {
+        self.input.is_some()
+    }
+
+    fn input_key(&mut self, key: KeyEvent) -> Option<MaintAction> {
+        let b = self.input.as_mut()?;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c') if ctrl => return Some(MaintAction::Cancel),
+            KeyCode::Char('d') if ctrl => {
+                self.input = None;
+                self.push(LogKind::Command, tr!("(fin de la entrada)"));
+                return Some(MaintAction::Input(MaintInput::Eof));
+            }
+            KeyCode::Esc => self.input = None,
+            KeyCode::Tab => b.hidden = !b.hidden,
+            KeyCode::Enter => {
+                let text = b.field.value();
+                let shown = if b.hidden {
+                    "•".repeat(text.chars().count().min(12))
+                } else {
+                    text.clone()
+                };
+                self.input = None;
+                self.push(LogKind::Command, format!("› {shown}"));
+                return Some(MaintAction::Input(MaintInput::Line(text)));
+            }
+            _ => {
+                b.field.handle_key(&key, false);
+            }
+        }
+        None
+    }
+
+    fn render_input(&self, buf: &mut Buffer, over: Rect) {
+        let Some(b) = &self.input else {
+            return;
+        };
+        let w = 64.min(over.width);
+        let h = 6.min(over.height);
+        if w < 20 || h < 5 {
+            return;
+        }
+        let area = Rect::new(
+            over.x + over.width.saturating_sub(w) / 2,
+            over.y + over.height.saturating_sub(h) / 2,
+            w,
+            h,
+        );
+        Clear.render(area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::border())
+            .title(Span::styled(tr!(" Entrada del comando "), theme::bold()));
+        let inner = block.inner(area);
+        block.render(area, buf);
+        let row = |y: u16, spans: Vec<Span<'static>>, buf: &mut Buffer| {
+            Line::from(spans).render(
+                Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1),
+                buf,
+            );
+        };
+        let width = inner.width.saturating_sub(2) as usize;
+        let asked = b
+            .prompt
+            .clone()
+            .unwrap_or_else(|| tr!("El comando lee texto de la entrada estándar."));
+        row(
+            inner.y,
+            vec![Span::styled(truncate(&asked, width), theme::secondary())],
+            buf,
+        );
+        let masked = "•".repeat(b.field.value().chars().count());
+        let shown = b.hidden.then_some(masked.as_str());
+        row(
+            inner.y + 2,
+            b.field.spans(inner.width.saturating_sub(2), true, shown),
+            buf,
+        );
+        row(
+            inner.y + 3,
+            vec![Span::styled(
+                truncate(
+                    &if b.hidden {
+                        tr!("enter enviar · tab mostrar · ctrl+d fin · esc cerrar")
+                    } else {
+                        tr!("enter enviar · tab ocultar · ctrl+d fin · esc cerrar")
+                    },
+                    width,
+                ),
+                theme::muted(),
+            )],
+            buf,
+        );
+    }
+
     pub fn finish(&mut self, result: MaintResult) {
+        self.input = None;
         let label = self.running.take().unwrap_or_default();
         let (kind, msg) = match result {
             MaintResult::Ok => (LogKind::Success, tr!("{label} · listo", label = label)),
@@ -336,6 +536,12 @@ impl MaintState {
                 (Ask::Leave, true) => Some(MaintAction::Back),
                 _ => None,
             };
+        }
+        if self.ambiente_picker.is_some() {
+            return self.ambiente_key(key);
+        }
+        if self.input.is_some() {
+            return self.input_key(key);
         }
         self.notice = None;
         let page = self.view_height.get().max(1);
@@ -361,6 +567,29 @@ impl MaintState {
             KeyCode::End | KeyCode::Char('G') => self.scroll = 0,
             KeyCode::Home | KeyCode::Char('g') => self.scroll_by(true, usize::MAX / 2),
             KeyCode::Char('x') => return self.running.is_some().then_some(MaintAction::Cancel),
+            KeyCode::Char('i') => {
+                if self.running.is_some() {
+                    self.input = Some(InputBox {
+                        prompt: None,
+                        field: TextField::new(""),
+                        hidden: false,
+                    });
+                } else {
+                    self.notice = Some(tr!("no hay nada en curso que lea texto"));
+                }
+            }
+            KeyCode::Char('a') if !self.ambientes.is_empty() => {
+                if self.running.is_some() {
+                    self.notice = Some(tr!("ya hay algo en curso (x lo corta)"));
+                } else {
+                    let at = self
+                        .ambiente
+                        .as_ref()
+                        .and_then(|a| self.ambientes.iter().position(|x| x == a))
+                        .map_or(0, |i| i + 1);
+                    self.ambiente_picker = Some(at);
+                }
+            }
             KeyCode::Enter => {
                 if matches!(self.rows.get(self.act_cursor), Some((_, _, Row::Scripts)))
                     && self.focus == Focus::Actions
@@ -435,7 +664,14 @@ impl MaintState {
             buf,
             area,
             vec![Span::styled(
-                tr!("Mantención · {plan}", plan = self.plan),
+                match &self.ambiente {
+                    Some(a) => tr!(
+                        "Mantención · {plan} · ambiente {name}",
+                        plan = self.plan,
+                        name = a
+                    ),
+                    None => tr!("Mantención · {plan}", plan = self.plan),
+                },
                 theme::bold(),
             )],
             state,
@@ -457,6 +693,10 @@ impl MaintState {
         };
         if self.running.is_some() {
             shortcuts.push(("x", tk!("cortar")));
+            shortcuts.push(("i", tk!("enviar texto")));
+        }
+        if !self.ambientes.is_empty() && self.focus != Focus::Scripts {
+            shortcuts.push(("a", tk!("ambiente")));
         }
         shortcuts.extend([("PgUp PgDn", tk!("salida")), ("esc", tk!("volver al plan"))]);
         let prompt = self.prompt();
@@ -507,6 +747,12 @@ impl MaintState {
             );
         }
 
+        let over = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            sep_low.saturating_sub(inner.y),
+        );
         let body = Rect::new(
             inner.x + 1,
             sep_mid + 1,
@@ -520,6 +766,7 @@ impl MaintState {
                 theme::muted(),
             ))
             .render(Rect::new(body.x, body.y, body.width, 1), buf);
+            self.render_ambiente_picker(buf, over);
             return;
         }
         let lines = wrapped(&self.log, body.width as usize);
@@ -538,6 +785,31 @@ impl MaintState {
                 buf,
             );
         }
+        self.render_ambiente_picker(buf, over);
+    }
+
+    /// El selector de ambiente: «ninguno» y los conocidos, con ● el elegido ahora.
+    fn render_ambiente_picker(&self, buf: &mut Buffer, over: Rect) {
+        self.render_input(buf, over);
+        if self.ambiente_picker.is_none() {
+            return;
+        }
+        let rows: Vec<(String, bool)> = self
+            .ambiente_choices()
+            .into_iter()
+            .map(|a| {
+                let current = a == self.ambiente;
+                (a.unwrap_or_else(|| tr!("(ninguno)")), current)
+            })
+            .collect();
+        crate::preview::render_popup(
+            buf,
+            over,
+            &tr!(" Ambiente "),
+            &tr!("↑↓ · enter elegir · esc"),
+            &rows,
+            self.ambiente_picker.unwrap_or(0),
+        );
     }
 
     /// Las columnas de scripts: una por cada carpeta elegida más la activa. La cabecera es el

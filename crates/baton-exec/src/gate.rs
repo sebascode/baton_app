@@ -433,10 +433,11 @@ async fn capture(
         env: ctx.opts.env.clone(),
         secrets: ctx.secrets_for(&line, false),
         timeout: Some(timeout),
+        input: None,
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let mut on_line = |s: Stream, t: String| match s {
-        Stream::Stdout => out.push(t),
+        Stream::Stdout | Stream::Prompt => out.push(t),
         Stream::Stderr => err.push(t),
     };
     let exit = ctx

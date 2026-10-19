@@ -79,13 +79,20 @@ fn event_loop(
     let mut last_tick = Instant::now();
     let mut last_blink = Instant::now();
     let mono = crate::theme::no_color();
+    let ascii = baton_core::ascii::enabled();
 
     loop {
         terminal.draw(|frame| {
             let area = frame.area();
             app.render(frame.buffer_mut(), area);
+            if app.palette() == baton_core::color::Palette::Terminal {
+                crate::theme::terminal_palette(frame.buffer_mut());
+            }
             if mono {
                 crate::theme::monochrome(frame.buffer_mut());
+            }
+            if ascii {
+                crate::theme::ascii_symbols(frame.buffer_mut());
             }
         })?;
 
@@ -224,6 +231,8 @@ impl Driver for DemoDriver {
             | Effect::OpenPlan(_)
             | Effect::SwitchPlan(_)
             | Effect::SetAmbiente(_)
+            | Effect::MaintAmbiente(_)
+            | Effect::MaintInput(_)
             | Effect::PlanOp(_) => {}
         }
         Flow::Continue

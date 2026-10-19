@@ -1,7 +1,12 @@
 //! Binario `baton`.
 
+// Primero y aparte: sus macros (`println!`...) tapan a las de std en todos los módulos que siguen.
+#[macro_use]
+mod out;
+
 mod ambiente;
 mod ask;
+mod clap_i18n;
 mod config_run;
 mod db_cmd;
 mod db_session;
@@ -16,6 +21,7 @@ mod plans_cmd;
 mod plugin_add;
 mod plugin_cmd;
 mod proc;
+mod report;
 mod run;
 mod settings_cmd;
 mod shell_init;
@@ -33,7 +39,7 @@ use std::process::ExitCode;
 
 use baton_store::Project;
 use baton_tui::{ConfigState, Screen};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 /// Códigos de salida: 0 todo bien, 1 el proyecto o el plan tienen errores, 2 no se pudo ni empezar
 /// (uso, no hay proyecto, plan inexistente), 3 la ejecución falló o se abortó.
@@ -53,12 +59,16 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BATON_BUILD
 )]
 struct Cli {
     /// Carpeta del proyecto (por defecto, la actual o la primera superior que sea un proyecto baton)
-    #[arg(short = 'C', long = "dir", global = true, value_name = "CARPETA")]
+    #[arg(short = 'C', long = "dir", global = true, value_name = "DIR")]
     dir: Option<PathBuf>,
 
     /// Calla los avisos de contexto (proyecto, plan y ambiente elegidos); los errores se muestran
     #[arg(short = 'q', long, global = true)]
     quiet: bool,
+
+    /// Sin colores en la salida y en la interfaz (también `NO_COLOR`; `FORCE_COLOR` los fuerza)
+    #[arg(long, global = true)]
+    no_color: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -91,6 +101,9 @@ enum Command {
     Validate {
         /// Nombre del plan (archivo en baton/plans/)
         plan: Option<String>,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Ejecuta un plan directo, sin pasar por la vista previa (también: `baton <plan>`)
     Run(RunArgs),
@@ -102,7 +115,7 @@ enum Command {
         #[arg(long)]
         target: Option<String>,
         /// Ambientes a crear, separados por coma (ej. dev,staging,prod)
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
         /// No escanea la carpeta: el plan queda vacío
         #[arg(long)]
@@ -133,7 +146,7 @@ enum Command {
         /// La pregunta
         prompt: String,
         /// Las opciones a elegir
-        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        #[arg(required = true, num_args = 1.., value_name = "OPTION")]
         options: Vec<String>,
         /// Opción que se usa sin terminal (y la que aparece marcada al preguntar)
         #[arg(long)]
@@ -147,7 +160,7 @@ enum Command {
         /// La pregunta
         prompt: String,
         /// Las opciones a elegir
-        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        #[arg(required = true, num_args = 1.., value_name = "OPTION")]
         options: Vec<String>,
         /// Opciones que se usan sin terminal (separadas por coma) y las que aparecen marcadas
         #[arg(long)]
@@ -242,7 +255,7 @@ enum Command {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
         /// Ambiente de los comandos de rollback que usan {ambiente} y de las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
     },
     /// Cómo terminó la última ejecución de un plan, y el error si falló
@@ -252,87 +265,108 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Documenta un plan en markdown con diagramas mermaid (sin valores de credenciales)
     Docs {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
         /// Escribe la documentación en este archivo en vez de la salida estándar
-        #[arg(short = 'o', long = "salida", value_name = "ARCHIVO")]
+        #[arg(short = 'o', long = "output", alias = "salida", value_name = "FILE")]
         salida: Option<PathBuf>,
         /// Agrega cómo terminó la última ejecución (cambia con cada ejecución)
-        #[arg(long)]
+        #[arg(long = "with-state", alias = "estado")]
         estado: bool,
         /// Sin el diagrama mermaid
-        #[arg(long = "sin-mermaid")]
+        #[arg(long = "no-mermaid", alias = "sin-mermaid")]
         sin_mermaid: bool,
     },
     /// Consulta una base de datos del plan (credenciales db y sqlite) y muestra el resultado
     Db {
         /// Base a consultar (el id de su credencial); sin él, la única del plan
         base: Option<String>,
-        /// La consulta (una sola sentencia); también con --archivo
-        #[arg(short = 'c', long = "consulta")]
+        /// La consulta (una sola sentencia); también con --file
+        #[arg(short = 'c', long = "query", alias = "consulta", value_name = "QUERY")]
         consulta: Option<String>,
         /// Lee la consulta de un archivo (`-`: de la entrada estándar)
-        #[arg(short = 'f', long = "archivo", value_name = "ARCHIVO")]
+        #[arg(short = 'f', long = "file", alias = "archivo", value_name = "FILE")]
         archivo: Option<PathBuf>,
         /// Plan del que se toman las credenciales (por defecto, el único del proyecto)
         #[arg(long)]
         plan: Option<String>,
         /// Cómo se muestra el resultado
-        #[arg(long, value_enum, default_value_t = db_cmd::Format::Tabla)]
+        #[arg(long = "format", alias = "formato", value_enum, default_value_t = db_cmd::Format::Tabla, value_name = "FORMAT")]
         formato: db_cmd::Format,
         /// Cuántas filas se muestran en la tabla (0: todas)
-        #[arg(long, default_value_t = 200, value_name = "N")]
+        #[arg(
+            long = "limit",
+            alias = "limite",
+            default_value_t = 200,
+            value_name = "N"
+        )]
         limite: usize,
         /// No recorta las celdas largas de la tabla
-        #[arg(long)]
+        #[arg(long = "full", alias = "completo")]
         completo: bool,
         /// Permite modificar datos (por defecto la consulta es de solo lectura)
-        #[arg(long)]
+        #[arg(long = "write", alias = "escribir")]
         escribir: bool,
         /// Ejecuta una consulta destructiva sin pedir más
         #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
         /// Cuánto se espera a la respuesta (ej. 30s, 5m)
         #[arg(long, default_value = "60s")]
         timeout: String,
         /// Abre una sesión interactiva (se abre sola con una base, sin consulta y en una terminal)
-        #[arg(short = 'i', long = "interactivo")]
+        #[arg(short = 'i', long = "interactive", alias = "interactivo")]
         interactivo: bool,
     },
     /// Mantención: logs, reinicios, imágenes de los servicios y tareas sueltas del plan
     Ops {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
-        /// Qué hacer: logs, estado, reiniciar, actualizar o reimagen (sin ella, un menú)
-        #[arg(short = 'a', long = "accion")]
+        /// Qué hacer: logs, estado, reiniciar, actualizar o reimagen (sin ella, abre la pantalla de mantención)
+        #[arg(short = 'a', long = "action", alias = "accion", value_name = "ACTION")]
         accion: Option<String>,
         /// Servicio sobre el que actuar; sin él, todos los de cada compose
-        #[arg(short = 's', long = "servicio")]
+        #[arg(
+            short = 's',
+            long = "service",
+            alias = "servicio",
+            value_name = "SERVICE"
+        )]
         servicio: Option<String>,
         /// Ejecuta una tarea del plan (`[[tasks]]`) en lugar de una acción
-        #[arg(short = 't', long = "tarea")]
+        #[arg(short = 't', long = "task", alias = "tarea", value_name = "TASK")]
         tarea: Option<String>,
         /// Ejecuta un script .sh suelto del proyecto (ruta relativa, ej. scripts/db/dump.sh)
-        #[arg(long, value_name = "RUTA")]
+        #[arg(long, value_name = "PATH")]
         script: Option<String>,
         /// Con la acción logs, sigue mostrándolos en vivo (ctrl+c para cortar)
-        #[arg(long)]
+        #[arg(long = "follow", alias = "seguir")]
         seguir: bool,
         /// Cuántas líneas de logs se muestran al empezar
-        #[arg(long, default_value_t = 100, value_name = "N")]
+        #[arg(
+            long = "lines",
+            alias = "lineas",
+            default_value_t = 100,
+            value_name = "N"
+        )]
         lineas: u32,
         /// Ejecuta sin pedir confirmación
         #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
+        /// Sin la interfaz: un menú de preguntas en la terminal (por defecto se abre la pantalla de mantención)
+        #[arg(long)]
+        no_tui: bool,
     },
     /// Las ejecuciones anteriores de un plan, una por línea (la última en detalle: `baton last`)
     History {
@@ -341,9 +375,16 @@ enum Command {
         /// Cuántas ejecuciones se muestran, de la más reciente a la más antigua
         #[arg(long, default_value_t = 20, value_name = "N")]
         limit: usize,
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
-    Config,
+    Config {
+        /// En vez de abrir la pantalla, imprime la configuración como JSON (sin valores secretos)
+        #[arg(long)]
+        json: bool,
+    },
     /// Recorre las pantallas con datos falsos (no toca ningún proyecto)
     Demo {
         /// Acorta las esperas del escenario para probar rápido
@@ -361,24 +402,28 @@ enum Command {
 #[derive(Subcommand)]
 enum SettingsAction {
     /// Muestra cada clave con su valor y de dónde sale (es lo que hace sin subcomando)
-    List,
+    List {
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Imprime el valor efectivo de una clave (el origen va a stderr)
     Get {
         /// Por ejemplo defaults.engine, logs.format, ui.confirm_exit
         clave: String,
     },
-    /// Cambia una clave en la configuración global (o en la del proyecto con --proyecto)
+    /// Cambia una clave en la configuración global (o en la del proyecto con --project)
     Set {
         clave: String,
         valor: String,
         /// Escribe en .baton/config.toml en vez de en el archivo global
-        #[arg(long)]
+        #[arg(long = "project", alias = "proyecto")]
         proyecto: bool,
     },
-    /// Quita una clave de la configuración global (o de la del proyecto con --proyecto)
+    /// Quita una clave de la configuración global (o de la del proyecto con --project)
     Unset {
         clave: String,
-        #[arg(long)]
+        #[arg(long = "project", alias = "proyecto")]
         proyecto: bool,
     },
 }
@@ -442,7 +487,7 @@ struct RunArgs {
     no_backup: bool,
     /// Ambiente: carpeta de credenciales (`.baton/credentials/<ambiente>/`) y valor de {ambiente}
     /// (sin él: la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml)
-    #[arg(long)]
+    #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
     ambiente: Option<String>,
 }
 
@@ -545,8 +590,21 @@ fn main() -> ExitCode {
     if let Some(keys) = std::env::var_os(baton_core::askpass::KEYS_VAR) {
         return askpass(&keys.to_string_lossy());
     }
-    let cli = Cli::parse();
+    // el idioma antes de que clap lea los argumentos: sus errores también se traducen
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    baton_core::i18n::set(baton_store::global::language(
+        &clap_i18n::dir_from_args(&raw)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default(),
+    ));
+    let cli = match clap_i18n::localize(Cli::command()).try_get_matches_from(&raw) {
+        Ok(matches) => Cli::from_arg_matches(&matches)
+            .map_err(|e| e.apply::<clap_i18n::Localized>())
+            .unwrap_or_else(|e| e.exit()),
+        Err(e) => e.apply::<clap_i18n::Localized>().exit(),
+    };
     style::set_quiet(cli.quiet);
+    baton_core::color::set_off(cli.no_color);
     // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
     baton_core::i18n::set(baton_store::global::language(
         &cli.dir
@@ -632,7 +690,8 @@ fn main() -> ExitCode {
             None => std::env::current_dir().unwrap_or_default(),
         };
         let action = match action {
-            None | Some(SettingsAction::List) => settings_cmd::Action::List,
+            None => settings_cmd::Action::List { json: false },
+            Some(SettingsAction::List { json }) => settings_cmd::Action::List { json: *json },
             Some(SettingsAction::Get { clave }) => settings_cmd::Action::Get {
                 clave: clave.clone(),
             },
@@ -658,7 +717,7 @@ fn main() -> ExitCode {
         None => match std::env::current_dir() {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("error: no se pudo leer la carpeta actual: {e}");
+                report::error(format!("no se pudo leer la carpeta actual: {e}"));
                 return ExitCode::from(EXIT_USAGE);
             }
         },
@@ -769,17 +828,17 @@ fn main() -> ExitCode {
             report_near(&near);
             return ExitCode::from(EXIT_USAGE);
         }
-        eprintln!(
-            "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
+        report::error(format!(
+            "no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
             start.display()
-        );
-        eprintln!("  para crear uno aquí: baton init   (o baton import <archivo>)");
+        ));
+        report::hint("para crear uno aquí: baton init   (o baton import <archivo>)");
         return ExitCode::from(EXIT_USAGE);
     };
 
     match command {
-        Command::Validate { plan } => validate::run(&project, plan.as_deref()),
-        Command::Config => config(&project),
+        Command::Validate { plan, json } => validate::run(&project, plan.as_deref(), json),
+        Command::Config { json } => config(&project, json),
         Command::Run(args) => {
             let (plan, flags) = args.into();
             match pick::resolve(&project, plan, "run", "ejecutar") {
@@ -808,7 +867,9 @@ fn main() -> ExitCode {
             interactivo,
         } => {
             let Ok(timeout) = timeout.parse::<baton_core::units::Dur>() else {
-                eprintln!("error: --timeout '{timeout}' no es una duración (ej. 30s, 5m)");
+                report::error(format!(
+                    "--timeout '{timeout}' no es una duración (ej. 30s, 5m)"
+                ));
                 return ExitCode::from(EXIT_USAGE);
             };
             db_cmd::run(
@@ -839,6 +900,7 @@ fn main() -> ExitCode {
             lineas,
             assume_yes,
             ambiente,
+            no_tui,
         } => match pick::resolve(&project, plan, "ops", "mantener") {
             Ok(plan) => ops::run(
                 &project,
@@ -852,20 +914,23 @@ fn main() -> ExitCode {
                     lines: lineas,
                     assume_yes,
                     ambiente,
+                    no_tui,
                 },
             ),
             Err(code) => code,
         },
-        Command::History { plan, limit } => {
+        Command::History { plan, limit, json } => {
             match pick::resolve(&project, plan, "history", "consultar") {
-                Ok(plan) => history_cmd::run(&project, &plan, limit),
+                Ok(plan) => history_cmd::run(&project, &plan, limit, json),
                 Err(code) => code,
             }
         }
-        Command::Last { plan, lines } => match pick::resolve(&project, plan, "last", "consultar") {
-            Ok(plan) => last::run(&project, &plan, lines),
-            Err(code) => code,
-        },
+        Command::Last { plan, lines, json } => {
+            match pick::resolve(&project, plan, "last", "consultar") {
+                Ok(plan) => last::run(&project, &plan, lines, json),
+                Err(code) => code,
+            }
+        }
         Command::Docs {
             plan,
             salida,
@@ -968,9 +1033,12 @@ fn near_subcommand(args: &[OsString]) -> Option<NearSubcommand> {
 }
 
 fn report_near(near: &NearSubcommand) {
-    eprintln!("error: '{}' no es un comando de baton", near.word);
-    eprintln!("  ¿quisiste decir `baton {}`?", near.suggestion);
-    eprintln!("  si es un plan, ejecútalo con: baton run {}", near.word);
+    report::error(format!("'{}' no es un comando de baton", near.word));
+    report::hint(format!("¿quisiste decir `baton {}`?", near.suggestion));
+    report::hint(format!(
+        "si es un plan, ejecútalo con: baton run {}",
+        near.word
+    ));
 }
 
 /// Busca el proyecto desde `start` hacia arriba. Si lo encuentra en una carpeta superior (se está
@@ -992,12 +1060,15 @@ fn open_project(start: &Path) -> Option<Project> {
 fn require_terminal(command: &str) -> bool {
     let ok = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
     if !ok {
-        eprintln!("error: baton {command} necesita una terminal interactiva");
+        report::error(format!("baton {command} necesita una terminal interactiva"));
     }
     ok
 }
 
-fn config(project: &Project) -> ExitCode {
+fn config(project: &Project, json: bool) -> ExitCode {
+    if json {
+        return config_json(project);
+    }
     if !require_terminal("config") {
         return ExitCode::from(EXIT_USAGE);
     }
@@ -1007,7 +1078,7 @@ fn config(project: &Project) -> ExitCode {
     }
     let valid = checked.is_valid();
     let Some(config) = checked.value.filter(|_| valid) else {
-        eprintln!("error: corrige la configuración antes de abrirla (baton validate)");
+        report::error("corrige la configuración antes de abrirla (baton validate)".to_string());
         return ExitCode::from(EXIT_INVALID);
     };
     let name = project.root.file_name().map_or_else(
@@ -1024,10 +1095,59 @@ fn config(project: &Project) -> ExitCode {
             None => ExitCode::SUCCESS,
         },
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }
+}
+
+/// `baton config --json`: la configuración del proyecto sin abrir la pantalla. Solo referencias
+/// y nombres: nunca valores de credenciales ni comandos de los proveedores de secretos.
+fn config_json(project: &Project) -> ExitCode {
+    use baton_core::config::Target;
+    use serde_json::{Value, json};
+    let checked = baton_store::check_project_config(project);
+    for d in &checked.diagnostics {
+        eprintln!("{d}");
+    }
+    let valid = checked.is_valid();
+    let Some(c) = checked.value.filter(|_| valid) else {
+        report::error("corrige la configuración antes de leerla (baton validate)".to_string());
+        return ExitCode::from(EXIT_INVALID);
+    };
+    let targets: Vec<Value> = c
+        .targets
+        .iter()
+        .map(|(name, t)| match t {
+            Target::Ssh(s) => json!({
+                "name": name, "type": "ssh", "host": s.host, "port": s.port, "user": s.user,
+                "remote_dir": s.remote_dir, "bastion": s.bastion, "sync": s.sync,
+            }),
+            other => json!({ "name": name, "type": other.kind_label() }),
+        })
+        .collect();
+    let value = json!({
+        "project": project.root.display().to_string(),
+        "defaults": {
+            "target": c.defaults.target, "ambiente": c.defaults.ambiente,
+            "secrets": c.defaults.secrets, "engine": c.defaults.engine,
+        },
+        "targets": targets,
+        "logs": {
+            "local": c.logs.local, "remote": c.logs.remote,
+            "format": match c.logs.format {
+                baton_core::config::LogFormat::Text => "text",
+                baton_core::config::LogFormat::Json => "json",
+            },
+        },
+        "ambientes": c.ambientes.iter()
+            .map(|(n, a)| json!({ "name": n, "protected": a.protegido }))
+            .collect::<Vec<_>>(),
+        "secret_providers": c.secrets.keys().collect::<Vec<_>>(),
+        "plans": project.list_plans(),
+    });
+    report::json(&value);
+    ExitCode::SUCCESS
 }
 
 fn demo(fast: bool, screen: Screen) -> ExitCode {
@@ -1037,7 +1157,7 @@ fn demo(fast: bool, screen: Screen) -> ExitCode {
     match baton_tui::demo::run(fast, screen) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }

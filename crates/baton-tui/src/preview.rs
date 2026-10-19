@@ -100,7 +100,7 @@ pub struct PreviewState {
     /// Los ambientes que se conocen (carpetas de credenciales y `[ambientes]`), para poder elegir
     /// uno con `a`. Vacío: la tecla no se ofrece.
     pub ambientes: Vec<String>,
-    /// El ambiente elegido ahora (el de `--ambiente`, la variable o `[defaults]`).
+    /// El ambiente elegido ahora (el de `--env`, la variable o `[defaults]`).
     pub ambiente: Option<String>,
     /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
     pub ambiente_picker: Option<usize>,
@@ -182,7 +182,7 @@ fn step_meta(step: &Step) -> String {
 }
 
 const SHORTCUTS: [(&str, &str); 6] = [
-    ("espacio", tk!("activar")),
+    (tk!("espacio"), tk!("activar")),
     ("shift ↑↓", tk!("mover")),
     ("e", tk!("editar paso")),
     ("g", tk!("añadir gate")),
@@ -1015,7 +1015,7 @@ fn step_lines(
 }
 
 /// Una lista corta sobre la lista de pasos: `›` el cursor, `●` la fila vigente.
-fn render_popup(
+pub(crate) fn render_popup(
     buf: &mut Buffer,
     over: Rect,
     title: &str,

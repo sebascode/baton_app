@@ -20,6 +20,7 @@ use inquire::validator::Validation;
 use inquire::{Confirm, InquireError, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 
 use crate::EXIT_USAGE;
+use crate::report;
 
 /// Convención de shell para "cancelado" (128 + SIGINT).
 pub const EXIT_CANCELLED: u8 = 130;
@@ -34,7 +35,7 @@ pub struct Common {
 }
 
 fn usage(msg: impl Display) -> ExitCode {
-    eprintln!("error: {msg}");
+    report::error(format!("{msg}"));
     ExitCode::from(EXIT_USAGE)
 }
 

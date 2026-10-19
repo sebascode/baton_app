@@ -86,7 +86,7 @@ pub struct StepVars {
     /// `2026-09-24-1402`
     pub fecha: String,
     pub destino: String,
-    /// Ambiente elegido (`--ambiente`, `BATON_AMBIENTE` o `[defaults] ambiente`). Sin ambiente el
+    /// Ambiente elegido (`--env`, `BATON_AMBIENTE` o `[defaults] ambiente`). Sin ambiente el
     /// marcador se deja tal cual, pero `prepare_run` ya rechazó antes un plan que lo use.
     pub ambiente: Option<String>,
     /// Ruta del archivo de origen relativa a la raíz del proyecto.
@@ -495,6 +495,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap()
     }

@@ -282,6 +282,10 @@ mod plugin_tests {
             binaries: &[],
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap()
     }

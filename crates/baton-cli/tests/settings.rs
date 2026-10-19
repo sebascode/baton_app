@@ -128,7 +128,7 @@ fn set_writes_the_global_file_keeping_comments_and_unset_removes_it() {
 #[test]
 fn set_with_proyecto_writes_the_project_and_warns_if_something_beats_it() {
     let fx = Fx::new();
-    let o = fx.baton(&["settings", "set", "logs.format", "json", "--proyecto"]);
+    let o = fx.baton(&["settings", "set", "logs.format", "json", "--project"]);
     assert!(o.status.success(), "{}", err(&o));
     let t = fs::read_to_string(fx.proj().join(".baton/config.toml")).unwrap();
     assert!(t.contains("format = \"json\""), "{t}");

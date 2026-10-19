@@ -16,6 +16,11 @@ la revisión es estricta a propósito. Lee esto antes de abrir un PR.
 Si haces un fork, trabaja en `feature/<algo>` desde `develop` y abre el PR contra `develop`. Un PR
 contra `main` se cerrará.
 
+Cómo se fusiona cada PR: los de `feature/*` entran a `develop` y los de `release/X.Y.Z` entran a
+`main` siempre con **Create a merge commit**, nunca con squash ni rebase. El squash crea en `main`
+un commit nuevo hecho por GitHub, sin `Signed-off-by` ni firma, y el back-merge a `develop` falla
+el chequeo de DCO (pasó con la 0.10.4).
+
 ## Antes de abrir el PR
 
 ```bash
@@ -24,8 +29,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Si cambias comandos, opciones o códigos de salida, actualiza `man/baton.1` (hay una prueba que lo
-exige).
+Si cambias comandos, opciones o códigos de salida, actualiza `man/baton.1` (español) y su copia `man/en/baton.1` (inglés): hay una prueba que lo
+exige en las dos y otra que compara que tengan la misma estructura.
+
+Los nombres de los flags van en inglés (`--env`, `--lines`, `--follow`), igual en todos los
+comandos: si un flag ya existe en otro, usa el mismo nombre. Un nombre en español que ya se haya
+publicado se conserva como alias oculto (`alias = "..."`), no se quita. Los textos para personas
+(ayuda, mensajes) siguen en español, con su traducción.
 
 ## Firma de origen (DCO)
 
