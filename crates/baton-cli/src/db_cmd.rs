@@ -21,6 +21,7 @@ use baton_store::secrets::Resolver;
 use baton_store::{Project, check_config, check_plan};
 
 use crate::proc::{Unfinished, run_capture};
+use crate::report;
 use crate::style::{Style, Tone};
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
 
@@ -83,20 +84,17 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     let ambiente = match crate::ambiente::resolve(args.ambiente.as_deref(), &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_USAGE);
         }
     };
     let resolver = Resolver::new(project, &config, ambiente.as_deref());
     let dbs: Vec<&CredentialReq> = plan.db_credentials().collect();
     if dbs.is_empty() {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: el plan '{plan_name}' no declara credenciales de base de datos",
-                plan_name = plan_name
-            )
-        );
+        report::error(tr!(
+            "el plan '{plan_name}' no declara credenciales de base de datos",
+            plan_name = plan_name
+        ));
         eprintln!(
             "{}",
             tr!("  agrega una en [[credentials]] con kind = \"db\" (PostgreSQL) o \"sqlite\"")
@@ -107,7 +105,7 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     let query = match read_query(&args) {
         Ok(q) => q,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -119,7 +117,7 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
             let cred = match pick_credential(&dbs, args.credential.as_deref()) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("{}", tr!("error: {e}", e = e));
+                    report::error(&e);
                     return ExitCode::from(EXIT_USAGE);
                 }
             };
@@ -129,34 +127,30 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     if args.interactive {
-        eprintln!(
-            "{}",
-            tr!("error: --interactivo no se combina con --consulta ni --archivo")
-        );
+        report::error(tr!(
+            "--interactivo no se combina con --consulta ni --archivo"
+        ));
         return ExitCode::from(EXIT_USAGE);
     }
 
     let cred = match pick_credential(&dbs, args.credential.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_USAGE);
         }
     };
     match statement_count(&query) {
         0 => {
-            eprintln!("{}", tr!("error: la consulta está vacía"));
+            report::error(tr!("la consulta está vacía"));
             return ExitCode::from(EXIT_USAGE);
         }
         1 => {}
         n => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: baton db ejecuta una sentencia por vez y la consulta trae {n}",
-                    n = n
-                )
-            );
+            report::error(tr!(
+                "baton db ejecuta una sentencia por vez y la consulta trae {n}",
+                n = n
+            ));
             eprintln!(
                 "{}",
                 tr!("  para varias, ponlas en un archivo .sql y usa un paso sql del plan")
@@ -166,10 +160,9 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     }
     let risks = destructive_statements(&query);
     if args.write && !risks.is_empty() && !args.assume_yes {
-        eprintln!(
-            "{}",
-            tr!("error: la consulta es destructiva y no se ejecuta sin confirmar:")
-        );
+        report::error(tr!(
+            "la consulta es destructiva y no se ejecuta sin confirmar:"
+        ));
         for r in &risks {
             eprintln!("  {} ({})", r.what, r.text);
         }
@@ -180,14 +173,14 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     let resolved = match resolve_fields(cred, &resolver, project) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_INVALID);
         }
     };
     let (invocation, secrets) = match invocation_for(cred, &resolved, project, args.write) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_INVALID);
         }
     };
@@ -392,7 +385,7 @@ pub fn query_csv(
 /// Dibuja la salida CSV de un motor en el formato pedido.
 pub fn show(csv: &str, truncated: bool, tsv: bool, view: &View) -> Result<(), String> {
     if truncated {
-        eprintln!("{}", tr!("aviso: la salida pasó de 64 MiB y se cortó"));
+        report::warn(tr!("la salida pasó de 64 MiB y se cortó"));
     }
     let table = || {
         if tsv {
@@ -423,28 +416,22 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
         Ok((csv, truncated)) => match show(&csv, truncated, inv.tsv, &view) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("{}", tr!("error: {e}", e = e));
+                report::error(&e);
                 ExitCode::from(EXIT_RUN_FAILED)
             }
         },
         Err(QueryError::NotFound(program)) => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no se encontró {program} en el PATH",
-                    program = program
-                )
-            );
+            report::error(tr!(
+                "no se encontró {program} en el PATH",
+                program = program
+            ));
             ExitCode::from(EXIT_INVALID)
         }
         Err(QueryError::TimedOut) => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: la consulta no terminó en {time} (--timeout para esperar más)",
-                    time = baton_core::units::format_duration(args.timeout)
-                )
-            );
+            report::error(tr!(
+                "la consulta no terminó en {time} (--timeout para esperar más)",
+                time = baton_core::units::format_duration(args.timeout)
+            ));
             ExitCode::from(EXIT_RUN_FAILED)
         }
         Err(QueryError::Failed(lines)) => {
@@ -454,7 +441,7 @@ fn execute(inv: &Invocation, secrets: &[String], query: &str, args: &Args) -> Ex
             ExitCode::from(EXIT_RUN_FAILED)
         }
         Err(QueryError::Other(e)) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::from(EXIT_RUN_FAILED)
         }
     }

@@ -13,6 +13,7 @@ use baton_core::plugin::{MANIFEST_FILE, Manifest};
 use baton_store::Project;
 use baton_store::plugins::{check_manifest_file, list_installed, plugins_dir, register_all};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// Registra los tipos de paso de los plugins instalados. Un plugin que no se pudo cargar se avisa
@@ -35,24 +36,18 @@ pub fn register_at_startup(project: Option<&Project>) {
 pub fn target_dir(global: bool, start: &Path) -> Result<PathBuf, ExitCode> {
     if global {
         return plugins_dir().ok_or_else(|| {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
-                )
-            );
+            report::error(tr!(
+                "no se pudo saber dónde están los plugins (define HOME o BATON_PLUGINS_DIR)"
+            ));
             ExitCode::from(EXIT_USAGE)
         });
     }
     match Project::discover(start) {
         Some(p) => Ok(p.plugins_dir()),
         None => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no estás dentro de un proyecto de baton: usa --global para los plugins de esta máquina"
-                )
-            );
+            report::error(tr!(
+                "no estás dentro de un proyecto de baton: usa --global para los plugins de esta máquina"
+            ));
             Err(ExitCode::from(EXIT_USAGE))
         }
     }
@@ -68,12 +63,9 @@ pub fn list(start: &Path) -> ExitCode {
     match &global {
         Some(dir) => print_scope(&tr!("global"), dir),
         None => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)"
-                )
-            );
+            report::error(tr!(
+                "no se pudo saber dónde están los plugins globales (define HOME o BATON_PLUGINS_DIR)"
+            ));
             return ExitCode::from(EXIT_USAGE);
         }
     }
@@ -228,7 +220,7 @@ pub fn validate(path: &Path) -> ExitCode {
         path.to_path_buf()
     };
     if std::fs::symlink_metadata(&file).is_err() {
-        eprintln!("{}", tr!("error: no existe {path}", path = file.display()));
+        report::error(tr!("no existe {path}", path = file.display()));
         return ExitCode::from(EXIT_USAGE);
     }
 

@@ -22,6 +22,7 @@ use crate::db_cmd::{
     Args, Format, QueryError, View, describe, invocation_for, pick_credential_label, query_csv,
     resolve_fields, show,
 };
+use crate::report;
 use crate::style::Style;
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED};
 
@@ -48,7 +49,7 @@ pub fn run(
     let resolved = match resolve_fields(cred, resolver, project) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_INVALID);
         }
     };
@@ -69,7 +70,7 @@ pub fn run(
     };
     // falla pronto si la base no se puede ni abrir (un archivo SQLite que no existe, por ejemplo)
     if let Err(e) = invocation_for(cred, &session.resolved, project, session.view.write) {
-        eprintln!("{}", tr!("error: {e}", e = e));
+        report::error(&e);
         return ExitCode::from(EXIT_INVALID);
     }
     session.repl()
@@ -109,7 +110,7 @@ impl Session<'_> {
         let mut rl: Rl = match Editor::with_config(config) {
             Ok(rl) => rl,
             Err(e) => {
-                eprintln!("{}", tr!("error: no se pudo abrir la entrada: {e}", e = e));
+                report::error(tr!("no se pudo abrir la entrada: {e}", e = e));
                 return ExitCode::from(EXIT_RUN_FAILED);
             }
         };
@@ -148,7 +149,7 @@ impl Session<'_> {
                 }
                 Err(ReadlineError::Eof) => break,
                 Err(e) => {
-                    eprintln!("{}", tr!("error: {e}", e = e));
+                    report::error(&e);
                     break;
                 }
             };
@@ -190,13 +191,10 @@ impl Session<'_> {
             0 => return,
             1 => {}
             n => {
-                eprintln!(
-                    "{}",
-                    tr!(
-                        "error: una consulta por vez (esta trae {n}); para varias, un paso sql del plan",
-                        n = n
-                    )
-                );
+                report::error(tr!(
+                    "una consulta por vez (esta trae {n}); para varias, un paso sql del plan",
+                    n = n
+                ));
                 return;
             }
         }
@@ -230,32 +228,29 @@ impl Session<'_> {
             match invocation_for(self.cred, &self.resolved, self.project, self.view.write) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("{}", tr!("error: {e}", e = e));
+                    report::error(&e);
                     return;
                 }
             };
         match query_csv(&inv, &secrets, sql, self.args.timeout) {
             Ok((csv, truncated)) => {
                 if let Err(e) = show(&csv, truncated, inv.tsv, &self.view) {
-                    eprintln!("{}", tr!("error: {e}", e = e));
+                    report::error(&e);
                 }
             }
             Err(QueryError::NotFound(p)) => {
-                eprintln!("{}", tr!("error: no se encontró {p} en el PATH", p = p))
+                report::error(tr!("no se encontró {p} en el PATH", p = p))
             }
-            Err(QueryError::TimedOut) => eprintln!(
-                "{}",
-                tr!(
-                    "error: la consulta no terminó en {time} (--timeout para esperar más)",
-                    time = baton_core::units::format_duration(self.args.timeout)
-                )
-            ),
+            Err(QueryError::TimedOut) => report::error(tr!(
+                "la consulta no terminó en {time} (--timeout para esperar más)",
+                time = baton_core::units::format_duration(self.args.timeout)
+            )),
             Err(QueryError::Failed(lines)) => {
                 for l in lines {
                     eprintln!("{l}");
                 }
             }
-            Err(QueryError::Other(e)) => eprintln!("{}", tr!("error: {e}", e = e)),
+            Err(QueryError::Other(e)) => report::error(&e),
         }
     }
 
@@ -269,7 +264,7 @@ impl Session<'_> {
             Meta::Tables => self.run_sql(&db_console::tables_query(self.cred.kind)),
             Meta::Columns(table) => match db_console::columns_query(self.cred.kind, &table) {
                 Ok(sql) => self.run_sql(&sql),
-                Err(e) => eprintln!("{}", tr!("error: {e}", e = e)),
+                Err(e) => report::error(&e),
             },
             Meta::Format(None) => println!(
                 "{}",
@@ -280,10 +275,7 @@ impl Session<'_> {
                     self.view.format = f;
                     println!("{}", tr!("formato: {name}", name = format_name(f)));
                 }
-                None => eprintln!(
-                    "{}",
-                    tr!("error: el formato es tabla, registro, csv o json")
-                ),
+                None => report::error(tr!("el formato es tabla, registro, csv o json")),
             },
             Meta::Limit(None) => println!("{}", tr!("límite: {n}", n = self.view.limit)),
             Meta::Limit(Some(n)) => match n.parse::<usize>() {
@@ -291,7 +283,7 @@ impl Session<'_> {
                     self.view.limit = n;
                     println!("{}", tr!("límite: {n}", n = n));
                 }
-                Err(_) => eprintln!("{}", tr!("error: \\limite necesita un número (0: todas)")),
+                Err(_) => report::error(tr!("\\limite necesita un número (0: todas)")),
             },
             Meta::Full => {
                 self.view.full = !self.view.full;

@@ -9,6 +9,7 @@ use baton_core::shell::{
 use baton_store::Project;
 
 use crate::EXIT_USAGE;
+use crate::report;
 
 /// Imprime el código para el shell dado o, sin él, el de `$SHELL`.
 pub fn init(shell: Option<&str>, prefix: bool, color: bool) -> ExitCode {
@@ -16,10 +17,10 @@ pub fn init(shell: Option<&str>, prefix: bool, color: bool) -> ExitCode {
     let name = shell.map_or(from_env.as_str(), |s| s);
     let Some(shell) = Shell::parse(name) else {
         match shell {
-            Some(s) => eprintln!("error: shell '{s}' no soportado (usa bash, zsh o fish)"),
-            None => eprintln!(
-                "error: no se pudo saber tu shell (SHELL={from_env:?}); indícalo: baton shell-init bash|zsh|fish"
-            ),
+            Some(s) => report::error(format!("shell '{s}' no soportado (usa bash, zsh o fish)")),
+            None => report::error(format!(
+                "no se pudo saber tu shell (SHELL={from_env:?}); indícalo: baton shell-init bash|zsh|fish"
+            )),
         }
         return ExitCode::from(EXIT_USAGE);
     };

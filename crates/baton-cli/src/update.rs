@@ -14,6 +14,7 @@ use baton_core::tr;
 use baton_core::update::{self, InstallKind, Version};
 
 use crate::EXIT_USAGE;
+use crate::report;
 
 const REPO: &str = env!("CARGO_PKG_REPOSITORY");
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
@@ -27,7 +28,7 @@ pub fn run(flags: Flags) -> ExitCode {
     match run_inner(&flags) {
         Ok(code) => code,
         Err(msg) => {
-            eprintln!("error: {msg}");
+            report::error(msg.to_string());
             ExitCode::FAILURE
         }
     }

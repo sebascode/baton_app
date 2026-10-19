@@ -7,6 +7,7 @@ use baton_core::slug::slug;
 use baton_store::Project;
 use baton_store::plan_ops::{self, PlanOpError};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 /// Un nombre de plan existente tal cual (sin normalizar: es el nombre del archivo).
@@ -16,10 +17,10 @@ fn existing(project: &Project, name: &str) -> Result<(), ExitCode> {
     }
     let plans = project.list_plans();
     if plans.is_empty() {
-        eprintln!("error: el plan '{name}' no existe");
+        report::error(format!("el plan '{name}' no existe"));
         eprintln!("  este proyecto no tiene planes");
     } else {
-        eprintln!("error: el plan '{name}' no existe");
+        report::error(format!("el plan '{name}' no existe"));
         eprintln!("  planes disponibles: {}", plans.join(", "));
     }
     Err(ExitCode::from(EXIT_USAGE))
@@ -35,7 +36,7 @@ fn new_name(given: &str) -> String {
 }
 
 fn fail(e: PlanOpError) -> ExitCode {
-    eprintln!("error: {e}");
+    report::error(format!("{e}"));
     match e {
         PlanOpError::NotFound(_) | PlanOpError::AlreadyExists(_) | PlanOpError::BadName(_) => {
             ExitCode::from(EXIT_USAGE)
@@ -82,9 +83,9 @@ pub fn delete(project: &Project, plan: &str, yes: bool) -> ExitCode {
     }
     if !yes {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-            eprintln!(
-                "error: eliminar '{plan}' pide confirmación y no hay terminal: usa --assume-yes para confirmar"
-            );
+            report::error(format!(
+                "eliminar '{plan}' pide confirmación y no hay terminal: usa --assume-yes para confirmar"
+            ));
             return ExitCode::from(EXIT_USAGE);
         }
         eprint!("¿Eliminar el plan '{plan}' y su historial de ejecuciones? (s/N) ");

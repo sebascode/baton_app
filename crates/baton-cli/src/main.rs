@@ -16,6 +16,7 @@ mod plans_cmd;
 mod plugin_add;
 mod plugin_cmd;
 mod proc;
+mod report;
 mod run;
 mod settings_cmd;
 mod shell_init;
@@ -658,7 +659,7 @@ fn main() -> ExitCode {
         None => match std::env::current_dir() {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("error: no se pudo leer la carpeta actual: {e}");
+                report::error(format!("no se pudo leer la carpeta actual: {e}"));
                 return ExitCode::from(EXIT_USAGE);
             }
         },
@@ -769,11 +770,11 @@ fn main() -> ExitCode {
             report_near(&near);
             return ExitCode::from(EXIT_USAGE);
         }
-        eprintln!(
-            "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
+        report::error(format!(
+            "no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
             start.display()
-        );
-        eprintln!("  para crear uno aquí: baton init   (o baton import <archivo>)");
+        ));
+        report::hint("para crear uno aquí: baton init   (o baton import <archivo>)");
         return ExitCode::from(EXIT_USAGE);
     };
 
@@ -808,7 +809,9 @@ fn main() -> ExitCode {
             interactivo,
         } => {
             let Ok(timeout) = timeout.parse::<baton_core::units::Dur>() else {
-                eprintln!("error: --timeout '{timeout}' no es una duración (ej. 30s, 5m)");
+                report::error(format!(
+                    "--timeout '{timeout}' no es una duración (ej. 30s, 5m)"
+                ));
                 return ExitCode::from(EXIT_USAGE);
             };
             db_cmd::run(
@@ -968,9 +971,12 @@ fn near_subcommand(args: &[OsString]) -> Option<NearSubcommand> {
 }
 
 fn report_near(near: &NearSubcommand) {
-    eprintln!("error: '{}' no es un comando de baton", near.word);
-    eprintln!("  ¿quisiste decir `baton {}`?", near.suggestion);
-    eprintln!("  si es un plan, ejecútalo con: baton run {}", near.word);
+    report::error(format!("'{}' no es un comando de baton", near.word));
+    report::hint(format!("¿quisiste decir `baton {}`?", near.suggestion));
+    report::hint(format!(
+        "si es un plan, ejecútalo con: baton run {}",
+        near.word
+    ));
 }
 
 /// Busca el proyecto desde `start` hacia arriba. Si lo encuentra en una carpeta superior (se está
@@ -992,7 +998,7 @@ fn open_project(start: &Path) -> Option<Project> {
 fn require_terminal(command: &str) -> bool {
     let ok = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
     if !ok {
-        eprintln!("error: baton {command} necesita una terminal interactiva");
+        report::error(format!("baton {command} necesita una terminal interactiva"));
     }
     ok
 }
@@ -1007,7 +1013,7 @@ fn config(project: &Project) -> ExitCode {
     }
     let valid = checked.is_valid();
     let Some(config) = checked.value.filter(|_| valid) else {
-        eprintln!("error: corrige la configuración antes de abrirla (baton validate)");
+        report::error("corrige la configuración antes de abrirla (baton validate)".to_string());
         return ExitCode::from(EXIT_INVALID);
     };
     let name = project.root.file_name().map_or_else(
@@ -1024,7 +1030,7 @@ fn config(project: &Project) -> ExitCode {
             None => ExitCode::SUCCESS,
         },
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }
@@ -1037,7 +1043,7 @@ fn demo(fast: bool, screen: Screen) -> ExitCode {
     match baton_tui::demo::run(fast, screen) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }

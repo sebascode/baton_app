@@ -113,7 +113,7 @@ fn engine_with(config: &Config, extra: &[(String, String)]) -> Engine {
         })
     };
     engine::choose(env.as_deref(), config.defaults.engine.as_deref(), has).unwrap_or_else(|e| {
-        eprintln!("baton: {e}; se usa docker");
+        eprintln!("aviso: {e}; se usa docker");
         Engine::Docker
     })
 }

@@ -22,6 +22,7 @@ use baton_exec::{ScannedService, scan_compose};
 use baton_store::sources::expand_sources;
 use baton_store::{Project, check_config, check_plan};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
 
 pub struct Args {
@@ -83,7 +84,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
     let ambiente = match crate::ambiente::resolve(args.ambiente.as_deref(), &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -110,20 +111,17 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
     .count()
         > 1
     {
-        eprintln!(
-            "{}",
-            tr!("error: --accion, --tarea y --script no se combinan")
-        );
+        report::error(tr!("--accion, --tarea y --script no se combinan"));
         return ExitCode::from(EXIT_USAGE);
     }
     if let Some(name) = &args.action {
         let Some(action) = Action::parse(name, args.follow, args.lines) else {
-            eprintln!("{}", tr!("error: '{name}' no es una acción", name = name));
+            report::error(tr!("'{name}' no es una acción", name = name));
             eprintln!("{}", tr!("  acciones: {list}", list = action_names()));
             return ExitCode::from(EXIT_USAGE);
         };
         if args.follow && !matches!(action, Action::Logs { .. }) {
-            eprintln!("{}", tr!("error: --seguir solo vale con la acción logs"));
+            report::error(tr!("--seguir solo vale con la acción logs"));
             return ExitCode::from(EXIT_USAGE);
         }
         return match ctx.orders_for(action, args.service.as_deref()) {
@@ -144,7 +142,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         };
     }
     if args.service.is_some() || args.follow {
-        eprintln!("{}", tr!("error: --servicio y --seguir van con --accion"));
+        report::error(tr!("--servicio y --seguir van con --accion"));
         return ExitCode::from(EXIT_USAGE);
     }
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
@@ -155,7 +153,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
 }
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("{}", tr!("error: {msg}", msg = msg));
+    report::error(msg);
     ExitCode::from(EXIT_USAGE)
 }
 
@@ -399,10 +397,9 @@ impl Ctx<'_> {
     fn execute(&self, orders: &[Order]) -> ExitCode {
         if orders.iter().any(|o| o.confirm) && !self.assume_yes {
             if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
-                eprintln!(
-                    "{}",
-                    tr!("error: esto cambia lo que corre y no se ejecuta sin confirmar:")
-                );
+                report::error(tr!(
+                    "esto cambia lo que corre y no se ejecuta sin confirmar:"
+                ));
                 for o in orders.iter().filter(|o| o.confirm) {
                     eprintln!("  {}", o.label);
                 }
@@ -483,7 +480,7 @@ impl Ctx<'_> {
                 Err(ExitCode::from(EXIT_RUN_FAILED))
             }
             Err(e) => {
-                eprintln!("{}", tr!("error: no se pudo ejecutar: {e}", e = e));
+                report::error(tr!("no se pudo ejecutar: {e}", e = e));
                 Err(ExitCode::from(EXIT_RUN_FAILED))
             }
         }
@@ -610,7 +607,7 @@ impl Ctx<'_> {
                     return last;
                 }
                 Err(e) => {
-                    eprintln!("{}", tr!("error: {e}", e = e));
+                    report::error(&e);
                     return ExitCode::from(EXIT_USAGE);
                 }
             };
@@ -630,7 +627,7 @@ impl Ctx<'_> {
             };
             match orders {
                 Ok(orders) => last = self.execute(&orders),
-                Err(e) => eprintln!("{}", tr!("error: {e}", e = e)),
+                Err(e) => report::error(&e),
             }
             eprintln!();
         }
@@ -687,10 +684,7 @@ impl Ctx<'_> {
             return Some(names[1].clone());
         }
         if names.len() == 1 {
-            eprintln!(
-                "{}",
-                tr!("error: el plan no tiene servicios de compose activos")
-            );
+            report::error(tr!("el plan no tiene servicios de compose activos"));
             return None;
         }
         let labels: Vec<String> = names

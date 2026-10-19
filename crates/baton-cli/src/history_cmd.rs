@@ -9,6 +9,7 @@ use baton_store::history::{self, RunCounts};
 use baton_store::state::State;
 use baton_store::{Project, check_plan};
 
+use crate::report;
 use crate::style::{Style, Tone, duration, outcome_mark, step_bar};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
@@ -29,7 +30,7 @@ pub fn run(project: &Project, plan_name: &str, limit: usize) -> ExitCode {
     let state = match State::load(project) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             return ExitCode::from(EXIT_INVALID);
         }
     };

@@ -8,6 +8,7 @@ use baton_core::import::{self, Imported, NoteLevel, Platform};
 use baton_core::tr;
 use baton_store::{Project, check_config};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 pub struct ImportFlags {
@@ -23,44 +24,35 @@ pub fn run(project: &Project, shown: &Path, file: &Path, flags: ImportFlags) -> 
     let text = match std::fs::read_to_string(file) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: no se pudo leer {path}: {e}",
-                    path = shown.display(),
-                    e = e
-                )
-            );
+            report::error(tr!(
+                "no se pudo leer {path}: {e}",
+                path = shown.display(),
+                e = e
+            ));
             return ExitCode::from(EXIT_USAGE);
         }
     };
     let file_name = shown.to_string_lossy();
     let Some(platform) = flags.platform.or_else(|| import::detect(&file_name, &text)) else {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: no se reconoce la plataforma de {file_name} (usa --from github|gitlab|azure)",
-                file_name = file_name
-            )
-        );
+        report::error(tr!(
+            "no se reconoce la plataforma de {file_name} (usa --from github|gitlab|azure)",
+            file_name = file_name
+        ));
         return ExitCode::from(EXIT_USAGE);
     };
 
     let mut imported = match import::convert(platform, &text) {
         Ok(i) => i,
         Err(e) => {
-            eprintln!("error: {file_name}: {e}");
+            report::error(format!("{file_name}: {e}"));
             return ExitCode::from(EXIT_INVALID);
         }
     };
     if imported.steps.is_empty() {
-        eprintln!(
-            "{}",
-            tr!(
-                "error: {file_name}: no quedó ningún paso para importar",
-                file_name = file_name
-            )
-        );
+        report::error(tr!(
+            "{file_name}: no quedó ningún paso para importar",
+            file_name = file_name
+        ));
         print_notes(&imported);
         return ExitCode::from(EXIT_INVALID);
     }
@@ -99,7 +91,7 @@ pub fn run(project: &Project, shown: &Path, file: &Path, flags: ImportFlags) -> 
     }
 
     if let Err(e) = baton_store::scaffold::create_plan(project, &plan_name) {
-        eprintln!("error: {e}");
+        report::error(format!("{e}"));
         return ExitCode::from(EXIT_USAGE);
     }
     let config = check_config(project);
@@ -114,10 +106,7 @@ pub fn run(project: &Project, shown: &Path, file: &Path, flags: ImportFlags) -> 
         &imported.steps,
         config.as_ref(),
     ) {
-        eprintln!(
-            "{}",
-            tr!("error: no se pudo guardar el plan importado: {e}", e = e)
-        );
+        report::error(tr!("no se pudo guardar el plan importado: {e}", e = e));
         // no deja un plan a medias
         let _ = std::fs::remove_file(project.plan_path(&plan_name));
         return ExitCode::from(EXIT_INVALID);

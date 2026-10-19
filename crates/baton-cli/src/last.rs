@@ -12,6 +12,7 @@ use baton_store::logs::{self, StepExcerpt};
 use baton_store::state::State;
 use baton_store::{Project, check_plan};
 
+use crate::report;
 use crate::style::{Style, Tone, duration, outcome_mark, plural, step_bar, step_mark};
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
 
@@ -36,7 +37,7 @@ pub fn run(project: &Project, plan_name: &str, lines: usize) -> ExitCode {
     let state = match State::load(project) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             return ExitCode::from(EXIT_INVALID);
         }
     };

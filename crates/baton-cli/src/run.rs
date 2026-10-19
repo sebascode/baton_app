@@ -11,6 +11,7 @@ use baton_store::{Project, check_config, check_plan};
 use baton_tui::PreviewState;
 use baton_tui::demo::Driver;
 
+use crate::report;
 use crate::text_run::run_text;
 use crate::tui_run::{Flags, RunDriver};
 use crate::{EXIT_INVALID, EXIT_RUN_FAILED, EXIT_USAGE};
@@ -75,16 +76,13 @@ fn warn_if_other_ambiente(
         return;
     }
     let none = || tr!("ninguno");
-    eprintln!(
-        "{}",
-        tr!(
-            "aviso: la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)",
-            plan = plan_name,
-            before = before.map_or_else(none, str::to_string),
-            what = what(),
-            now = current.map_or_else(none, str::to_string)
-        )
-    );
+    report::warn(tr!(
+        "la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)",
+        plan = plan_name,
+        before = before.map_or_else(none, str::to_string),
+        what = what(),
+        now = current.map_or_else(none, str::to_string)
+    ));
 }
 
 fn exit_for(outcome: RunOutcome) -> ExitCode {
@@ -108,7 +106,7 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
     flags.ambiente = match crate::ambiente::resolve(flags.ambiente.as_deref(), &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(e.to_string());
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -147,7 +145,7 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
         return match baton_tui::demo::run_app(app, &mut driver) {
             Ok(()) => driver.outcome.map_or(ExitCode::SUCCESS, exit_for),
             Err(e) => {
-                eprintln!("error: {e}");
+                report::error(format!("{e}"));
                 ExitCode::FAILURE
             }
         };
@@ -200,7 +198,7 @@ pub fn offer_git(project: Project, here: bool) -> Project {
             }
             match git::init_repo(&project.root) {
                 Ok(()) => eprintln!("{}", tr!("repositorio git iniciado")),
-                Err(e) => eprintln!("{}", tr!("aviso: no se pudo iniciar git: {e}", e = e)),
+                Err(e) => report::warn(tr!("no se pudo iniciar git: {e}", e = e)),
             }
             project
         }
@@ -234,7 +232,7 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
     let plan_name = baton_core::slug::slug(plan.as_deref().unwrap_or(&default_name), "plan");
 
     if let Err(e) = baton_store::scaffold::create_plan(project, &plan_name) {
-        eprintln!("error: {e}");
+        report::error(format!("{e}"));
         return ExitCode::from(EXIT_USAGE);
     }
 
@@ -252,10 +250,7 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
             .any(|s| s.kind == baton_core::plan::StepKind::Sql)
             && let Err(e) = baton_store::scaffold::add_db_credential(project, &plan_name)
         {
-            eprintln!(
-                "{}",
-                tr!("error: no se pudo agregar la credencial db: {e}", e = e)
-            );
+            report::error(tr!("no se pudo agregar la credencial db: {e}", e = e));
             let _ = std::fs::remove_file(project.plan_path(&plan_name));
             return ExitCode::from(EXIT_INVALID);
         }
@@ -268,7 +263,7 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         if let Err(e) =
             baton_store::plan_edit::save_plan_steps(project, &plan_name, &steps, config.as_ref())
         {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             // no deja un plan a medias
             let _ = std::fs::remove_file(project.plan_path(&plan_name));
             return ExitCode::from(EXIT_INVALID);
@@ -279,10 +274,7 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
     let gitignore_added = match baton_store::init::ensure_gitignored(project) {
         Ok(added) => added,
         Err(e) => {
-            eprintln!(
-                "{}",
-                tr!("aviso: no se pudo actualizar .gitignore: {e}", e = e)
-            );
+            report::warn(tr!("no se pudo actualizar .gitignore: {e}", e = e));
             false
         }
     };
@@ -297,18 +289,15 @@ pub fn init(project: &Project, plan: Option<String>, flags: InitFlags) -> ExitCo
         .collect();
     if !ambientes.is_empty() {
         if let Err(e) = baton_store::init::ensure_baton_dir(project) {
-            eprintln!("{}", tr!("aviso: no se pudo crear .baton/: {e}", e = e));
+            report::warn(tr!("no se pudo crear .baton/: {e}", e = e));
         }
         for amb in &ambientes {
             if let Err(e) = std::fs::create_dir_all(project.credentials_dir().join(amb)) {
-                eprintln!(
-                    "{}",
-                    tr!(
-                        "aviso: no se pudo crear el ambiente '{amb}': {e}",
-                        amb = amb,
-                        e = e
-                    )
-                );
+                report::warn(tr!(
+                    "no se pudo crear el ambiente '{amb}': {e}",
+                    amb = amb,
+                    e = e
+                ));
             }
         }
     }
@@ -466,7 +455,7 @@ pub fn rollback(project: &Project, plan_name: &str, ambiente: Option<&str>) -> E
     let ambiente = match crate::ambiente::resolve(ambiente, &config) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(e.to_string());
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -492,7 +481,7 @@ fn start_text(input: RunInput) -> ExitCode {
         Ok(handle) => exit_for(run_text(handle)),
         Err(e) => {
             for line in e.0 {
-                eprintln!("error: {line}");
+                report::error(line.to_string());
             }
             ExitCode::from(EXIT_INVALID)
         }
