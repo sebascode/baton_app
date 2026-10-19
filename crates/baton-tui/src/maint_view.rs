@@ -55,6 +55,8 @@ pub enum MaintAction {
     /// Cortar lo que corre (un seguimiento de logs no termina solo).
     Cancel,
     Back,
+    /// Elegir el ambiente de esta sesión (`None`: ninguno).
+    SetAmbiente(Option<String>),
 }
 
 /// Cómo terminó lo que se pidió.
@@ -108,6 +110,11 @@ pub struct MaintState {
     ask: Option<Ask>,
     /// Un aviso de una línea (cómo terminó lo último).
     pub notice: Option<String>,
+    /// Los ambientes que se conocen y el elegido ahora (para poder cambiarlo desde aquí).
+    ambientes: Vec<String>,
+    ambiente: Option<String>,
+    /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
+    ambiente_picker: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +178,44 @@ impl MaintState {
             running: None,
             ask: None,
             notice: None,
+            ambientes: Vec::new(),
+            ambiente: None,
+            ambiente_picker: None,
         }
+    }
+
+    /// Los ambientes conocidos y el elegido ahora; con alguno conocido, `a` abre el selector.
+    pub fn with_ambientes(mut self, known: Vec<String>, current: Option<String>) -> MaintState {
+        self.ambientes = known;
+        self.ambiente = current;
+        self
+    }
+
+    fn ambiente_choices(&self) -> Vec<Option<String>> {
+        std::iter::once(None)
+            .chain(self.ambientes.iter().cloned().map(Some))
+            .collect()
+    }
+
+    fn ambiente_key(&mut self, key: KeyEvent) -> Option<MaintAction> {
+        let cursor = self.ambiente_picker?;
+        let last = self.ambientes.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.ambiente_picker = Some(cursor.saturating_sub(1));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.ambiente_picker = Some((cursor + 1).min(last));
+            }
+            KeyCode::Enter => {
+                self.ambiente_picker = None;
+                let chosen = self.ambiente_choices().get(cursor)?.clone();
+                return (chosen != self.ambiente).then_some(MaintAction::SetAmbiente(chosen));
+            }
+            KeyCode::Esc | KeyCode::Char('q' | 'a') => self.ambiente_picker = None,
+            _ => {}
+        }
+        None
     }
 
     /// Cuántas líneas de logs se piden al empezar (por defecto 100; es `--lines` de `baton ops`).
@@ -347,6 +391,9 @@ impl MaintState {
                 _ => None,
             };
         }
+        if self.ambiente_picker.is_some() {
+            return self.ambiente_key(key);
+        }
         self.notice = None;
         let page = self.view_height.get().max(1);
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -371,6 +418,18 @@ impl MaintState {
             KeyCode::End | KeyCode::Char('G') => self.scroll = 0,
             KeyCode::Home | KeyCode::Char('g') => self.scroll_by(true, usize::MAX / 2),
             KeyCode::Char('x') => return self.running.is_some().then_some(MaintAction::Cancel),
+            KeyCode::Char('a') if !self.ambientes.is_empty() => {
+                if self.running.is_some() {
+                    self.notice = Some(tr!("ya hay algo en curso (x lo corta)"));
+                } else {
+                    let at = self
+                        .ambiente
+                        .as_ref()
+                        .and_then(|a| self.ambientes.iter().position(|x| x == a))
+                        .map_or(0, |i| i + 1);
+                    self.ambiente_picker = Some(at);
+                }
+            }
             KeyCode::Enter => {
                 if matches!(self.rows.get(self.act_cursor), Some((_, _, Row::Scripts)))
                     && self.focus == Focus::Actions
@@ -445,7 +504,14 @@ impl MaintState {
             buf,
             area,
             vec![Span::styled(
-                tr!("Mantención · {plan}", plan = self.plan),
+                match &self.ambiente {
+                    Some(a) => tr!(
+                        "Mantención · {plan} · ambiente {name}",
+                        plan = self.plan,
+                        name = a
+                    ),
+                    None => tr!("Mantención · {plan}", plan = self.plan),
+                },
                 theme::bold(),
             )],
             state,
@@ -467,6 +533,9 @@ impl MaintState {
         };
         if self.running.is_some() {
             shortcuts.push(("x", tk!("cortar")));
+        }
+        if !self.ambientes.is_empty() && self.focus != Focus::Scripts {
+            shortcuts.push(("a", tk!("ambiente")));
         }
         shortcuts.extend([("PgUp PgDn", tk!("salida")), ("esc", tk!("volver al plan"))]);
         let prompt = self.prompt();
@@ -517,6 +586,12 @@ impl MaintState {
             );
         }
 
+        let over = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width,
+            sep_low.saturating_sub(inner.y),
+        );
         let body = Rect::new(
             inner.x + 1,
             sep_mid + 1,
@@ -530,6 +605,7 @@ impl MaintState {
                 theme::muted(),
             ))
             .render(Rect::new(body.x, body.y, body.width, 1), buf);
+            self.render_ambiente_picker(buf, over);
             return;
         }
         let lines = wrapped(&self.log, body.width as usize);
@@ -548,6 +624,30 @@ impl MaintState {
                 buf,
             );
         }
+        self.render_ambiente_picker(buf, over);
+    }
+
+    /// El selector de ambiente: «ninguno» y los conocidos, con ● el elegido ahora.
+    fn render_ambiente_picker(&self, buf: &mut Buffer, over: Rect) {
+        if self.ambiente_picker.is_none() {
+            return;
+        }
+        let rows: Vec<(String, bool)> = self
+            .ambiente_choices()
+            .into_iter()
+            .map(|a| {
+                let current = a == self.ambiente;
+                (a.unwrap_or_else(|| tr!("(ninguno)")), current)
+            })
+            .collect();
+        crate::preview::render_popup(
+            buf,
+            over,
+            &tr!(" Ambiente "),
+            &tr!("↑↓ · enter elegir · esc"),
+            &rows,
+            self.ambiente_picker.unwrap_or(0),
+        );
     }
 
     /// Las columnas de scripts: una por cada carpeta elegida más la activa. La cabecera es el

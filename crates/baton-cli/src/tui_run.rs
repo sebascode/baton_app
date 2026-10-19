@@ -406,9 +406,28 @@ impl RunDriver {
 
     fn maintenance(&self, app: &mut App) {
         let state = crate::ops::maintenance_state(&self.project, &self.config, &self.plan);
+        let state = state.with_ambientes(self.known_ambientes(), self.flags.ambiente.clone());
         app.show_maintenance(match self.flags.ops_tail {
             Some(n) => state.with_tail(n),
             None => state,
+        });
+    }
+
+    /// Cambia el ambiente desde la mantención: se rearma la aplicación (como en la vista del plan)
+    /// y se vuelve a abrir la mantención con el ambiente nuevo.
+    fn maint_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
+        if self.maint.is_some() {
+            return app.notify(&tr!("ya hay algo en curso"));
+        }
+        let wanted = ambiente.clone();
+        self.set_ambiente(app, ambiente);
+        if self.flags.ambiente != wanted {
+            return;
+        }
+        self.maintenance(app);
+        app.notify(&match &self.flags.ambiente {
+            Some(a) => tr!("ambiente: {name}", name = a),
+            None => tr!("sin ambiente"),
         });
     }
 
@@ -1161,6 +1180,7 @@ impl Driver for RunDriver {
             Effect::TestCredential(i) => self.test_credential(app, i),
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::SetAmbiente(amb) => self.set_ambiente(app, amb),
+            Effect::MaintAmbiente(amb) => self.maint_ambiente(app, amb),
             Effect::OpenHistory => self.open_history(app),
             Effect::Maintenance => self.maintenance(app),
             Effect::MaintRun(req) => self.maint_run(app, &req),

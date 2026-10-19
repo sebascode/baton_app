@@ -305,3 +305,63 @@ fn the_terminal_palette_drops_fixed_backgrounds_and_gray_but_keeps_state_colors(
         "la fila elegida va en inverso"
     );
 }
+
+fn opened_with_ambientes(current: Option<&str>) -> App {
+    let mut app = App::new(fake::preview());
+    app.show_maintenance(fake::maintenance().with_ambientes(
+        vec!["qa".into(), "prod".into()],
+        current.map(str::to_string),
+    ));
+    app
+}
+
+#[test]
+fn without_known_environments_a_does_nothing_and_is_not_offered() {
+    let mut app = opened();
+    assert!(app.handle_key(chr('a')).is_none());
+    assert!(!shown(&app, 100, 26).contains("ambiente"));
+}
+
+#[test]
+fn a_opens_the_environment_picker_and_enter_asks_to_switch() {
+    let mut app = opened_with_ambientes(Some("qa"));
+    assert!(shown(&app, 100, 26).contains("Mantención · instalar · ambiente qa"));
+    assert!(app.handle_key(chr('a')).is_none());
+    let t = shown(&app, 100, 26);
+    assert!(
+        t.contains("Ambiente") && t.contains("(ninguno)") && t.contains("prod"),
+        "{t}"
+    );
+    app.handle_key(key(KeyCode::Down));
+    let effect = app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(effect, Some(Effect::MaintAmbiente(Some(a))) if a == "prod"));
+}
+
+#[test]
+fn choosing_the_current_environment_or_esc_changes_nothing() {
+    let mut app = opened_with_ambientes(Some("qa"));
+    app.handle_key(chr('a'));
+    assert!(app.handle_key(key(KeyCode::Enter)).is_none());
+    app.handle_key(chr('a'));
+    app.handle_key(key(KeyCode::Down));
+    assert!(app.handle_key(key(KeyCode::Esc)).is_none());
+    assert!(
+        matches!(app.mode, Mode::Maintenance(_)),
+        "esc solo cierra el selector"
+    );
+}
+
+#[test]
+fn it_refuses_to_switch_environment_while_something_runs() {
+    let mut app = opened_with_ambientes(None);
+    app.handle_key(key(KeyCode::Tab));
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Enter)),
+        Some(Effect::MaintRun(_))
+    ));
+    assert!(app.handle_key(chr('a')).is_none());
+    assert!(
+        !shown(&app, 100, 26).contains("(ninguno)"),
+        "no abre el selector"
+    );
+}

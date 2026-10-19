@@ -1015,7 +1015,7 @@ fn step_lines(
 }
 
 /// Una lista corta sobre la lista de pasos: `›` el cursor, `●` la fila vigente.
-fn render_popup(
+pub(crate) fn render_popup(
     buf: &mut Buffer,
     over: Rect,
     title: &str,
