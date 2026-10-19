@@ -1,0 +1,54 @@
+# Plugin de ejemplo: MariaDB, un script .sql por archivo con el cliente `mariadb`.
+#
+# Por qué existe: las imagenes de MariaDB 11 o mas ya no traen `mysql` ni `mysqldump`, solo
+# `mariadb` y `mariadb-dump`, y el tipo `sql` de baton llama a `mysql`. Este plugin hace lo mismo
+# para esos casos: ejecuta cada archivo con `mariadb`, en orden por nombre y dentro de su carpeta.
+#
+# Instalar a mano: copiar esta carpeta a ~/.config/baton/plugins/mariadb/ (o a baton/plugins/ del
+# proyecto) y revisarla antes con
+#   baton plugin validate ~/.config/baton/plugins/mariadb
+#
+# Uso en un plan:
+#   [[credentials]]
+#   id = "tienda"
+#   kind = "mariadb"
+#   ref = "db.env#TIENDA"          # TIENDA_USER, TIENDA_PASSWORD, y opcionales _HOST _PORT _DATABASE
+#
+#   [[steps]]
+#   id = "esquema"
+#   name = "Esquema"
+#   type = "mariadb"
+#   source = "db/*.sql"
+#
+# Dentro de un contenedor (el caso de MariaDB 11): el cliente no esta en esta maquina, asi que el
+# paso reescribe `command`. La contrasena llega por el entorno (MYSQL_PWD), nunca en un argumento:
+#   command = 'docker exec -i -e MYSQL_PWD mi-mariadb mariadb -u "$MARIADB_USER" "$MARIADB_DATABASE" < "{script}"'
+#
+# Lo que este plugin NO hace (un plugin es solo un comando): no respalda ni restaura la base en un
+# rollback, no avisa de sentencias destructivas y `baton db` no la consulta. Para el rollback
+# declara el `rollback` del paso; para el respaldo, un paso `comando` con `mariadb-dump`.
+api = 1
+name = "mariadb"
+version = "0.1.0"
+description = "MariaDB: ejecuta cada .sql con el cliente mariadb (para imagenes de MariaDB 11 o mas)"
+
+[type]
+scanned = true
+command = 'mariadb --batch ${MARIADB_HOST:+-h "$MARIADB_HOST"} ${MARIADB_PORT:+-P "$MARIADB_PORT"} -u "$MARIADB_USER" ${MARIADB_DATABASE:+"$MARIADB_DATABASE"} < "{script}"'
+
+[[credentials]]
+kind = "mariadb"
+fields = [
+  { key = "USER" },
+  { key = "PASSWORD", secret = true },
+  { key = "HOST", optional = true },
+  { key = "PORT", optional = true },
+  { key = "DATABASE", optional = true },
+]
+
+[credentials.env]
+MARIADB_USER = "{USER}"
+MYSQL_PWD = "{PASSWORD}"
+MARIADB_HOST = "{HOST}"
+MARIADB_PORT = "{PORT}"
+MARIADB_DATABASE = "{DATABASE}"

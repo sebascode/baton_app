@@ -255,6 +255,88 @@ fn plugin_commands_need_no_project() {
     assert_eq!(code(&o), 0);
 }
 
+// ------------------------------------------------- el plugin de MariaDB de los ejemplos
+
+const MARIADB_EXAMPLE: &str = include_str!("../../../examples/plugins/mariadb/baton-plugin.toml");
+
+// registra argumentos, entorno y lo que lee por la entrada estandar; falla si el script dice FALLAR
+const FAKE_MARIADB: &str = "#!/bin/sh\ninput=$(cat)\necho \"$(basename \"$PWD\")|$*|user=$MARIADB_USER pwd=$MYSQL_PWD host=$MARIADB_HOST|$input\" >> \"$BATON_CALLS\"\ncase \"$input\" in FALLAR*) echo 'ERROR 1146 simulado' >&2; exit 1;; esac\n";
+
+#[test]
+fn the_mariadb_plugin_runs_each_script_with_the_client_and_hands_the_password_by_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    fx.install("mariadb", MARIADB_EXAMPLE);
+    fx.write("db/01-esquema.sql", "create table t(i int);");
+    fx.write("db/02-datos.sql", "insert into t values (1);");
+    fx.write(
+        "baton/plans/p.toml",
+        "name = \"p\"\n[[credentials]]\nid = \"ma\"\nkind = \"mariadb\"\nref = \"db.env#MA\"\n\
+         [[steps]]\nid = \"s\"\nname = \"S\"\ntype = \"mariadb\"\nsource = \"db/*.sql\"\n",
+    );
+    let bin = fx.write("_bin/mariadb", FAKE_MARIADB);
+    fs::set_permissions(bin, fs::Permissions::from_mode(0o755)).unwrap();
+    let calls_file = fx.root.join("_calls");
+    let env = [
+        ("BATON_CALLS", calls_file.to_str().unwrap()),
+        ("MA_USER", "app"),
+        ("MA_PASSWORD", "clave-de-prueba-9"),
+        ("MA_DATABASE", "tienda"),
+    ];
+    let v = fx.baton_full(&["validate", "p"], true, &env);
+    assert_eq!(code(&v), 0, "{}{}", out(&v), err(&v));
+    let o = fx.baton_full(&["run", "p", "--no-tui"], true, &env);
+    assert_eq!(code(&o), 0, "{}{}", out(&o), err(&o));
+    let calls = calls(&fx);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    // cada script corre en su carpeta, con la base como argumento y sin la contrasena en argv
+    assert!(
+        calls[0].starts_with("db|--batch -u app tienda|"),
+        "{calls:?}"
+    );
+    assert!(calls[0].ends_with("|create table t(i int);"), "{calls:?}");
+    assert!(
+        calls[1].ends_with("|insert into t values (1);"),
+        "{calls:?}"
+    );
+    assert!(
+        calls[0].contains("pwd=clave-de-prueba-9"),
+        "la recibe por el entorno"
+    );
+    assert!(
+        !calls[0].split('|').nth(1).unwrap().contains("clave"),
+        "{calls:?}"
+    );
+    // y la contrasena no aparece en pantalla ni en el log
+    let shown = format!("{}{}", out(&o), err(&o));
+    assert!(!shown.contains("clave-de-prueba-9"), "{shown}");
+}
+
+#[test]
+fn the_mariadb_plugin_stops_at_the_first_failing_script() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::new();
+    fx.install("mariadb", MARIADB_EXAMPLE);
+    fx.write("db/01.sql", "FALLAR");
+    fx.write("db/02.sql", "select 1;");
+    fx.write(
+        "baton/plans/p.toml",
+        "name = \"p\"\n[[credentials]]\nid = \"ma\"\nkind = \"mariadb\"\nref = \"db.env#MA\"\n\
+         [[steps]]\nid = \"s\"\nname = \"S\"\ntype = \"mariadb\"\nsource = \"db/*.sql\"\n",
+    );
+    let bin = fx.write("_bin/mariadb", FAKE_MARIADB);
+    fs::set_permissions(bin, fs::Permissions::from_mode(0o755)).unwrap();
+    let calls_file = fx.root.join("_calls");
+    let env = [
+        ("BATON_CALLS", calls_file.to_str().unwrap()),
+        ("MA_USER", "app"),
+        ("MA_PASSWORD", "clave-de-prueba-9"),
+    ];
+    let o = fx.baton_full(&["run", "p", "--no-tui"], true, &env);
+    assert_eq!(code(&o), 3, "{}{}", out(&o), err(&o));
+    assert_eq!(calls(&fx).len(), 1, "el segundo script no corre");
+}
+
 // ------------------------------------------------- el plugin de Terraform de los ejemplos
 
 const TERRAFORM_EXAMPLE: &str =
@@ -285,10 +367,15 @@ fn calls(fx: &Fx) -> Vec<String> {
 #[test]
 fn the_example_manifests_are_valid() {
     let fx = Fx::new();
-    let f = fx.write("terraform/baton-plugin.toml", TERRAFORM_EXAMPLE);
-    let o = fx.baton(&["plugin", "validate", f.to_str().unwrap()]);
-    assert_eq!(code(&o), 0, "{}", err(&o));
-    assert!(err(&o).is_empty(), "sin avisos: {}", err(&o));
+    for (folder, manifest) in [
+        ("terraform", TERRAFORM_EXAMPLE),
+        ("mariadb", MARIADB_EXAMPLE),
+    ] {
+        let f = fx.write(&format!("{folder}/baton-plugin.toml"), manifest);
+        let o = fx.baton(&["plugin", "validate", f.to_str().unwrap()]);
+        assert_eq!(code(&o), 0, "{folder}: {}", err(&o));
+        assert!(err(&o).is_empty(), "{folder} sin avisos: {}", err(&o));
+    }
 }
 
 #[test]
