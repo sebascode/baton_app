@@ -130,6 +130,7 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
             Flags {
                 resume: flags.resume,
                 ambiente: flags.ambiente.clone(),
+                ops_tail: None,
             },
         );
         let mut app = driver.app(preview);

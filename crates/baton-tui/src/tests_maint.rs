@@ -227,3 +227,35 @@ fn esc_climbs_one_level_and_from_the_root_returns_to_the_actions() {
     // y seguimos en la pantalla de mantención, no en el plan
     assert!(matches!(app.mode, Mode::Maintenance(_)));
 }
+
+#[test]
+fn the_log_lines_asked_for_follow_lineas_in_both_log_actions() {
+    let mut app = App::new(fake::preview());
+    app.show_maintenance(fake::maintenance().with_tail(25));
+    app.handle_key(key(KeyCode::Down)); // api
+    app.handle_key(key(KeyCode::Tab));
+    let Some(Effect::MaintRun(req)) = app.handle_key(key(KeyCode::Enter)) else {
+        panic!("no pidió ejecutar")
+    };
+    assert_eq!(
+        req.action,
+        Some(Action::Logs {
+            follow: false,
+            tail: 25
+        })
+    );
+    assert_eq!(app.handle_key(chr('x')), Some(Effect::MaintCancel));
+    // "logs en vivo" también usa las 25 líneas
+    app.maint_finished(MaintResult::Cancelled);
+    app.handle_key(key(KeyCode::Down));
+    let Some(Effect::MaintRun(req)) = app.handle_key(key(KeyCode::Enter)) else {
+        panic!("no pidió ejecutar")
+    };
+    assert_eq!(
+        req.action,
+        Some(Action::Logs {
+            follow: true,
+            tail: 25
+        })
+    );
+}

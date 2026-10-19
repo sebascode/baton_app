@@ -35,6 +35,8 @@ pub struct Args {
     pub lines: u32,
     pub assume_yes: bool,
     pub ambiente: Option<String>,
+    /// Sin la interfaz: el menú de preguntas en la terminal.
+    pub no_tui: bool,
 }
 
 /// Un servicio de un compose del plan y dónde corre.
@@ -146,7 +148,17 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         return ExitCode::from(EXIT_USAGE);
     }
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
-        return ctx.menu(args.lines);
+        // con terminal, la mantención vive dentro de la interfaz (la misma de la tecla `m`);
+        // el menú de preguntas queda para `--no-tui`
+        if args.no_tui {
+            return ctx.menu(args.lines);
+        }
+        return crate::start::open_maintenance(
+            project,
+            plan_name,
+            args.ambiente.as_deref(),
+            args.lines,
+        );
     }
     print!("{}", ctx.overview(plan_name));
     ExitCode::SUCCESS

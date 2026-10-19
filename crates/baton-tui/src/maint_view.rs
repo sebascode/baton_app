@@ -174,6 +174,16 @@ impl MaintState {
         }
     }
 
+    /// Cuántas líneas de logs se piden al empezar (por defecto 100; es `--lineas` de `baton ops`).
+    pub fn with_tail(mut self, tail: u32) -> MaintState {
+        for (_, _, row) in &mut self.rows {
+            if let Row::Action(Action::Logs { tail: t, .. }) = row {
+                *t = tail;
+            }
+        }
+        self
+    }
+
     /// Los scripts de mantención del proyecto: agrega la fila que abre su menú por carpetas.
     pub fn with_scripts(mut self, scripts: Vec<PathBuf>) -> MaintState {
         if !scripts.is_empty() {
