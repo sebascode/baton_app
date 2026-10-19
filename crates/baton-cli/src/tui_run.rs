@@ -142,6 +142,10 @@ impl RunDriver {
         let root = self.project.root.display().to_string();
         let mut app = App::new(preview)
             .with_quit_confirm(self.config.ui.confirms_exit())
+            .with_palette(baton_core::color::palette(
+                std::env::var("BATON_COLORS").ok().as_deref(),
+                self.config.ui.colors.as_deref(),
+            ))
             .with_editor(self.editor())
             .with_live_pipeline(
                 &self.plan.name,

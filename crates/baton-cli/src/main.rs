@@ -66,6 +66,10 @@ struct Cli {
     #[arg(short = 'q', long, global = true)]
     quiet: bool,
 
+    /// Sin colores en la salida y en la interfaz (también `NO_COLOR`; `FORCE_COLOR` los fuerza)
+    #[arg(long, global = true)]
+    no_color: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -600,6 +604,7 @@ fn main() -> ExitCode {
         Err(e) => e.apply::<clap_i18n::Localized>().exit(),
     };
     style::set_quiet(cli.quiet);
+    baton_core::color::set_off(cli.no_color);
     // El idioma antes de imprimir nada. Se mira desde la carpeta de trabajo (`-C` o la actual).
     baton_core::i18n::set(baton_store::global::language(
         &cli.dir

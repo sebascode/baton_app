@@ -12,9 +12,7 @@ use std::io::IsTerminal;
 use baton_core::tr;
 
 fn colored() -> bool {
-    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    let dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
-    std::io::stderr().is_terminal() && !no_color && !dumb
+    baton_core::color::enabled(std::io::stderr().is_terminal())
 }
 
 fn line(prefix: &str, code: &str, msg: &dyn Display) -> String {

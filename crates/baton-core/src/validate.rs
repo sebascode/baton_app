@@ -50,6 +50,19 @@ pub fn validate_config(config: &Config) -> Vec<Issue> {
         out.push(Issue::error(path!["defaults", "engine"], msg));
     }
 
+    if let Some(c) = &config.ui.colors
+        && crate::color::Palette::parse(c).is_none()
+    {
+        out.push(Issue::error(
+            path!["ui", "colors"],
+            crate::tr!(
+                "la paleta '{c}' no existe (opciones: {a0})",
+                c = c,
+                a0 = crate::color::PALETTE_VALUES.join(", ")
+            ),
+        ));
+    }
+
     if let Some(l) = &config.ui.language
         && !crate::i18n::SETTING_VALUES.contains(&l.as_str())
     {
