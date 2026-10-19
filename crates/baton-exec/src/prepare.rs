@@ -132,6 +132,14 @@ pub struct PStep {
     /// Un paso `backup` sin `rollback` propio en un plan con `[backup] database = true`: su
     /// rollback restaura el último respaldo de la base.
     pub restore_db: bool,
+    /// Un paso de un tipo de plugin que respalda (`backup_before`) y no declara `rollback`: su
+    /// rollback corre el `restore` del tipo con el último respaldo.
+    pub restore_plugin: bool,
+}
+
+/// El rollback de este paso restaura el respaldo que declara su tipo de plugin.
+pub(crate) fn restores_plugin(step: &Step) -> bool {
+    step.rollback.is_none() && step.backup_before && step.kind.plugin_backup().is_some()
 }
 
 fn restores_db(plan: &Plan, step: &Step) -> bool {
@@ -143,7 +151,7 @@ fn restores_db(plan: &Plan, step: &Step) -> bool {
 impl PStep {
     /// Tiene algo que deshacer: su `rollback`, o restaurar la base.
     pub fn has_rollback(&self) -> bool {
-        self.step.rollback.is_some() || self.restore_db
+        self.step.rollback.is_some() || self.restore_db || self.restore_plugin
     }
 
     pub fn has_manual_gate(&self) -> bool {
@@ -437,12 +445,28 @@ pub fn prepare_run(
             }
         }
 
+        // Lo mismo con un tipo de plugin que declara frases a revisar en sus archivos (`scan`).
+        if !s.kind.scan_phrases().is_empty()
+            && !opts.interactive
+            && !opts.assume_yes
+            && !opts.dry_run
+        {
+            for (file, risks) in scan_risks(&project.root, &files, s.kind.scan_phrases()) {
+                errors.push(tr!(
+                    "{step} tiene contenido a revisar en {file}: {risks}. No hay terminal para confirmar: ejecuta en una terminal o usa --assume-yes",
+                    step = label(s),
+                    file = file.display(),
+                    risks = describe_risks(&risks)
+                ));
+            }
+        }
+
         if s.kind.runs_command() && !s.kind.has_own_interpreter() && s.command_template().is_none()
         {
             errors.push(tr!("{step}: no tiene comando", step = label(s)));
         }
         if opts.backup
-            && (s.kind == StepKind::Backup || s.backup_before)
+            && (s.kind == StepKind::Backup || (s.backup_before && s.kind.plugin_backup().is_none()))
             && plan.backup.as_ref().is_none_or(|b| b.is_empty())
         {
             errors.push(tr!(
@@ -459,6 +483,7 @@ pub fn prepare_run(
             files,
             scan,
             restore_db: restores_db(plan, s),
+            restore_plugin: restores_plugin(s),
         });
     }
 
@@ -493,7 +518,10 @@ pub fn prepare_rollback(
     let mut out: Vec<PStep> = plan
         .steps
         .iter()
-        .filter(|s| last.is_done(&s.id) && (s.rollback.is_some() || restores_db(plan, s)))
+        .filter(|s| {
+            last.is_done(&s.id)
+                && (s.rollback.is_some() || restores_db(plan, s) || restores_plugin(s))
+        })
         .map(|s| PStep {
             step: s.clone(),
             target: s.target.clone().unwrap_or_else(|| "local".into()),
@@ -505,6 +533,7 @@ pub fn prepare_rollback(
             },
             scan: Vec::new(),
             restore_db: restores_db(plan, s),
+            restore_plugin: restores_plugin(s),
         })
         .collect();
     out.reverse();
@@ -519,6 +548,22 @@ pub(crate) fn sql_risks(root: &std::path::Path, files: &[PathBuf]) -> Vec<(PathB
         .filter_map(|f| {
             let text = std::fs::read_to_string(root.join(f)).ok()?;
             let risks = destructive_statements(&text);
+            (!risks.is_empty()).then(|| (f.clone(), risks))
+        })
+        .collect()
+}
+
+/// Líneas de cada archivo que contienen alguna frase de `scan` de un tipo de plugin.
+pub(crate) fn scan_risks(
+    root: &std::path::Path,
+    files: &[PathBuf],
+    phrases: &[&'static str],
+) -> Vec<(PathBuf, Vec<Risk>)> {
+    files
+        .iter()
+        .filter_map(|f| {
+            let text = std::fs::read_to_string(root.join(f)).ok()?;
+            let risks = baton_core::plugin::scan_text(&text, phrases);
             (!risks.is_empty()).then(|| (f.clone(), risks))
         })
         .collect()
@@ -1155,6 +1200,10 @@ mod tests {
             binaries,
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
     }

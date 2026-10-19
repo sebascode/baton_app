@@ -292,6 +292,7 @@ mod tests {
             },
             target: target.into(),
             restore_db: false,
+            restore_plugin: false,
             host: target.into(),
             files: vec![],
             scan: vec![],

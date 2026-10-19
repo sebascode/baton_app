@@ -3146,6 +3146,10 @@ fn register_iac() -> baton_core::kind::StepKind {
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     })
     .unwrap()
 }
@@ -3206,6 +3210,10 @@ fn register_planner(name: &'static str, command: &'static str, dry_run: &'static
         binaries: &[],
         destructive: &[],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     })
     .unwrap();
 }
@@ -3464,6 +3472,10 @@ fn register_reviewer(name: &'static str) {
         binaries: &[],
         destructive: &["will be destroyed", "must be replaced"],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     })
     .unwrap();
 }
@@ -3680,6 +3692,10 @@ fn a_failing_plan_stops_the_step_before_applying() {
         binaries: &[],
         destructive: &["will be destroyed"],
         credentials: &[],
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     })
     .unwrap();
     let fx = Fx::new(&["infra/a/main.tf"]);
@@ -3767,6 +3783,7 @@ fn register_cloud(step: &'static str, kind: &'static str, command: &'static str)
                     "https://{REGION}.nube.example/{ACCESS_KEY_ID}",
                 ),
             ],
+            test: None,
         }]
         .into_boxed_slice(),
     );
@@ -3783,6 +3800,10 @@ fn register_cloud(step: &'static str, kind: &'static str, command: &'static str)
         binaries: &[],
         destructive: &[],
         credentials: uses,
+        backup: None,
+        restore: None,
+        backup_ext: "bak",
+        scan: &[],
     })
     .unwrap();
 }

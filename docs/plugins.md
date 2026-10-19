@@ -119,7 +119,7 @@ escaneo nunca activa por su cuenta un paso que puede modificar cosas.
 
 ## Referencia del manifiesto
 
-El formato es `api = 1`. Un campo que baton no conoce es un error de lectura (así un error de
+El formato es `api = 1`; `api = 2` agrega las capacidades opcionales de la sección «Capacidades opcionales (`api = 2`)» y un manifiesto `api = 1` sigue valiendo igual. Un campo que baton no conoce es un error de lectura (así un error de
 tipeo no pasa en silencio). Un manifiesto no puede pesar más de 64 KB.
 
 ### Nivel superior
@@ -152,6 +152,53 @@ legítimas.
 ### `[[credentials]]`
 
 Ver la sección de credenciales más abajo.
+
+## Capacidades opcionales (`api = 2`)
+
+Un tipo nativo como `sql` hace más que correr un comando: respalda la base antes de tocarla, la
+restaura si el plan se deshace, avisa de sentencias destructivas y prueba la conexión de su
+credencial. Un plugin puede declarar esas mismas capacidades. **Cada una vale solo si el manifiesto la
+declara**: lo declarado reemplaza el comportamiento por defecto del tipo, que era no hacer nada. Hay
+que escribir `api = 2`; con `api = 1` baton rechaza estos campos diciendo cuál falta.
+
+| Campo | Dónde | Qué hace |
+|---|---|---|
+| `backup` | `[type]` | Comando que respalda lo que el paso va a tocar. `{backup_file}` es el archivo (baton lo pone entre comillas). Se ejecuta antes de un paso con `backup_before = true`, **una sola vez por ejecución**, y solo si el backup está activo (`[options] backup`, `--backup`/`--no-backup`). El plan no necesita la sección `[backup]`. Va junto con `restore`. |
+| `restore` | `[type]` | Comando que restaura el último respaldo del paso (`{backup_file}`) cuando se deshace, **salvo que el paso declare su propio `rollback`**, que manda. Funciona dentro de la ejecución y con `baton rollback` (usa el respaldo más reciente). |
+| `backup_ext` | `[type]` | Extensión del archivo de respaldo, sin punto (por defecto `bak`). El archivo es `.baton/backups/<plan>-<fecha>-<id del paso>.<extensión>`. |
+| `scan` | `[type]` | Frases que, si aparecen en los archivos del origen, piden confirmar antes de ejecutar (`DROP `, `TRUNCATE `). Texto literal, sin distinguir mayúsculas; es una búsqueda de texto, así que avisa de más. En una terminal pregunta; sin terminal el plan se rechaza antes de ejecutar nada salvo con `--assume-yes`. |
+| `test` | `[[credentials]]` | Comando de **solo lectura** que prueba la credencial: lo corre la tecla `t` de la pantalla de credenciales con las variables de `[credentials.env]`. Muestra la primera línea de su salida. |
+
+```toml
+api = 2
+name = "basedatos"
+version = "0.1.0"
+description = "Una base de datos con su cliente por línea de comandos"
+
+[type]
+scanned = true
+backup_ext = "sql"
+command = 'cliente --file "{script}"'
+backup = 'cliente-dump > {backup_file}'
+restore = 'cliente --file {backup_file}'
+scan = ["DROP ", "TRUNCATE "]
+
+[[credentials]]
+kind = "basedatos"
+fields = [
+  { key = "USER" },
+  { key = "PASSWORD", secret = true },
+]
+test = 'cliente --ping'
+
+[credentials.env]
+DB_USER = "{USER}"
+DB_PASSWORD = "{PASSWORD}"
+```
+
+Dos límites: el respaldo se escribe en la máquina donde corre baton (igual que los de las bases de
+datos nativas), y `backup`/`restore` son del tipo, no del paso: un paso no puede reescribirlos como
+reescribe `command`. `examples/plugins/mariadb` usa las cuatro capacidades.
 
 ## Escribir el `dry_run`
 

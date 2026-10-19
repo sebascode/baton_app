@@ -805,7 +805,11 @@ fn validate_step(
         Requires::Nothing => {}
     }
 
-    if step.backup_before && plan.backup.as_ref().is_none_or(|b| b.is_empty()) {
+    // (un tipo de plugin con `backup` declarado respalda por su cuenta: no necesita [backup])
+    if step.backup_before
+        && step.kind.plugin_backup().is_none()
+        && plan.backup.as_ref().is_none_or(|b| b.is_empty())
+    {
         out.push(Issue::error(
             p("backup_before"),
             crate::tr!("backup_before necesita la sección [backup] con volumes"),
@@ -1963,6 +1967,10 @@ mod tests {
             binaries: &[],
             destructive: &["will be destroyed"],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
     }
@@ -2007,6 +2015,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: &[],
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
         assert!(errors(&step_of("t-val-free", "command = \"mi-aplicar\"\n")).is_empty());
@@ -2019,6 +2031,7 @@ mod tests {
             vec![crate::kind::CredUse {
                 kind: "docker",
                 env: &[("REGISTRY_TOKEN", "{TOKEN}")],
+                test: None,
             }]
             .into_boxed_slice(),
         );
@@ -2035,6 +2048,10 @@ mod tests {
             binaries: &[],
             destructive: &[],
             credentials: uses,
+            backup: None,
+            restore: None,
+            backup_ext: "bak",
+            scan: &[],
         })
         .unwrap();
     }

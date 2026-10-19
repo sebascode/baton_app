@@ -868,8 +868,57 @@ fn test_connection(
             mysql_ping(reference, &resolved, None, DB_PING_TIMEOUT)
         }
         CredentialKind::Sqlite => sqlite_ping(root, &value_of("FILE"), None, DB_PING_TIMEOUT),
-        // `git`, `otro` y los que añade un plugin (no hay forma genérica de probarlos)
+        // un tipo de credencial de plugin que declara su propia prueba (`test`)
+        _ if baton_core::kind::credential_test(kind.name()).is_some() => plugin_test(kind, item),
+        // `git`, `otro` y los que añade un plugin sin `test` (no hay forma genérica de probarlos)
         _ => (false, tr!("sin prueba automática todavía")),
+    }
+}
+
+/// La prueba que declara el plugin: su comando de solo lectura con las variables de `env` armadas
+/// con los valores de la pantalla (por el entorno del proceso, nunca en un argumento). Los
+/// secretos se tachan de lo que se muestra.
+fn plugin_test(kind: CredentialKind, item: &CredItem) -> (bool, String) {
+    let Some((command, env)) = baton_core::kind::credential_test(kind.name()) else {
+        return (false, tr!("sin prueba automática todavía"));
+    };
+    let specs = baton_core::fields_for(kind);
+    let value_of = |key: &str| -> Option<String> {
+        let i = specs.iter().position(|s| s.key == key)?;
+        let v = item.fields.get(i)?.value.value();
+        (!v.is_empty()).then_some(v)
+    };
+    let vars: Vec<(String, String)> = env
+        .iter()
+        .filter_map(|(name, template)| {
+            baton_core::plugin::render_env(template, value_of).map(|v| (name.to_string(), v))
+        })
+        .collect();
+    let secrets: Vec<String> = specs
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.secret)
+        .filter_map(|(i, _)| item.fields.get(i).map(|f| f.value.value()))
+        .collect();
+    let args = vec!["-c".to_string(), command.to_string()];
+    match run_limited(std::ffi::OsStr::new("sh"), &args, &vars, DB_PING_TIMEOUT) {
+        Err(Unfinished::NotFound) => (false, tr!("no se encontró sh en el PATH")),
+        Err(Unfinished::TimedOut) => (
+            false,
+            tr!(
+                "la prueba no respondió en {n} s",
+                n = DB_PING_TIMEOUT.as_secs()
+            ),
+        ),
+        Err(Unfinished::Other(e)) => (false, e),
+        Ok(done) if done.ok => (
+            true,
+            baton_core::mask::redact(&first_line(&done.stdout, &tr!("conectado")), &secrets),
+        ),
+        Ok(done) => (
+            false,
+            baton_core::mask::redact(&first_line(&done.stderr, &tr!("la prueba falló")), &secrets),
+        ),
     }
 }
 
@@ -1418,6 +1467,49 @@ exit 2"#,
         assert!(!ok);
         assert!(msg.contains("nadie"), "el error nombra al usuario: {msg}");
         assert!(!msg.contains("pw\"") && !msg.contains("password=pw"));
+    }
+
+    #[test]
+    fn a_plugin_credential_runs_the_test_its_manifest_declares_and_redacts_secrets() {
+        let manifest = r#"
+api = 2
+name = "probar-cred"
+version = "0.1.0"
+[type]
+command = "true"
+[[credentials]]
+kind = "probarcred"
+fields = [{ key = "USER" }, { key = "PASSWORD", secret = true }]
+test = 'if [ "$PC_USER" = ok ]; then echo "conectado como $PC_USER con $PC_PWD"; else echo "rechazado: $PC_PWD" >&2; exit 1; fi'
+[credentials.env]
+PC_USER = "{USER}"
+PC_PWD = "{PASSWORD}"
+"#;
+        baton_core::plugin::Manifest::parse(manifest)
+            .unwrap()
+            .register()
+            .unwrap();
+        let kind = CredentialKind::from_name("probarcred").unwrap();
+        let item = |user: &str| {
+            CredItem::new(
+                "pc",
+                CredStatus::FromFile,
+                "db.env",
+                vec![
+                    CredField::new("user", user, false),
+                    CredField::new("password", "clave-super-secreta", true),
+                ],
+            )
+        };
+        let reference: baton_core::CredentialRef = "db.env#PC".parse().unwrap();
+        let root = std::path::Path::new(".");
+        let (ok, msg) = test_connection(kind, &reference, &item("ok"), root);
+        assert!(ok, "{msg}");
+        assert!(msg.contains("conectado como ok"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "se tacha: {msg}");
+        let (ok, msg) = test_connection(kind, &reference, &item("otro"), root);
+        assert!(!ok && msg.starts_with("rechazado"), "{msg}");
+        assert!(!msg.contains("clave-super-secreta"), "{msg}");
     }
 
     fn mysql_ping_with(body: &str, extra: &[(&str, &str)]) -> (bool, String) {

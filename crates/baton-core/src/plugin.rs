@@ -1,4 +1,4 @@
-//! Manifiesto de un plugin (`baton-plugin.toml`, `api = 1`): un tipo de paso nuevo descrito con
+//! Manifiesto de un plugin (`baton-plugin.toml`, `api = 1` o `api = 2`): un tipo de paso nuevo descrito con
 //! datos, sin código. Este módulo solo lee y valida el texto y lo convierte en un [`KindSpec`];
 //! encontrar los archivos en disco es cosa de `baton-store`.
 //!
@@ -36,8 +36,12 @@
 //! plugin también puede usar un tipo de baton (`docker`, `git`...) sin `fields`, solo con su `env`.
 //!
 //! Un plugin solo describe qué comando correr: la ejecución, las credenciales, los logs y los
-//! gates siguen siendo de baton. Por eso el manifiesto no puede pedir backup ni gate, ni redefinir
-//! un tipo nativo.
+//! gates siguen siendo de baton. Por eso el manifiesto no puede pedir un gate ni redefinir un tipo
+//! nativo.
+//!
+//! `api = 2` agrega capacidades opcionales que, si el manifiesto las declara, reemplazan lo que el
+//! tipo no hacía: `[type] backup` + `restore` (+ `backup_ext`), `[type] scan` y, en una
+//! credencial, `test`. Un manifiesto `api = 1` no puede usarlas.
 
 use serde::Deserialize;
 
@@ -50,7 +54,10 @@ use crate::template::{STEP_VARS, unknown_placeholders};
 use crate::validate::unsafe_source;
 
 /// Versión del formato del manifiesto que entiende esta versión de baton.
-pub const API: u32 = 1;
+pub const API: u32 = 2;
+/// La primera versión del formato que sigue entendiéndose.
+pub const MIN_API: u32 = 1;
+const MAX_BACKUP_EXT: usize = 12;
 /// Nombre del archivo dentro de la carpeta del plugin.
 pub const MANIFEST_FILE: &str = "baton-plugin.toml";
 /// Un manifiesto más grande que esto no se lee: es texto corto, no un paquete.
@@ -93,6 +100,8 @@ pub struct CredentialDecl {
     /// usa un campo opcional que quedó vacío no se define.
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// `api = 2`: comando de solo lectura que prueba la credencial con las variables de `env`.
+    pub test: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -128,6 +137,18 @@ pub struct TypeSection {
     /// mayúsculas ni colores) y pide confirmación. Texto literal, no expresiones regulares.
     #[serde(default)]
     pub destructive: Vec<String>,
+    /// `api = 2`: comando que respalda lo que el paso va a tocar; `{backup_file}` es el archivo.
+    /// Se ejecuta antes de un paso con `backup_before`, una vez por ejecución.
+    pub backup: Option<String>,
+    /// `api = 2`: comando que restaura el último respaldo (`{backup_file}`) cuando se deshace el
+    /// paso, si este no declara su propio `rollback`. Va junto con `backup`.
+    pub restore: Option<String>,
+    /// `api = 2`: extensión del archivo de respaldo, sin punto. Por defecto `bak`.
+    pub backup_ext: Option<String>,
+    /// `api = 2`: frases que, si aparecen en los archivos del origen, piden confirmar antes de
+    /// ejecutar (`DROP`, `TRUNCATE`). Texto literal, sin distinguir mayúsculas.
+    #[serde(default)]
+    pub scan: Vec<String>,
 }
 
 impl Manifest {
@@ -171,10 +192,15 @@ impl Manifest {
             detect: leak_all(&t.detect),
             binaries: leak_all(&self.requires),
             destructive: leak_all(&t.destructive),
+            backup: t.backup.as_deref().map(|c| leak(c.trim())),
+            restore: t.restore.as_deref().map(|c| leak(c.trim())),
+            backup_ext: leak(t.backup_ext.as_deref().unwrap_or("bak")),
+            scan: leak_all(&t.scan),
             credentials: Box::leak(
                 self.credentials
                     .iter()
                     .map(|c| CredUse {
+                        test: c.test.as_deref().map(|t| leak(t.trim())),
                         kind: leak(&c.kind),
                         env: Box::leak(
                             c.env
@@ -318,11 +344,11 @@ fn is_plain_version(s: &str) -> bool {
 pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
     let mut out = Vec::new();
 
-    if m.api != API {
+    if !(MIN_API..=API).contains(&m.api) {
         out.push(Issue::error(
             path!["api"],
             format!(
-                "api = {} no está soportada: esta versión de baton entiende api = {API}",
+                "api = {} no está soportada: esta versión de baton entiende api = {MIN_API} a {API}",
                 m.api
             ),
         ));
@@ -442,6 +468,7 @@ pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
             ));
         }
     }
+    validate_capabilities(m, &mut out);
     validate_credentials(m, &mut out);
 
     if !t.scanned && !t.detect.is_empty() {
@@ -452,6 +479,131 @@ pub fn validate_manifest(m: &Manifest) -> Vec<Issue> {
     }
 
     out
+}
+
+/// Las capacidades de `api = 2`: respaldo y restauración, revisión estática y prueba de credencial.
+fn validate_capabilities(m: &Manifest, out: &mut Vec<Issue>) {
+    let t = &m.step_type;
+    let used: Vec<(&str, bool)> = vec![
+        ("backup", t.backup.is_some()),
+        ("restore", t.restore.is_some()),
+        ("backup_ext", t.backup_ext.is_some()),
+        ("scan", !t.scan.is_empty()),
+    ];
+    if m.api < 2 {
+        for (name, on) in used {
+            if on {
+                out.push(Issue::error(
+                    path!["type", name],
+                    format!("'{name}' es de api = 2: declara api = 2 en el manifiesto"),
+                ));
+            }
+        }
+        if m.credentials.iter().any(|c| c.test.is_some()) {
+            out.push(Issue::error(
+                path!["credentials"],
+                "'test' es de api = 2: declara api = 2 en el manifiesto",
+            ));
+        }
+    }
+    match (&t.backup, &t.restore) {
+        (Some(_), None) => out.push(Issue::error(
+            path!["type", "restore"],
+            "backup necesita restore: sin él, el rollback no tendría cómo usar el respaldo",
+        )),
+        (None, Some(_)) => out.push(Issue::error(
+            path!["type", "backup"],
+            "restore necesita backup: no habría respaldo que restaurar",
+        )),
+        _ => {}
+    }
+    for (field, command) in [("backup", &t.backup), ("restore", &t.restore)] {
+        if let Some(c) = command {
+            check_command(out, field, c);
+            if !c.contains("{backup_file}") {
+                out.push(Issue::error(
+                    path!["type", field],
+                    format!("{field} tiene que usar {{backup_file}}: es el archivo del respaldo"),
+                ));
+            }
+        }
+    }
+    if t.backup_ext.is_some() && t.backup.is_none() {
+        out.push(Issue::warning(
+            path!["type", "backup_ext"],
+            "backup_ext solo se usa con backup",
+        ));
+    }
+    if let Some(ext) = &t.backup_ext
+        && (ext.is_empty()
+            || ext.len() > MAX_BACKUP_EXT
+            || !ext
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.'))
+    {
+        out.push(Issue::error(
+            path!["type", "backup_ext"],
+            format!(
+                "extensión '{ext}' no válida: minúsculas, números y puntos (máximo {MAX_BACKUP_EXT})"
+            ),
+        ));
+    }
+    if t.scan.len() > MAX_DESTRUCTIVE {
+        out.push(Issue::error(
+            path!["type", "scan"],
+            format!(
+                "demasiadas frases ({}, máximo {MAX_DESTRUCTIVE})",
+                t.scan.len()
+            ),
+        ));
+    }
+    for (i, phrase) in t.scan.iter().enumerate() {
+        let len = phrase.trim().chars().count();
+        if len < MIN_PHRASE || phrase.chars().count() > MAX_PHRASE {
+            out.push(Issue::error(
+                path!["type", "scan", i],
+                format!(
+                    "la frase debe tener entre {MIN_PHRASE} y {MAX_PHRASE} caracteres: una muy corta \
+                     coincidiría con casi cualquier línea"
+                ),
+            ));
+        }
+    }
+    for (i, c) in m.credentials.iter().enumerate() {
+        if let Some(test) = &c.test {
+            let at = path!["credentials", i, "test"];
+            if test.trim().is_empty() || test.len() > MAX_COMMAND {
+                out.push(Issue::error(at, "test está vacío o es demasiado largo"));
+            } else if let Some(word) = mutating_word(test) {
+                out.push(Issue::error(
+                    at,
+                    format!(
+                        "test usa '{word}', que modifica algo: la prueba de una credencial es de \
+                         solo lectura"
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// Las líneas de `text` que contienen alguna de las frases (sin distinguir mayúsculas), como las
+/// sentencias destructivas de un `.sql`: línea, la frase y el texto de la línea acortado.
+pub fn scan_text(text: &str, phrases: &[&'static str]) -> Vec<crate::sql::Risk> {
+    let lowered: Vec<String> = phrases.iter().map(|p| p.to_lowercase()).collect();
+    text.lines()
+        .enumerate()
+        .filter_map(|(n, line)| {
+            let low = line.to_lowercase();
+            let at = lowered.iter().position(|p| low.contains(p.as_str()))?;
+            let shown: String = line.trim().chars().take(80).collect();
+            Some(crate::sql::Risk {
+                line: n + 1,
+                what: phrases[at],
+                text: shown,
+            })
+        })
+        .collect()
 }
 
 /// La plantilla con cada `{CAMPO}` reemplazado por su valor, en una sola pasada (el valor de un
@@ -710,6 +862,9 @@ fn check_command(out: &mut Vec<Issue>, field: &str, command: &str) {
         return;
     }
     for unknown in unknown_placeholders(command, STEP_VARS) {
+        if unknown == "backup_file" && matches!(field, "backup" | "restore") {
+            continue;
+        }
         out.push(Issue::warning(
             at.clone(),
             format!(
@@ -774,6 +929,94 @@ dry_run = "terraform init -input=false && terraform plan -input=false"
         assert_eq!(m.requires, ["terraform"]);
     }
 
+    /// El manifiesto base en `api = 2` con `extra` agregado a `[type]`.
+    fn v2(extra: &str) -> Manifest {
+        manifest(
+            &TERRAFORM
+                .replace("api = 1", "api = 2")
+                .replace("[type]\n", &format!("[type]\n{extra}\n")),
+        )
+    }
+
+    #[test]
+    fn api_2_capabilities_are_valid_when_complete_and_need_api_2() {
+        let caps = "backup = 'dump > {backup_file}'\nrestore = 'load < {backup_file}'\nbackup_ext = \"sql\"\nscan = [\"DROP \", \"TRUNCATE\"]";
+        let m = v2(caps);
+        assert!(errors(&m).is_empty(), "{:?}", validate_manifest(&m));
+        let spec = m.to_spec();
+        assert_eq!(spec.backup, Some("dump > {backup_file}"));
+        assert_eq!(spec.restore, Some("load < {backup_file}"));
+        assert_eq!(spec.backup_ext, "sql");
+        assert_eq!(spec.scan, ["DROP ", "TRUNCATE"]);
+        // el mismo manifiesto declarado como api = 1 se rechaza diciendo qué falta
+        let old = manifest(&TERRAFORM.replace("[type]\n", &format!("[type]\n{caps}\n")));
+        let e = errors(&old).join("\n");
+        for field in ["backup", "restore", "backup_ext", "scan"] {
+            assert!(e.contains(&format!("'{field}' es de api = 2")), "{e}");
+        }
+    }
+
+    #[test]
+    fn backup_and_restore_go_together_and_use_the_backup_file() {
+        let e = errors(&v2("backup = 'dump > {backup_file}'")).join("\n");
+        assert!(e.contains("backup necesita restore"), "{e}");
+        let e = errors(&v2("restore = 'load < {backup_file}'")).join("\n");
+        assert!(e.contains("restore necesita backup"), "{e}");
+        let e = errors(&v2(
+            "backup = 'dump > x.sql'\nrestore = 'load < {backup_file}'",
+        ))
+        .join("\n");
+        assert!(e.contains("backup tiene que usar {backup_file}"), "{e}");
+        let ok = v2("backup = 'dump > {backup_file}'\nrestore = 'load < {backup_file}'");
+        assert!(
+            !validate_manifest(&ok)
+                .iter()
+                .any(|i| i.message.contains("placeholder")),
+            "{{backup_file}} no es un placeholder desconocido"
+        );
+    }
+
+    #[test]
+    fn the_backup_extension_and_scan_phrases_are_checked() {
+        let pair = "backup = 'd > {backup_file}'\nrestore = 'l < {backup_file}'\n";
+        for bad in ["\"\"", "\"SQL\"", "\"a/b\"", "\"unaextensionmuylarga\""] {
+            let e = errors(&v2(&format!("{pair}backup_ext = {bad}"))).join("\n");
+            assert!(e.contains("extensión"), "{bad}: {e}");
+        }
+        let e = errors(&v2("scan = [\"ab\"]")).join("\n");
+        assert!(e.contains("entre 4 y 200"), "{e}");
+    }
+
+    #[test]
+    fn a_credential_test_is_read_only_and_needs_api_2() {
+        let with_test = |api: &str, test: &str| {
+            manifest(&format!(
+                "{}\n[[credentials]]\nkind = \"aws\"\nfields = [{{ key = \"KEY\" }}]\ntest = '{test}'\n[credentials.env]\nAWS_KEY = \"{{KEY}}\"\n",
+                TERRAFORM.replace("api = 1", api)
+            ))
+        };
+        let ok = errors(&with_test("api = 2", "aws sts get-caller-identity"));
+        assert!(ok.is_empty(), "{ok:?}");
+        let e = errors(&with_test("api = 2", "aws iam create user")).join("\n");
+        assert!(e.contains("test usa 'create'"), "{e}");
+        let e = errors(&with_test("api = 1", "aws sts get-caller-identity")).join("\n");
+        assert!(e.contains("'test' es de api = 2"), "{e}");
+    }
+
+    #[test]
+    fn scan_text_finds_the_phrases_by_line_ignoring_case() {
+        let hits = scan_text(
+            "select 1;\n  drop table t;\n-- nada\nTRUNCATE usuarios;",
+            &["DROP ", "TRUNCATE"],
+        );
+        assert_eq!(
+            hits.iter().map(|r| (r.line, r.what)).collect::<Vec<_>>(),
+            [(2, "DROP "), (4, "TRUNCATE")]
+        );
+        assert_eq!(hits[0].text, "drop table t;");
+        assert!(scan_text("select 1;", &["DROP "]).is_empty());
+    }
+
     #[test]
     fn the_type_can_have_its_own_name() {
         let m = with("[type]\n", "[type]\nname = \"tf\"\n");
@@ -795,15 +1038,15 @@ dry_run = "terraform init -input=false && terraform plan -input=false"
 
     #[test]
     fn a_manifest_of_another_api_is_explained_instead_of_failing_on_its_new_fields() {
-        let future = TERRAFORM.replace("api = 1", "api = 2") + "\n[nuevo]\nx = 1\n";
+        let future = TERRAFORM.replace("api = 1", "api = 3") + "\n[nuevo]\nx = 1\n";
         assert!(Manifest::parse(&future).is_err());
-        assert_eq!(Manifest::declared_api(&future), Some(2));
+        assert_eq!(Manifest::declared_api(&future), Some(3));
         assert_eq!(Manifest::declared_api(TERRAFORM), Some(1));
         assert_eq!(Manifest::declared_api("no es toml ="), None);
 
-        let m = with("api = 1", "api = 2");
+        let m = with("api = 1", "api = 3");
         assert!(
-            errors(&m)[0].contains("api = 2 no está soportada"),
+            errors(&m)[0].contains("api = 3 no está soportada"),
             "{:?}",
             errors(&m)
         );
