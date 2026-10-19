@@ -22,6 +22,8 @@ const CURRENT: &str = env!("CARGO_PKG_VERSION");
 pub struct Flags {
     pub check: bool,
     pub rollback: bool,
+    /// Además del sha256, comprueba la atestación de procedencia con `gh attestation verify`.
+    pub verify: bool,
 }
 
 pub fn run(flags: Flags) -> ExitCode {
@@ -94,7 +96,7 @@ fn run_inner(flags: &Flags) -> Result<ExitCode, String> {
         return Ok(code);
     }
 
-    install(&exe, &latest)?;
+    install(&exe, &latest, flags.verify)?;
     println!(
         "{}",
         tr!(
@@ -156,7 +158,7 @@ fn latest_version() -> Result<Version, String> {
     })
 }
 
-fn install(exe: &Path, version: &Version) -> Result<(), String> {
+fn install(exe: &Path, version: &Version, verify: bool) -> Result<(), String> {
     let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
     let platform = update::platform(os, arch).ok_or_else(|| {
         tr!(
@@ -195,6 +197,10 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
         ));
     }
     println!("{}", tr!("suma sha256 verificada"));
+    if verify {
+        verify_attestation(&tarball)?;
+        println!("{}", tr!("atestación de procedencia verificada"));
+    }
 
     let status = Command::new("tar")
         .arg("-xzf")
@@ -233,6 +239,41 @@ fn install(exe: &Path, version: &Version) -> Result<(), String> {
 
 /// El binario nuevo tiene que ejecutarse y decir la versión esperada (si es de otra arquitectura
 /// o vino dañado, se descubre antes de reemplazar el que funciona).
+/// La firma de procedencia del archivo con `gh attestation verify`: prueba que lo construyó el
+/// workflow `release` de este repositorio. Opcional (necesita `gh` con sesión iniciada); si falla
+/// no se instala nada.
+fn verify_attestation(file: &Path) -> Result<(), String> {
+    let slug = update::repo_slug(REPO)
+        .ok_or_else(|| tr!("no se pudo deducir el repositorio de {repo}", repo = REPO))?;
+    let out = Command::new("gh")
+        .args(["attestation", "verify"])
+        .arg(file)
+        .args(["--repo", &slug, "--signer-workflow"])
+        .arg(format!("{slug}/.github/workflows/release.yml"))
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                tr!("--verify necesita la GitHub CLI (`gh`) instalada y con sesión iniciada (gh auth login)")
+            } else {
+                missing_tool("gh", &e)
+            }
+        })?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&out.stderr);
+    let why = why
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    Err(tr!(
+        "no se pudo verificar la atestación de procedencia ({why}); no se instaló nada",
+        why = why
+    ))
+}
+
 fn check_runs(bin: &Path, version: &Version) -> Result<(), String> {
     let out = Command::new(bin)
         .arg("version")

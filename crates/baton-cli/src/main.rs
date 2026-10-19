@@ -86,6 +86,9 @@ enum Command {
         /// Vuelve a la versión que había antes de la última actualización
         #[arg(long)]
         rollback: bool,
+        /// Además del sha256, verifica la firma de procedencia del release con `gh attestation verify` (necesita `gh` con sesión iniciada)
+        #[arg(long, conflicts_with_all = ["check", "rollback"])]
+        verify: bool,
     },
     /// Configuración global de la app y de dónde sale cada valor (no necesita proyecto)
     Settings {
@@ -617,8 +620,17 @@ fn main() -> ExitCode {
         println!("baton {VERSION}");
         return ExitCode::SUCCESS;
     }
-    if let Some(Command::Update { check, rollback }) = cli.command {
-        return update::run(update::Flags { check, rollback });
+    if let Some(Command::Update {
+        check,
+        rollback,
+        verify,
+    }) = cli.command
+    {
+        return update::run(update::Flags {
+            check,
+            rollback,
+            verify,
+        });
     }
     if let Some(Command::Demo { fast, screen }) = cli.command {
         return demo(fast, screen.into());

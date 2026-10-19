@@ -37,6 +37,13 @@ un proceso se filtra con más facilidad que un archivo: aparece en volcados de d
 vida prefiere un archivo en `.baton/credentials/` (permisos 600) o un gestor (Vault, Azure Key
 Vault). En CI, usa los secretos del sistema de CI y no imprimas el entorno.
 
+Binarios y paquetes: desde la 0.12.0 cada archivo de un release lleva una atestación de
+procedencia firmada (Sigstore, sin llaves propias) que prueba que lo construyó el workflow `release`
+de este repositorio. Se comprueba con `gh attestation verify` o con `--verify` en `get.sh` y en
+`baton update` (ver el README). Es opcional: por defecto solo se comprueba el sha256, que protege de
+una descarga corrupta pero viaja por el mismo canal que el archivo. Los `.deb` y `.rpm` no llevan
+firma GPG propia, y los binarios de macOS no están notarizados.
+
 Plugins (`baton plugin add`):
 
 - Solo se instala el commit de un repositorio de GitHub cuya firma GitHub haya verificado, y el
