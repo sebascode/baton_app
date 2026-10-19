@@ -1,7 +1,7 @@
 //! `baton db`: una consulta contra una de las bases del plan (credenciales `db` y `sqlite`), con
 //! las credenciales de `.baton/` y el resultado en una tabla, CSV o JSON.
 //!
-//! Por defecto es de solo lectura (la base rechaza escribir); `--escribir` lo permite y, si la
+//! Por defecto es de solo lectura (la base rechaza escribir); `--write` lo permite y, si la
 //! consulta es destructiva, pide `--assume-yes`. La consulta viaja por la entrada estándar del
 //! motor, nunca en un argumento.
 
@@ -50,7 +50,7 @@ pub struct Args {
     pub interactive: bool,
 }
 
-/// Ancho máximo de una celda en la tabla (sin `--completo`).
+/// Ancho máximo de una celda en la tabla (sin `--full`).
 pub(crate) const MAX_CELL: usize = 60;
 
 pub fn run(project: &Project, args: Args) -> ExitCode {
@@ -127,9 +127,7 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     if args.interactive {
-        report::error(tr!(
-            "--interactivo no se combina con --consulta ni --archivo"
-        ));
+        report::error(tr!("--interactive no se combina con --query ni --file"));
         return ExitCode::from(EXIT_USAGE);
     }
 
@@ -187,12 +185,12 @@ pub fn run(project: &Project, args: Args) -> ExitCode {
     execute(&invocation, &secrets, &query, &args)
 }
 
-/// La consulta: `--consulta`, o `--archivo` (`-` lee la entrada estándar). La entrada estándar
+/// La consulta: `--query`, o `--file` (`-` lee la entrada estándar). La entrada estándar
 /// nunca se lee por su cuenta: un `baton db` sin consulta, en un script con la entrada abierta, se
 /// quedaría esperando para siempre. `None` si no se dio ninguna.
 fn read_query(args: &Args) -> Result<Option<String>, String> {
     match (&args.query, &args.file) {
-        (Some(_), Some(_)) => Err(tr!("usa --consulta o --archivo, no los dos")),
+        (Some(_), Some(_)) => Err(tr!("usa --query o --file, no los dos")),
         (Some(q), None) => Ok(Some(q.clone())),
         (None, Some(f)) if f.as_os_str() == "-" => {
             let mut text = String::new();
@@ -278,7 +276,7 @@ pub(crate) fn invocation_for(
             let path = sqlite_path(&project.root, &file);
             if !path.exists() && !write {
                 return Err(tr!(
-                    "el archivo {path} no existe (con --escribir se crearía)",
+                    "el archivo {path} no existe (con --write se crearía)",
                     path = path.display()
                 ));
             }
@@ -546,7 +544,7 @@ pub fn render_records(
     let noun = |n: usize| tr_dyn(if n == 1 { tk!("fila") } else { tk!("filas") });
     out.push(if shown < total {
         style.dim(&tr!(
-            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)",
+            "(mostrando {shown} de {total} filas; --limit 0 las muestra todas)",
             shown = shown,
             total = total
         ))
@@ -653,7 +651,7 @@ pub fn render_table(
     let noun = |n: usize| tr_dyn(if n == 1 { tk!("fila") } else { tk!("filas") });
     out.push(if shown < total {
         style.dim(&tr!(
-            "(mostrando {shown} de {total} filas; --limite 0 las muestra todas)",
+            "(mostrando {shown} de {total} filas; --limit 0 las muestra todas)",
             shown = shown,
             total = total
         ))
@@ -716,7 +714,7 @@ pub(crate) fn describe(dbs: &[&CredentialReq], resolver: &Resolver, style: &Styl
     }
     let first = dbs[0].id.as_str();
     out.push_str(&format!(
-        "\n{}\n  baton db {first} -c \"select 1\"\n  baton db {first} -f consulta.sql --formato json\n  echo \"select 1\" | baton db {first} -f -\n",
+        "\n{}\n  baton db {first} -c \"select 1\"\n  baton db {first} -f consulta.sql --format json\n  echo \"select 1\" | baton db {first} -f -\n",
         style.bold(&tr!("consultar"))
     ));
     out
@@ -762,7 +760,7 @@ mod tests {
         let lines = render_records(&t, Some(1), Some(60), 30, &Style::plain());
         assert_eq!(
             lines.last().unwrap(),
-            "(mostrando 1 de 2 filas; --limite 0 las muestra todas)"
+            "(mostrando 1 de 2 filas; --limit 0 las muestra todas)"
         );
     }
 
@@ -821,7 +819,7 @@ mod tests {
         assert!(!lines.iter().any(|l| l.contains("tercera")));
         assert_eq!(
             lines.last().unwrap(),
-            "(mostrando 2 de 3 filas; --limite 0 las muestra todas)"
+            "(mostrando 2 de 3 filas; --limit 0 las muestra todas)"
         );
         // sin tope se ve entero
         let full = render_table(&t, None, None, &Style::plain());

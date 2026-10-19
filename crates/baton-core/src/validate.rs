@@ -379,7 +379,7 @@ fn validate_plugin_credentials(plan: &Plan, out: &mut Vec<Issue>) {
                 reported.push(key);
                 out.push(Issue::error(
                     path!["credentials"],
-                    crate::tr!("el plan declara {count} credenciales '{kind}' y el tipo '{label}' solo puede usar una: para cuentas distintas usa ambientes (--ambiente), no dos credenciales", count = count, kind = used.kind, label = step.kind.label())));
+                    crate::tr!("el plan declara {count} credenciales '{kind}' y el tipo '{label}' solo puede usar una: para cuentas distintas usa ambientes (--env), no dos credenciales", count = count, kind = used.kind, label = step.kind.label())));
             }
         }
     }

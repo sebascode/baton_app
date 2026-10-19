@@ -29,7 +29,7 @@ pub struct Flags {
     pub resume: bool,
     /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
     pub ambiente: Option<String>,
-    /// Líneas de logs que pide la pantalla de mantención (`baton ops --lineas`); sin valor, 100.
+    /// Líneas de logs que pide la pantalla de mantención (`baton ops --lines`); sin valor, 100.
     pub ops_tail: Option<u32>,
 }
 
@@ -210,7 +210,7 @@ impl RunDriver {
 
     /// Elige el ambiente de esta sesión (`a` en la vista del plan) y rehace la pantalla con él:
     /// credenciales, etiqueta de la cabecera y confirmación de los protegidos. No se guarda en
-    /// ningún lado: la próxima vez vuelve a mandar `--ambiente`, la variable o `[defaults]`.
+    /// ningún lado: la próxima vez vuelve a mandar `--env`, la variable o `[defaults]`.
     fn set_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
         if ambiente
             .as_deref()

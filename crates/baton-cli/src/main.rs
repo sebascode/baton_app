@@ -54,7 +54,7 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("BATON_BUILD
 )]
 struct Cli {
     /// Carpeta del proyecto (por defecto, la actual o la primera superior que sea un proyecto baton)
-    #[arg(short = 'C', long = "dir", global = true, value_name = "CARPETA")]
+    #[arg(short = 'C', long = "dir", global = true, value_name = "DIR")]
     dir: Option<PathBuf>,
 
     /// Calla los avisos de contexto (proyecto, plan y ambiente elegidos); los errores se muestran
@@ -106,7 +106,7 @@ enum Command {
         #[arg(long)]
         target: Option<String>,
         /// Ambientes a crear, separados por coma (ej. dev,staging,prod)
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
         /// No escanea la carpeta: el plan queda vacío
         #[arg(long)]
@@ -137,7 +137,7 @@ enum Command {
         /// La pregunta
         prompt: String,
         /// Las opciones a elegir
-        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        #[arg(required = true, num_args = 1.., value_name = "OPTION")]
         options: Vec<String>,
         /// Opción que se usa sin terminal (y la que aparece marcada al preguntar)
         #[arg(long)]
@@ -151,7 +151,7 @@ enum Command {
         /// La pregunta
         prompt: String,
         /// Las opciones a elegir
-        #[arg(required = true, num_args = 1.., value_name = "OPCION")]
+        #[arg(required = true, num_args = 1.., value_name = "OPTION")]
         options: Vec<String>,
         /// Opciones que se usan sin terminal (separadas por coma) y las que aparecen marcadas
         #[arg(long)]
@@ -246,7 +246,7 @@ enum Command {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
         /// Ambiente de los comandos de rollback que usan {ambiente} y de las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
     },
     /// Cómo terminó la última ejecución de un plan, y el error si falló
@@ -265,80 +265,95 @@ enum Command {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
         /// Escribe la documentación en este archivo en vez de la salida estándar
-        #[arg(short = 'o', long = "salida", value_name = "ARCHIVO")]
+        #[arg(short = 'o', long = "output", alias = "salida", value_name = "FILE")]
         salida: Option<PathBuf>,
         /// Agrega cómo terminó la última ejecución (cambia con cada ejecución)
-        #[arg(long)]
+        #[arg(long = "with-state", alias = "estado")]
         estado: bool,
         /// Sin el diagrama mermaid
-        #[arg(long = "sin-mermaid")]
+        #[arg(long = "no-mermaid", alias = "sin-mermaid")]
         sin_mermaid: bool,
     },
     /// Consulta una base de datos del plan (credenciales db y sqlite) y muestra el resultado
     Db {
         /// Base a consultar (el id de su credencial); sin él, la única del plan
         base: Option<String>,
-        /// La consulta (una sola sentencia); también con --archivo
-        #[arg(short = 'c', long = "consulta")]
+        /// La consulta (una sola sentencia); también con --file
+        #[arg(short = 'c', long = "query", alias = "consulta", value_name = "QUERY")]
         consulta: Option<String>,
         /// Lee la consulta de un archivo (`-`: de la entrada estándar)
-        #[arg(short = 'f', long = "archivo", value_name = "ARCHIVO")]
+        #[arg(short = 'f', long = "file", alias = "archivo", value_name = "FILE")]
         archivo: Option<PathBuf>,
         /// Plan del que se toman las credenciales (por defecto, el único del proyecto)
         #[arg(long)]
         plan: Option<String>,
         /// Cómo se muestra el resultado
-        #[arg(long, value_enum, default_value_t = db_cmd::Format::Tabla)]
+        #[arg(long = "format", alias = "formato", value_enum, default_value_t = db_cmd::Format::Tabla, value_name = "FORMAT")]
         formato: db_cmd::Format,
         /// Cuántas filas se muestran en la tabla (0: todas)
-        #[arg(long, default_value_t = 200, value_name = "N")]
+        #[arg(
+            long = "limit",
+            alias = "limite",
+            default_value_t = 200,
+            value_name = "N"
+        )]
         limite: usize,
         /// No recorta las celdas largas de la tabla
-        #[arg(long)]
+        #[arg(long = "full", alias = "completo")]
         completo: bool,
         /// Permite modificar datos (por defecto la consulta es de solo lectura)
-        #[arg(long)]
+        #[arg(long = "write", alias = "escribir")]
         escribir: bool,
         /// Ejecuta una consulta destructiva sin pedir más
         #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
         /// Cuánto se espera a la respuesta (ej. 30s, 5m)
         #[arg(long, default_value = "60s")]
         timeout: String,
         /// Abre una sesión interactiva (se abre sola con una base, sin consulta y en una terminal)
-        #[arg(short = 'i', long = "interactivo")]
+        #[arg(short = 'i', long = "interactive", alias = "interactivo")]
         interactivo: bool,
     },
     /// Mantención: logs, reinicios, imágenes de los servicios y tareas sueltas del plan
     Ops {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
         plan: Option<String>,
-        /// Qué hacer: logs, estado, reiniciar, actualizar o reimagen (sin ella, un menú)
-        #[arg(short = 'a', long = "accion")]
+        /// Qué hacer: logs, estado, reiniciar, actualizar o reimagen (sin ella, abre la pantalla de mantención)
+        #[arg(short = 'a', long = "action", alias = "accion", value_name = "ACTION")]
         accion: Option<String>,
         /// Servicio sobre el que actuar; sin él, todos los de cada compose
-        #[arg(short = 's', long = "servicio")]
+        #[arg(
+            short = 's',
+            long = "service",
+            alias = "servicio",
+            value_name = "SERVICE"
+        )]
         servicio: Option<String>,
         /// Ejecuta una tarea del plan (`[[tasks]]`) en lugar de una acción
-        #[arg(short = 't', long = "tarea")]
+        #[arg(short = 't', long = "task", alias = "tarea", value_name = "TASK")]
         tarea: Option<String>,
         /// Ejecuta un script .sh suelto del proyecto (ruta relativa, ej. scripts/db/dump.sh)
-        #[arg(long, value_name = "RUTA")]
+        #[arg(long, value_name = "PATH")]
         script: Option<String>,
         /// Con la acción logs, sigue mostrándolos en vivo (ctrl+c para cortar)
-        #[arg(long)]
+        #[arg(long = "follow", alias = "seguir")]
         seguir: bool,
         /// Cuántas líneas de logs se muestran al empezar
-        #[arg(long, default_value_t = 100, value_name = "N")]
+        #[arg(
+            long = "lines",
+            alias = "lineas",
+            default_value_t = 100,
+            value_name = "N"
+        )]
         lineas: u32,
         /// Ejecuta sin pedir confirmación
         #[arg(long, alias = "yes")]
         assume_yes: bool,
         /// Ambiente del que se resuelven las credenciales
-        #[arg(long)]
+        #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
         ambiente: Option<String>,
         /// Sin la interfaz: un menú de preguntas en la terminal (por defecto se abre la pantalla de mantención)
         #[arg(long)]
@@ -388,18 +403,18 @@ enum SettingsAction {
         /// Por ejemplo defaults.engine, logs.format, ui.confirm_exit
         clave: String,
     },
-    /// Cambia una clave en la configuración global (o en la del proyecto con --proyecto)
+    /// Cambia una clave en la configuración global (o en la del proyecto con --project)
     Set {
         clave: String,
         valor: String,
         /// Escribe en .baton/config.toml en vez de en el archivo global
-        #[arg(long)]
+        #[arg(long = "project", alias = "proyecto")]
         proyecto: bool,
     },
-    /// Quita una clave de la configuración global (o de la del proyecto con --proyecto)
+    /// Quita una clave de la configuración global (o de la del proyecto con --project)
     Unset {
         clave: String,
-        #[arg(long)]
+        #[arg(long = "project", alias = "proyecto")]
         proyecto: bool,
     },
 }
@@ -463,7 +478,7 @@ struct RunArgs {
     no_backup: bool,
     /// Ambiente: carpeta de credenciales (`.baton/credentials/<ambiente>/`) y valor de {ambiente}
     /// (sin él: la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml)
-    #[arg(long)]
+    #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
     ambiente: Option<String>,
 }
 

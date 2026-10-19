@@ -77,7 +77,7 @@ fn warn_if_other_ambiente(
     }
     let none = || tr!("ninguno");
     report::warn(tr!(
-        "la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--ambiente elige otro)",
+        "la última ejecución de '{plan}' fue en el ambiente '{before}' y {what} usa '{now}' (--env elige otro)",
         plan = plan_name,
         before = before.map_or_else(none, str::to_string),
         what = what(),

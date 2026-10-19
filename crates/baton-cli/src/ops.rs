@@ -113,7 +113,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
     .count()
         > 1
     {
-        report::error(tr!("--accion, --tarea y --script no se combinan"));
+        report::error(tr!("--action, --task y --script no se combinan"));
         return ExitCode::from(EXIT_USAGE);
     }
     if let Some(name) = &args.action {
@@ -123,7 +123,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
             return ExitCode::from(EXIT_USAGE);
         };
         if args.follow && !matches!(action, Action::Logs { .. }) {
-            report::error(tr!("--seguir solo vale con la acción logs"));
+            report::error(tr!("--follow solo vale con la acción logs"));
             return ExitCode::from(EXIT_USAGE);
         }
         return match ctx.orders_for(action, args.service.as_deref()) {
@@ -144,7 +144,7 @@ pub fn run(project: &Project, plan_name: &str, args: Args) -> ExitCode {
         };
     }
     if args.service.is_some() || args.follow {
-        report::error(tr!("--servicio y --seguir van con --accion"));
+        report::error(tr!("--service y --follow van con --action"));
         return ExitCode::from(EXIT_USAGE);
     }
     if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
@@ -560,7 +560,7 @@ impl Ctx<'_> {
             }
         }
         s.push_str(&tr!("\nEjemplos:\n"));
-        s.push_str(&tr!("  baton ops -a logs -s <servicio> --seguir\n"));
+        s.push_str(&tr!("  baton ops -a logs -s <servicio> --follow\n"));
         s.push_str(&tr!("  baton ops -a reimagen -s <servicio>\n"));
         if let Some(t) = self.plan.tasks.first() {
             s.push_str(&format!("  baton ops -t {}\n", t.id));

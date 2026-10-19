@@ -32,6 +32,11 @@ cargo test --workspace
 Si cambias comandos, opciones o códigos de salida, actualiza `man/baton.1` (hay una prueba que lo
 exige).
 
+Los nombres de los flags van en inglés (`--env`, `--lines`, `--follow`), igual en todos los
+comandos: si un flag ya existe en otro, usa el mismo nombre. Un nombre en español que ya se haya
+publicado se conserva como alias oculto (`alias = "..."`), no se quita. Los textos para personas
+(ayuda, mensajes) siguen en español, con su traducción.
+
 ## Firma de origen (DCO)
 
 Cada commit debe llevar `Signed-off-by`, que es tu declaración de que tienes derecho a aportar ese

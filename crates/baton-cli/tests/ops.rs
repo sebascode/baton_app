@@ -134,7 +134,7 @@ fn without_an_action_and_without_a_terminal_it_lists_what_there_is() {
 #[test]
 fn logs_run_in_the_compose_folder_for_one_service_without_asking() {
     let fx = Fx::new();
-    let o = fx.ops(&["-a", "logs", "-s", "web", "--lineas", "20"]);
+    let o = fx.ops(&["-a", "logs", "-s", "web", "--lines", "20"]);
     assert!(o.status.success(), "{}", err(&o));
     let calls = fx.calls();
     assert!(
@@ -194,7 +194,7 @@ fn an_unknown_service_or_action_is_a_usage_error_that_says_what_exists() {
     let o = fx.ops(&["-a", "borrar"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("logs, estado"));
-    let o = fx.ops(&["-a", "estado", "--seguir"]);
+    let o = fx.ops(&["-a", "estado", "--follow"]);
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(fx.calls(), "");
 }
@@ -269,7 +269,7 @@ fn ctrl_c_ends_a_log_follow_cleanly_and_kills_the_process() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_baton"))
         .arg("-C")
         .arg(&fx.root)
-        .args(["ops", "-a", "logs", "-s", "web", "--seguir"])
+        .args(["ops", "-a", "logs", "-s", "web", "--follow"])
         .env("PATH", path)
         .env("DOCKER_HANG", "1")
         .stdin(Stdio::null())
