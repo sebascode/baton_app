@@ -310,6 +310,9 @@ If baton was installed with Homebrew, \fBupdate\fR does not touch it and points 
 .B \-\-check
 Only tells you whether there is a newer version; it downloads and installs nothing.
 .TP
+.B \-\-verify
+Besides the sha256 sum, checks the \fBprovenance attestation\fR of the download with \fBgh attestation verify\fR: a signature (Sigstore, no keys of our own) proving that the file was built by the \fBrelease\fR workflow of the baton repository on GitHub. It needs the GitHub CLI (\fBgh\fR) installed and signed in; if the check fails, or \fBgh\fR is missing, nothing is installed. It cannot be combined with \fB\-\-check\fR or \fB\-\-rollback\fR.
+.TP
 .B \-\-rollback
 Goes back to the version there was before the last update (\fBbaton.prev\fR).
 .SS baton (no arguments)

@@ -3,7 +3,9 @@ name: release
 # Al subir un tag vX.Y.Z compila baton para cada plataforma y publica el release con un
 # `baton-vX.Y.Z-<plataforma>.tar.gz` y su `.sha256` por plataforma: es lo que baja `baton update`
 # (los nombres tienen que coincidir con baton-core/src/update.rs). Además arma los paquetes
-# .deb y .rpm de Linux con esos mismos binarios.
+# .deb y .rpm de Linux con esos mismos binarios. Todo lo que se publica lleva una atestación de
+# procedencia firmada (Sigstore, sin llaves propias): `gh attestation verify <archivo> --repo
+# sebascode/baton_app` prueba que lo construyó este workflow desde ese commit.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -76,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       # el repositorio trae packaging/nfpm.yaml, LICENSE y scripts/build-packages.sh
       - uses: actions/checkout@v7
@@ -88,6 +92,16 @@ jobs:
       # .deb y .rpm (amd64 y arm64) con los mismos binarios estáticos de Linux del release
       - name: Paquetes .deb y .rpm
         run: scripts/build-packages.sh "${GITHUB_REF_NAME#v}" dist
+
+      # firma cada archivo (tarballs, .deb, .rpm) con la identidad de este workflow; los `.sha256`
+      # no hacen falta: el hash ya va dentro de la atestación del archivo que describen
+      - name: Atestación de procedencia
+        uses: actions/attest-build-provenance@v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
 
       - name: Publicar el release
         env:

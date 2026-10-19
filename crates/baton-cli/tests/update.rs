@@ -31,6 +31,13 @@ file="$FAKE_RELEASE/$(basename "$url")"
 cp "$file" "$out"
 "#;
 
+/// `gh` de mentira: registra los argumentos y falla si `FAKE_GH_FAIL` está definida.
+const FAKE_GH: &str = r#"#!/bin/sh
+echo "gh $*" >> "$FAKE_LOG"
+[ -n "$FAKE_GH_FAIL" ] && { echo "Error: no matching attestations found" >&2; exit 1; }
+exit 0
+"#;
+
 struct Sandbox {
     dir: tempfile::TempDir,
 }
@@ -42,6 +49,7 @@ impl Sandbox {
             fs::create_dir_all(dir.path().join(sub)).unwrap();
         }
         write_exec(&dir.path().join("tools/curl"), FAKE_CURL);
+        write_exec(&dir.path().join("tools/gh"), FAKE_GH);
         // la copia de baton que se actualiza
         fs::copy(env!("CARGO_BIN_EXE_baton"), dir.path().join("bin/baton")).unwrap();
         Self { dir }
@@ -94,24 +102,28 @@ impl Sandbox {
         name
     }
 
-    fn baton(&self, args: &[&str], redirect: &str) -> Output {
+    fn command(&self, args: &[&str], redirect: &str) -> Command {
         let path = format!(
             "{}:{}",
             self.dir.path().join("tools").display(),
             std::env::var("PATH").unwrap()
         );
-        output(
-            Command::new(self.bin())
-                .args(args)
-                .env("PATH", path)
-                .env("CI", "1")
-                .env("HOME", self.dir.path())
-                .env("BATON_MAN_DIR", self.dir.path().join("man"))
-                .env("FAKE_LOG", self.dir.path().join("log"))
-                .env("FAKE_RELEASE", self.dir.path().join("release"))
-                .env("FAKE_REDIRECT", redirect)
-                .env_remove("FAKE_OFFLINE"),
-        )
+        let mut cmd = Command::new(self.bin());
+        cmd.args(args)
+            .env("PATH", path)
+            .env("CI", "1")
+            .env("HOME", self.dir.path())
+            .env("BATON_MAN_DIR", self.dir.path().join("man"))
+            .env("FAKE_LOG", self.dir.path().join("log"))
+            .env("FAKE_RELEASE", self.dir.path().join("release"))
+            .env("FAKE_REDIRECT", redirect)
+            .env_remove("FAKE_GH_FAIL")
+            .env_remove("FAKE_OFFLINE");
+        cmd
+    }
+
+    fn baton(&self, args: &[&str], redirect: &str) -> Output {
+        output(&mut self.command(args, redirect))
     }
 }
 
@@ -513,4 +525,60 @@ fn a_development_build_is_never_replaced() {
         "{}",
         text(&o.stderr)
     );
+}
+
+#[test]
+fn verify_checks_the_attestation_and_a_failure_installs_nothing() {
+    let platform = this_platform();
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", platform);
+    let o = sb.baton(&["update", "--verify"], &tag_url("9.9.9"));
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stdout).contains("atestación de procedencia verificada"));
+    let log = sb.log();
+    let call = log.lines().find(|l| l.starts_with("gh ")).expect(&log);
+    assert!(
+        call.starts_with("gh attestation verify ")
+            && call.contains(&format!("baton-v9.9.9-{platform}.tar.gz"))
+            && call.contains("--repo sebascode/baton_app")
+            && call.contains("--signer-workflow sebascode/baton_app/.github/workflows/release.yml"),
+        "{call}"
+    );
+    assert!(version_of(&sb.bin()).contains("9.9.9"));
+
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", platform);
+    let o = sb
+        .command(&["update", "--verify"], &tag_url("9.9.9"))
+        .env("FAKE_GH_FAIL", "1")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    let e = text(&o.stderr);
+    assert!(
+        e.contains("no se pudo verificar la atestación") && e.contains("no se instaló nada"),
+        "{e}"
+    );
+    assert!(
+        !version_of(&sb.bin()).contains("release"),
+        "no se reemplazó"
+    );
+}
+
+#[test]
+fn without_verify_gh_is_never_called() {
+    let sb = Sandbox::new();
+    sb.publish("9.9.9", this_platform());
+    let o = sb.baton(&["update"], &tag_url("9.9.9"));
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(!sb.log().contains("gh "), "{}", sb.log());
+}
+
+#[test]
+fn verify_cannot_be_combined_with_check_or_rollback() {
+    let sb = Sandbox::new();
+    for other in ["--check", "--rollback"] {
+        let o = sb.baton(&["update", "--verify", other], &tag_url("9.9.9"));
+        assert_eq!(o.status.code(), Some(2), "{other}");
+    }
 }

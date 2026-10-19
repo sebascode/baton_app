@@ -80,6 +80,24 @@ pub fn asset_url(repo_url: &str, version: &Version, file: &str) -> String {
     )
 }
 
+/// `dueño/repo` de la dirección de un repositorio de GitHub (lo que pide `gh attestation verify
+/// --repo`). `None` si no es una dirección de github.com con esa forma.
+pub fn repo_slug(repo_url: &str) -> Option<String> {
+    let rest = repo_url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("https://github.com/")?;
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (owner, repo) = rest.split_once('/')?;
+    let ok = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    (ok(owner) && ok(repo)).then(|| format!("{owner}/{repo}"))
+}
+
 /// El hash de `file` en un `.sha256` (`<hash>  <archivo>`, como lo escribe `sha256sum`/`shasum`).
 /// Acepta también un archivo con solo el hash. Devuelve el hash en minúsculas.
 pub fn parse_checksum(text: &str, file: &str) -> Option<String> {
@@ -162,6 +180,27 @@ mod tests {
         assert!(v("1.0.0") > v("0.99.99"));
         assert!(v("0.1.1") > v("0.1.0"));
         assert_eq!(v("0.1.0"), v("v0.1.0"));
+    }
+
+    #[test]
+    fn the_repo_slug_comes_from_a_github_url() {
+        assert_eq!(
+            repo_slug("https://github.com/sebascode/baton_app").as_deref(),
+            Some("sebascode/baton_app")
+        );
+        assert_eq!(
+            repo_slug("https://github.com/sebascode/baton_app.git/").as_deref(),
+            Some("sebascode/baton_app")
+        );
+        for bad in [
+            "",
+            "https://gitlab.com/a/b",
+            "https://github.com/a",
+            "https://github.com/a/b/c",
+            "https://github.com/a b/c",
+        ] {
+            assert_eq!(repo_slug(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

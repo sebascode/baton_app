@@ -40,7 +40,7 @@ Elige una:
 curl -fsSL https://raw.githubusercontent.com/sebascode/baton_app/main/scripts/get.sh | sh
 ```
 
-Con otra versión o carpeta: `... | sh -s -- --version X.Y.Z --dir /usr/local/bin`.
+Con otra versión o carpeta: `... | sh -s -- --version X.Y.Z --dir /usr/local/bin`. Con `--verify` comprueba además la firma de procedencia (ver [Verificar un release](#verificar-un-release)).
 
 **Homebrew** (macOS y Linux), compilando desde el código fuente:
 
@@ -74,9 +74,21 @@ Para volver a la versión anterior: `scripts/install.sh --rollback`. Comprueba c
 baton update --check      # ¿hay una versión nueva? (una consulta a GitHub, no descarga nada)
 baton update              # baja el binario del release, verifica su sha256 y lo reemplaza
 baton update --rollback   # vuelve a la versión anterior
+baton update --verify     # además del sha256, verifica la firma de procedencia (necesita gh)
 ```
 
 Cada release de GitHub trae binarios para Linux (x86_64 y aarch64) y macOS (Apple Silicon). `baton update` necesita `curl`, `tar` y `sha256sum` (o `shasum`), y nunca consulta la red por su cuenta.
+
+### Verificar un release
+
+Desde la 0.12.0 cada archivo de un release (tarballs, `.deb` y `.rpm`) lleva una **atestación de procedencia** firmada con Sigstore por el workflow `release` de este repositorio: prueba que el archivo lo construyó ese workflow, desde el commit del tag, y no se subió a mano. El `.sha256` solo detecta una descarga corrupta; la atestación detecta un archivo que no salió de la construcción oficial. Para comprobarla hace falta la [GitHub CLI](https://cli.github.com) con sesión iniciada:
+
+```sh
+gh attestation verify baton-vX.Y.Z-linux-x86_64.tar.gz --repo sebascode/baton_app \
+  --signer-workflow sebascode/baton_app/.github/workflows/release.yml
+```
+
+`get.sh --verify` y `baton update --verify` hacen esa misma comprobación antes de instalar y, si falla, no instalan nada. Es opcional: sin `--verify` se sigue comprobando el sha256. Los releases anteriores a la 0.12.0 no tienen atestación.
 
 ## Cómo usarlo
 
