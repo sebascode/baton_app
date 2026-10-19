@@ -130,7 +130,7 @@ fn the_record_format_prints_one_block_per_row() {
     let o = fx.baton(&[
         "-c",
         "select id, nombre, nota from clientes order by id",
-        "--formato",
+        "--format",
         "registro",
     ]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
@@ -160,7 +160,7 @@ fn csv_and_json_formats_keep_types_and_never_leak_the_null_mark() {
     let o = fx.baton(&[
         "-c",
         "select id, nota from clientes order by id",
-        "--formato",
+        "--format",
         "csv",
     ]);
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
@@ -173,7 +173,7 @@ fn csv_and_json_formats_keep_types_and_never_leak_the_null_mark() {
     let o = fx.baton(&[
         "-c",
         "select id, nota, saldo from clientes order by id",
-        "--formato",
+        "--format",
         "json",
     ]);
     let v: serde_json::Value =
@@ -250,7 +250,7 @@ fn by_default_it_is_read_only_and_escribir_allows_changes() {
     let o = fx.baton(&[
         "-c",
         "insert into clientes (id, nombre) values (9, 'Zoe')",
-        "--escribir",
+        "--write",
     ]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert!(
@@ -267,14 +267,14 @@ fn a_destructive_query_needs_assume_yes_even_when_writing() {
         return;
     }
     let fx = Fx::sqlite();
-    let o = fx.baton(&["-c", "delete from clientes", "--escribir"]);
+    let o = fx.baton(&["-c", "delete from clientes", "--write"]);
     assert_eq!(o.status.code(), Some(2), "{}\n{}", out(&o), err(&o));
     assert!(
         err(&o).contains("DELETE sin WHERE") && err(&o).contains("--assume-yes"),
         "{}",
         err(&o)
     );
-    let o = fx.baton(&["-c", "delete from clientes", "--escribir", "--assume-yes"]);
+    let o = fx.baton(&["-c", "delete from clientes", "--write", "--assume-yes"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
 }
 
@@ -306,15 +306,15 @@ fn rows_are_limited_in_the_table_but_not_in_csv() {
     }
     let fx = Fx::sqlite();
     let q = "with recursive n(i) as (select 1 union all select i+1 from n where i < 30) select i from n";
-    let o = fx.baton(&["-c", q, "--limite", "5"]);
+    let o = fx.baton(&["-c", q, "--limit", "5"]);
     assert!(
-        out(&o).contains("(mostrando 5 de 30 filas; --limite 0 las muestra todas)"),
+        out(&o).contains("(mostrando 5 de 30 filas; --limit 0 las muestra todas)"),
         "{}",
         out(&o)
     );
-    let o = fx.baton(&["-c", q, "--limite", "0"]);
+    let o = fx.baton(&["-c", q, "--limit", "0"]);
     assert!(out(&o).contains("(30 filas)"), "{}", out(&o));
-    let o = fx.baton(&["-c", q, "--formato", "csv"]);
+    let o = fx.baton(&["-c", q, "--format", "csv"]);
     assert_eq!(out(&o).lines().count(), 31);
 }
 
@@ -336,11 +336,11 @@ fn the_database_is_chosen_by_id_and_the_listing_helps_when_there_are_several() {
     let o = fx.baton(&["nada", "-c", "select 1"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(err(&o).contains("no tiene una base 'nada'"), "{}", err(&o));
-    // con --escribir se crea el archivo que no existía; sin él se avisa
+    // con --write se crea el archivo que no existía; sin él se avisa
     let o = fx.baton(&["otra", "-c", "select 1"]);
     assert_eq!(o.status.code(), Some(1), "{}\n{}", out(&o), err(&o));
     assert!(err(&o).contains("no existe"), "{}", err(&o));
-    let o = fx.baton(&["otra", "-c", "create table t(i int)", "--escribir"]);
+    let o = fx.baton(&["otra", "-c", "create table t(i int)", "--write"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert!(fx.root.join("otra.db").exists());
 }
@@ -387,7 +387,7 @@ fn the_file_can_come_from_the_environment_and_from_an_ambiente() {
         "LOCAL_FILE=qa.db\n",
     )
     .unwrap();
-    let o = fx.baton(&["-c", "select 1", "--ambiente", "qa"]);
+    let o = fx.baton(&["-c", "select 1", "--env", "qa"]);
     assert_eq!(o.status.code(), Some(1), "qa.db no existe: {}", err(&o));
     assert!(err(&o).contains("qa.db"), "{}", err(&o));
 }
@@ -453,9 +453,9 @@ fn postgres_gets_the_query_on_stdin_the_password_in_the_environment_and_read_onl
         "la consulta y la contraseña no van en argumentos: {args_line}"
     );
 
-    // con --escribir ya no se fuerza el solo lectura
+    // con --write ya no se fuerza el solo lectura
     let o = fx.baton_in(
-        &["-c", "update t set a = 1 where id = 2", "--escribir"],
+        &["-c", "update t set a = 1 where id = 2", "--write"],
         None,
         &env,
     );
@@ -584,7 +584,7 @@ fn real_postgres_in_a_container_is_read_only_by_default_and_reports_errors() {
         err(&o)
     );
     assert!(err(&o).contains("read-only transaction"), "{}", err(&o));
-    let o = fx.baton(&["-c", "create table t(i int)", "--escribir"]);
+    let o = fx.baton(&["-c", "create table t(i int)", "--write"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     let o = fx.baton(&["-c", "select * from no_existe"]);
     assert_eq!(o.status.code(), Some(3));
@@ -734,7 +734,7 @@ fn the_interactive_flag_does_not_mix_with_a_query_and_fails_early_without_the_da
     let o = fx.baton(&["local", "-i", "-c", "select 1"]);
     assert_eq!(o.status.code(), Some(2), "{}", err(&o));
     assert!(
-        err(&o).contains("--interactivo no se combina"),
+        err(&o).contains("--interactive no se combina"),
         "{}",
         err(&o)
     );
@@ -807,7 +807,7 @@ fn mysql_gets_a_read_only_session_the_query_on_stdin_and_the_password_in_the_env
     );
 
     let o = fx.baton_in(
-        &["-c", "update t set a = 1 where id = 2", "--escribir"],
+        &["-c", "update t set a = 1 where id = 2", "--write"],
         None,
         &env,
     );
@@ -820,9 +820,9 @@ fn mysql_results_come_out_as_csv_and_json_too() {
     let fx = mysql_fx("x");
     let log = fx.root.join("_log");
     let env = [("BATON_FAKE_LOG", log.to_str().unwrap())];
-    let o = fx.baton_in(&["-c", "select 1", "--formato", "csv"], None, &env);
+    let o = fx.baton_in(&["-c", "select 1", "--format", "csv"], None, &env);
     assert_eq!(out(&o), "id,nota,total\n1,\"hola\nmundo\",10.50\n2,,\n");
-    let o = fx.baton_in(&["-c", "select 1", "--formato", "json"], None, &env);
+    let o = fx.baton_in(&["-c", "select 1", "--format", "json"], None, &env);
     let v: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     assert_eq!(v[0]["nota"], "hola\nmundo");
     assert_eq!(v[0]["total"], 10.50);
@@ -950,7 +950,7 @@ fn real_mysql_in_a_container_is_read_only_by_default_and_reports_errors() {
         err(&o)
     );
     assert!(err(&o).contains("READ ONLY transaction"), "{}", err(&o));
-    let o = fx.baton(&["-c", "create table t(i int)", "--escribir"]);
+    let o = fx.baton(&["-c", "create table t(i int)", "--write"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     let o = fx.baton(&["-c", "select * from no_existe"]);
     assert_eq!(o.status.code(), Some(3));

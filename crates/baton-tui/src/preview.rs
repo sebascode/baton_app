@@ -100,7 +100,7 @@ pub struct PreviewState {
     /// Los ambientes que se conocen (carpetas de credenciales y `[ambientes]`), para poder elegir
     /// uno con `a`. Vacío: la tecla no se ofrece.
     pub ambientes: Vec<String>,
-    /// El ambiente elegido ahora (el de `--ambiente`, la variable o `[defaults]`).
+    /// El ambiente elegido ahora (el de `--env`, la variable o `[defaults]`).
     pub ambiente: Option<String>,
     /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
     pub ambiente_picker: Option<usize>,

@@ -464,8 +464,8 @@ fn an_ambiente_looks_in_its_own_credentials_subfolder() {
         "GHCR_REGISTRY=ghcr.io\nGHCR_USER=u\nGHCR_TOKEN=t\n",
     );
     let o = fx.baton(&["run", "instalar"]);
-    assert_eq!(o.status.code(), Some(1), "sin --ambiente no debe verla");
-    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    assert_eq!(o.status.code(), Some(1), "sin --env no debe verla");
+    let o = fx.baton(&["run", "instalar", "--env", "prod"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
 }
 
@@ -492,7 +492,7 @@ fn a_step_that_uses_ambiente_without_one_fails_before_running_and_says_how_to_se
         "todos de una vez: {e}"
     );
     assert!(
-        e.contains("--ambiente") && e.contains("BATON_AMBIENTE") && e.contains("[defaults]"),
+        e.contains("--env") && e.contains("BATON_AMBIENTE") && e.contains("[defaults]"),
         "{e}"
     );
     assert!(fx.calls().is_empty(), "no se ejecutó nada");
@@ -501,7 +501,7 @@ fn a_step_that_uses_ambiente_without_one_fails_before_running_and_says_how_to_se
 #[test]
 fn the_ambiente_flag_fills_the_placeholder_in_commands_and_rollbacks() {
     let fx = Fx::new(AMBIENTE_PLAN);
-    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    let o = fx.baton(&["run", "instalar", "--env", "prod"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert_eq!(fx.calls(), ["desplegar --en prod"]);
     assert!(
@@ -510,7 +510,7 @@ fn the_ambiente_flag_fills_the_placeholder_in_commands_and_rollbacks() {
         err(&o)
     );
 
-    let o = fx.baton(&["rollback", "instalar", "--ambiente", "prod"]);
+    let o = fx.baton(&["rollback", "instalar", "--env", "prod"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert_eq!(fx.calls().last().unwrap(), "retirar --de prod");
 }
@@ -547,7 +547,7 @@ fn the_ambiente_can_come_from_the_variable_or_the_config_and_the_flag_wins() {
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(fx.calls().last().unwrap(), "desplegar --en qa");
     let o = fx.baton_env(
-        &["run", "instalar", "--ambiente", "prod"],
+        &["run", "instalar", "--env", "prod"],
         &[("BATON_AMBIENTE", "qa")],
     );
     assert_eq!(o.status.code(), Some(0));
@@ -558,7 +558,7 @@ fn the_ambiente_can_come_from_the_variable_or_the_config_and_the_flag_wins() {
 fn an_ambiente_that_could_reach_a_shell_or_leave_the_credentials_folder_is_refused() {
     let fx = Fx::new(AMBIENTE_PLAN);
     for bad in ["a;touch pwned", "$(id)", "..", ".", "a b", "a/b"] {
-        let o = fx.baton(&["run", "instalar", "--ambiente", bad]);
+        let o = fx.baton(&["run", "instalar", "--env", bad]);
         assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", err(&o));
         assert!(err(&o).contains("no es válido"), "{bad:?}: {}", err(&o));
     }
@@ -789,7 +789,7 @@ fn the_vault_preset_runs_vault_kv_get_with_the_ambiente_in_the_path() {
         "[secrets.vault]\ntype = \"vault\"\npath = \"secret/baton/{ambiente}/{prefijo}\"\n\
          addr = \"https://vault.test\"\nnamespace = \"equipo-a\"\n",
     );
-    let o = fx.baton(&["run", "instalar", "--ambiente", "prod"]);
+    let o = fx.baton(&["run", "instalar", "--env", "prod"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert_eq!(
         fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
@@ -816,7 +816,7 @@ fn the_azure_keyvault_preset_asks_az_for_a_valid_secret_name() {
         &fx,
         "[secrets.kv]\ntype = \"azure-keyvault\"\nvault = \"kv-empresa\"\nname = \"{ambiente}_{prefijo}_{campo}\"\n",
     );
-    let o = fx.baton(&["run", "instalar", "--ambiente", "qa"]);
+    let o = fx.baton(&["run", "instalar", "--env", "qa"]);
     assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
     assert_eq!(
         fs::read_to_string(fx.root.join("visto.txt")).unwrap(),
@@ -1081,9 +1081,7 @@ fn each_ambiente_can_point_the_sqlite_credential_at_a_different_file() {
     fx.write_credential(Some("dev"), "db.env", "LOCAL_FILE=dev.db\n");
     fx.write_credential(Some("qa"), "db.env", "LOCAL_FILE=qa.db\n");
     assert_eq!(
-        fx.baton(&["run", "instalar", "--ambiente", "qa"])
-            .status
-            .code(),
+        fx.baton(&["run", "instalar", "--env", "qa"]).status.code(),
         Some(0)
     );
     assert!(fx.root.join("qa.db").exists() && !fx.root.join("dev.db").exists());
@@ -1093,9 +1091,7 @@ fn each_ambiente_can_point_the_sqlite_credential_at_a_different_file() {
 fn a_run_records_its_ambiente_and_last_and_history_show_it() {
     let fx = Fx::new(PLAN);
     assert_eq!(
-        fx.baton(&["run", "instalar", "--ambiente", "qa"])
-            .status
-            .code(),
+        fx.baton(&["run", "instalar", "--env", "qa"]).status.code(),
         Some(0)
     );
     let state = fs::read_to_string(fx.root.join(".baton/state.json")).unwrap();
@@ -1120,14 +1116,14 @@ fn resume_and_rollback_warn_when_the_last_run_used_another_ambiente() {
     let fx = Fx::new(PLAN);
     fx.fail_on("probar");
     assert_eq!(
-        fx.baton(&["run", "instalar", "--ambiente", "prod"])
+        fx.baton(&["run", "instalar", "--env", "prod"])
             .status
             .code(),
         Some(3)
     );
     fs::remove_file(fx.root.join("_fail")).unwrap();
 
-    // sin --ambiente: avisa y no hereda 'prod'
+    // sin --env: avisa y no hereda 'prod'
     let o = fx.baton(&["run", "instalar", "--resume"]);
     assert!(
         err(&o).contains("fue en el ambiente 'prod' y este --resume usa 'ninguno'"),
@@ -1145,7 +1141,7 @@ fn resume_and_rollback_warn_when_the_last_run_used_another_ambiente() {
     );
 
     // y el rollback con otro ambiente también avisa
-    let o = fx.baton(&["rollback", "instalar", "--ambiente", "qa"]);
+    let o = fx.baton(&["rollback", "instalar", "--env", "qa"]);
     assert!(
         err(&o).contains("fue en el ambiente 'ninguno' y este rollback usa 'qa'"),
         "{}",
@@ -1157,11 +1153,9 @@ fn resume_and_rollback_warn_when_the_last_run_used_another_ambiente() {
 fn no_warning_when_the_ambiente_is_the_same() {
     let fx = Fx::new(PLAN);
     assert_eq!(
-        fx.baton(&["run", "instalar", "--ambiente", "qa"])
-            .status
-            .code(),
+        fx.baton(&["run", "instalar", "--env", "qa"]).status.code(),
         Some(0)
     );
-    let o = fx.baton(&["rollback", "instalar", "--ambiente", "qa"]);
+    let o = fx.baton(&["rollback", "instalar", "--env", "qa"]);
     assert!(!err(&o).contains("fue en el ambiente"), "{}", err(&o));
 }

@@ -265,7 +265,7 @@ Reglas que conviene conocer:
 - Tu comando recibe **solo** las variables de `env`, y solo si el plan declara la credencial. Si no
   la declara, no recibe nada y la herramienta usa lo que ya haya en el entorno (`aws sso`, un perfil).
 - Un plan solo puede declarar una credencial de cada tipo que use el plugin. Para cuentas distintas
-  se usan los ambientes (`--ambiente`).
+  se usan los ambientes (`--env`).
 - No puedes definir `PATH`, `HOME`, `SHELL`, `IFS`, `ENV`, `BASH_ENV`, `LD_*`, `DYLD_*` ni `BATON_*`.
 
 ## Un ejemplo real

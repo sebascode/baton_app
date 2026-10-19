@@ -227,7 +227,7 @@ fn otlp_posts_json_logs_with_the_headers_from_the_environment() {
     )
     .unwrap();
     let o = fx.run(
-        &["--ambiente", "qa"],
+        &["--env", "qa"],
         &[(
             "OTEL_EXPORTER_OTLP_HEADERS",
             "Authorization=Bearer tok-123,X-Org=baton",

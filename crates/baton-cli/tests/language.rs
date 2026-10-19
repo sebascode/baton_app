@@ -153,7 +153,7 @@ fn settings_ops_and_plugin_talk_english_too() {
     let t = out(&o);
     assert!(t.contains("Maintenance of plan demo"), "{t}");
     assert!(t.contains("Actions:"), "{t}");
-    assert!(t.contains("show the logs (live with --seguir)"), "{t}");
+    assert!(t.contains("show the logs (live with --follow)"), "{t}");
 }
 
 #[test]

@@ -144,7 +144,7 @@ fn list(project: Option<&Project>, json: bool) -> ExitCode {
     println!();
     println!(
         "{}",
-        tr!("baton settings set <clave> <valor> [--proyecto]   baton settings unset <clave>")
+        tr!("baton settings set <clave> <valor> [--project]   baton settings unset <clave>")
     );
     ExitCode::SUCCESS
 }

@@ -1,4 +1,4 @@
-//! Qué ambiente se usa: `--ambiente`, la variable `BATON_AMBIENTE` o `ambiente` en `[defaults]`
+//! Qué ambiente se usa: `--env`, la variable `BATON_AMBIENTE` o `ambiente` en `[defaults]`
 //! de `.baton/config.toml`, en ese orden. Decide la carpeta de credenciales y el valor de
 //! `{ambiente}` en los comandos.
 //!

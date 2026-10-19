@@ -22,7 +22,7 @@ pub enum Action {
 impl Action {
     /// Las acciones tal como se piden en la línea de comandos y se muestran en el menú.
     pub const CATALOG: [(&'static str, &'static str); 5] = [
-        ("logs", crate::tk!("ver los logs (con --seguir, en vivo)")),
+        ("logs", crate::tk!("ver los logs (con --follow, en vivo)")),
         ("estado", crate::tk!("ver qué contenedores corren")),
         ("reiniciar", crate::tk!("reiniciar los contenedores")),
         (

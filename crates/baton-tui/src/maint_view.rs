@@ -174,7 +174,7 @@ impl MaintState {
         }
     }
 
-    /// Cuántas líneas de logs se piden al empezar (por defecto 100; es `--lineas` de `baton ops`).
+    /// Cuántas líneas de logs se piden al empezar (por defecto 100; es `--lines` de `baton ops`).
     pub fn with_tail(mut self, tail: u32) -> MaintState {
         for (_, _, row) in &mut self.rows {
             if let Row::Action(Action::Logs { tail: t, .. }) = row {

@@ -299,7 +299,7 @@ pub fn prepare_run(
             for s in &chosen {
                 for field in uses_ambiente(s) {
                     errors.push(tr!(
-                        "{step} usa {ambiente} en {field}, pero no hay ambiente: pásalo con --ambiente, la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml",
+                        "{step} usa {ambiente} en {field}, pero no hay ambiente: pásalo con --env, la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml",
                         step = label(s),
                         field = field
                     ));
@@ -992,7 +992,7 @@ mod tests {
             "un check desactivado no cuenta: {text}"
         );
         assert!(
-            text.contains("--ambiente") && text.contains("BATON_AMBIENTE"),
+            text.contains("--env") && text.contains("BATON_AMBIENTE"),
             "{text}"
         );
     }

@@ -158,3 +158,44 @@ fn config_and_settings_list_print_json_without_a_terminal() {
         .unwrap();
     assert!(secrets["value"].is_null(), "{secrets}");
 }
+
+#[test]
+fn the_old_spanish_flag_names_still_work_as_hidden_aliases() {
+    let fx = Fx::new();
+    // --lineas (ahora --lines), --ambiente (ahora --env), --proyecto (ahora --project)
+    let o = fx.baton(&["last", "demo", "--lines", "3", "--json"]);
+    assert_eq!(o.status.code(), Some(1), "el plan todavía no se ejecutó");
+    let o = fx.baton(&["ops", "demo", "--lineas", "3"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let o = fx.baton(&["validate", "--ambiente", "qa"]);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "un flag que no existe sigue siendo un error de uso"
+    );
+    let o = fx.baton(&["ops", "demo", "--env", "qa"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let o = fx.baton(&["ops", "demo", "--ambiente", "qa"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let help = String::from_utf8_lossy(&fx.baton(&["ops", "--help"]).stdout).into_owned();
+    assert!(help.contains("--env") && help.contains("--lines"), "{help}");
+    assert!(
+        !help.contains("--ambiente") && !help.contains("--lineas"),
+        "los alias van ocultos: {help}"
+    );
+}

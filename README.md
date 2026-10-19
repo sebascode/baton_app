@@ -27,7 +27,7 @@ Los pasos pueden correr en tu máquina, por ssh (con bastion opcional) o en un d
 - **Gates**: un paso puede esperar una confirmación manual o verificaciones automáticas (healthcheck de Docker, HTTP, comando, contenedor corriendo) antes de seguir.
 - **Fallos**: si algo falla, puedes reintentar, ver el log completo, abrir una shell, hacer rollback o abortar, y luego reanudar desde donde quedó.
 - **Credenciales**: viven en `.baton/` (se agrega al `.gitignore`, permisos 600), o en variables de entorno, o en un gestor como Vault o Azure Key Vault. Cada comando recibe solo las que necesita y se tachan de los logs. Las variables de entorno se filtran con más facilidad que un archivo (listados de procesos, `docker inspect`, logs de CI): para secretos de larga vida conviene un archivo en `.baton/` o un gestor; ver [SECURITY.md](SECURITY.md). `.baton/` nunca sale de tu máquina.
-- **Ambientes**: `baton run --ambiente qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
+- **Ambientes**: `baton run --env qa` (o `BATON_AMBIENTE`) elige la carpeta de credenciales y el valor de `{ambiente}` en los comandos. Los nombres son libres y puedes marcar ambientes protegidos que piden escribir su nombre antes de ejecutar. Cada ejecución registra con cuál corrió.
 - **Sin terminal** (CI): no pregunta nada; si falta algo, falla diciendo qué.
 
 ## Instalación
@@ -104,7 +104,7 @@ baton last                    # cómo terminó la última ejecución y, si fall�
 baton history                 # las ejecuciones anteriores del plan, una por línea
 baton last --json              # también validate, history, config y settings list: JSON por stdout para scripts
 baton ops                     # mantención: logs, reinicios, imágenes y tareas del plan (con `m` en la vista del plan se abre dentro de la interfaz)
-baton ops -a logs -s web --seguir   # logs de un servicio en vivo (ctrl+c corta)
+baton ops -a logs -s web --follow   # logs de un servicio en vivo (ctrl+c corta)
 baton docs instalar -o docs/instalar.md   # documentación del plan: resumen, flujo mermaid, variables, destinos con su host, ambientes y mantención
 baton settings set ui.language en   # baton en inglés (también BATON_LANG=en)
 baton settings                  # configuración global (~/.config/baton/config.toml) y de dónde sale cada valor

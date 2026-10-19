@@ -360,11 +360,11 @@ fn usage(out: &mut String, plan: &Plan, info: Option<&ProjectInfo>) {
         .unwrap_or_default();
     if !ambientes.is_empty() {
         out.push_str(&crate::tr!(
-            "El ambiente se elige con `--ambiente <nombre>` (o la variable `BATON_AMBIENTE`). Por ejemplo:\n\n"
+            "El ambiente se elige con `--env <nombre>` (o la variable `BATON_AMBIENTE`). Por ejemplo:\n\n"
         ));
         let mut block = String::new();
         for a in ambientes.iter().take(6) {
-            let _ = writeln!(block, "baton run {name} --ambiente {a}");
+            let _ = writeln!(block, "baton run {name} --env {a}");
         }
         fenced(out, "sh", &block);
     }
@@ -740,7 +740,7 @@ const PLACEHOLDERS: &[(&str, &str)] = &[
         "destino",
         tk!("host del destino del paso (localhost si es local)"),
     ),
-    ("ambiente", tk!("ambiente elegido con --ambiente")),
+    ("ambiente", tk!("ambiente elegido con --env")),
     ("file", tk!("archivo que se procesa (ruta completa)")),
     ("dir", tk!("carpeta del archivo")),
     (
@@ -924,7 +924,7 @@ fn maintenance(out: &mut String, plan: &Plan, config: Option<&Config>, info: Opt
         let rows: Vec<(String, String)> = vec![
             (
                 format!("baton ops {name} -a logs -s {first}"),
-                crate::tr!("últimas líneas del log (con --seguir, en vivo)"),
+                crate::tr!("últimas líneas del log (con --follow, en vivo)"),
             ),
             (
                 format!("baton ops {name} -a estado"),
@@ -1553,7 +1553,7 @@ confirm = true
             d.contains("| Ambientes | `dev`, `prod` (protegido) |"),
             "{d}"
         );
-        assert!(d.contains("baton run instalar --ambiente prod"), "{d}");
+        assert!(d.contains("baton run instalar --env prod"), "{d}");
         assert!(d.contains("## Mantención"), "{d}");
         assert!(
             d.contains("| `api` | `services/api/docker-compose.yml` | `local` |"),
