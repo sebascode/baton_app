@@ -229,3 +229,51 @@ fn ascii_symbols_are_used_on_request_or_with_a_non_utf8_terminal() {
     assert!(run(&[("LANG", "C")]).contains("+ baton/plans/demo.toml"));
     assert!(run(&[("LANG", "C"), ("BATON_ASCII", "0")]).contains('✓'));
 }
+
+#[test]
+fn color_follows_force_color_no_color_and_the_flag() {
+    let fx = Fx::new();
+    let run = |args: &[&str], envs: &[(&str, &str)]| -> String {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_baton"));
+        c.arg("-C")
+            .arg(&fx.root)
+            .args(args)
+            .env("BATON_CONFIG", fx.root.join("_sin_global.toml"))
+            .env("CI", "1")
+            .env("BATON_ASCII", "0")
+            .env_remove("BATON_LANG")
+            .env_remove("NO_COLOR")
+            .env_remove("FORCE_COLOR");
+        for (k, v) in envs {
+            c.env(k, v);
+        }
+        String::from_utf8_lossy(&c.output().unwrap().stdout).into_owned()
+    };
+    // por una tubería no hay color...
+    assert!(!run(&["last", "demo"], &[]).contains('\x1b'));
+    assert!(!run(&[], &[]).contains('\x1b'));
+    // ...salvo que se fuerce
+    assert!(run(&[], &[("FORCE_COLOR", "1")]).contains('\x1b'));
+    assert!(!run(&[], &[("FORCE_COLOR", "0")]).contains('\x1b'));
+    // NO_COLOR y --no-color mandan sobre FORCE_COLOR
+    assert!(!run(&[], &[("FORCE_COLOR", "1"), ("NO_COLOR", "1")]).contains('\x1b'));
+    assert!(!run(&["--no-color"], &[("FORCE_COLOR", "1")]).contains('\x1b'));
+}
+
+#[test]
+fn ui_colors_is_a_setting_with_two_values() {
+    let fx = Fx::new();
+    let (v, code) = fx.json(&["settings", "list", "--json"]);
+    assert_eq!(code, Some(0));
+    let colors = v["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"] == "ui.colors")
+        .unwrap();
+    assert_eq!(colors["value"], "fixed");
+    let o = fx.baton(&["settings", "set", "ui.colors", "terminal"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = fx.baton(&["settings", "set", "ui.colors", "arcoiris"]);
+    assert_eq!(o.status.code(), Some(2));
+}

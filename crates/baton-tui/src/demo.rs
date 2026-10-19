@@ -85,6 +85,9 @@ fn event_loop(
         terminal.draw(|frame| {
             let area = frame.area();
             app.render(frame.buffer_mut(), area);
+            if app.palette() == baton_core::color::Palette::Terminal {
+                crate::theme::terminal_palette(frame.buffer_mut());
+            }
             if mono {
                 crate::theme::monochrome(frame.buffer_mut());
             }

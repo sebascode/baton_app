@@ -1400,3 +1400,4 @@
 "valor '{value}' no válido para '{arg}'" = "invalid value '{value}' for '{arg}'"
 "valores posibles: {list}" = "possible values: {list}"
 "¿quisiste decir '{s}'?" = "did you mean '{s}'?"
+"la paleta '{c}' no existe (opciones: {a0})" = "the palette '{c}' does not exist (options: {a0})"

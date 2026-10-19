@@ -278,3 +278,30 @@ fn ascii_mode_replaces_every_symbol_without_changing_the_layout() {
     let widths = |t: &str| t.lines().map(|l| l.chars().count()).collect::<Vec<_>>();
     assert_eq!(widths(&before), widths(&after));
 }
+
+#[test]
+fn the_terminal_palette_drops_fixed_backgrounds_and_gray_but_keeps_state_colors() {
+    use crate::testutil::render;
+    use crate::theme;
+    use ratatui::style::{Color, Modifier};
+    let app = App::new(fake::preview());
+    let mut buf = render(100, 26, |b, a| app.render(b, a));
+    let has = |buf: &ratatui::buffer::Buffer, f: &dyn Fn(&ratatui::buffer::Cell) -> bool| {
+        buf.content.iter().any(f)
+    };
+    assert!(
+        has(&buf, &|c| c.fg == theme::MUTED),
+        "la pantalla usa gris fijo"
+    );
+    theme::terminal_palette(&mut buf);
+    assert!(!has(&buf, &|c| c.fg == theme::MUTED || c.fg == theme::SECONDARY));
+    assert!(!has(&buf, &|c| matches!(c.bg, Color::Indexed(_))));
+    assert!(
+        has(&buf, &|c| c.modifier.contains(Modifier::DIM)),
+        "lo secundario se atenúa"
+    );
+    assert!(
+        has(&buf, &|c| c.modifier.contains(Modifier::REVERSED)),
+        "la fila elegida va en inverso"
+    );
+}

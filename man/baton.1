@@ -73,6 +73,9 @@ Carpeta del proyecto. Por defecto, la actual o la primera superior que sea un pr
 .BR \-q ", " \-\-quiet
 Calla los avisos de contexto que baton escribe por stderr (el proyecto, el plan o el ambiente que eligió solo). Los errores, los avisos que cambian lo que pasa y el resultado se muestran igual.
 .TP
+.B \-\-no\-color
+Sin colores en la salida y en la interfaz (equivale a definir \fBNO_COLOR\fR). Manda sobre \fBFORCE_COLOR\fR.
+.TP
 .BR \-h ", " \-\-help
 Muestra la ayuda de \fBbaton\fR o de un comando.
 .TP
@@ -237,7 +240,7 @@ Cuántas ejecuciones se muestran (20 por defecto).
 .B \-\-json
 Imprime un JSON por stdout con las ejecuciones (de la más reciente a la más antigua) y los conteos. Sin ejecuciones sale con 0 y \fBruns\fR vacío.
 .SS baton settings [list|get|set|unset]
-La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR (con \fB\-\-json\fR da un JSON con clave, valor y origen), que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
+La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR (con \fB\-\-json\fR da un JSON con clave, valor y origen), que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR), \fBui.colors\fR (paleta de la interfaz: \fBfixed\fR o \fBterminal\fR, ver \fBBATON_COLORS\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
 .TP
 .B \-\-project
 En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
@@ -710,6 +713,15 @@ Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBe
 .TP
 .B BATON_LANG
 Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
+.TP
+.B NO_COLOR
+Si está definida y no vacía, sin colores (https://no\-color.org). Manda sobre \fBFORCE_COLOR\fR.
+.TP
+.B FORCE_COLOR
+Si está definida y no es \fB0\fR, con colores aunque la salida no sea una terminal (por ejemplo, una tubería a \fBless \-R\fR); también vence a \fBTERM=dumb\fR.
+.TP
+.B BATON_COLORS
+Paleta de la interfaz: \fBfixed\fR (por defecto, con fondos propios para la fila elegida y los estados) o \fBterminal\fR (solo los colores de tu tema: sin fondos propios, con lo secundario atenuado en vez de gris; sirve en temas claros o de poco contraste). Manda sobre \fBui.colors\fR.
 .TP
 .B BATON_ASCII
 Símbolos ASCII (\fB+ x ~ # | -\fR en vez de \fB✓ ✗ ◐ ◆ │ ─\fR) para consolas sin fuente Unicode. \fB1\fR los activa y \fB0\fR los apaga; sin valor se activan solos si el juego de caracteres de la terminal no es UTF\-8 (\fBLC_ALL\fR, \fBLC_CTYPE\fR o \fBLANG\fR, el primero definido) o si \fBTERM=linux\fR. Cada símbolo pasa a un solo carácter, así que el dibujo no cambia de ancho; no afecta a las letras con tilde, que dependen de la terminal. Los textos de ayuda de los menús de preguntas (\fBbaton ops \-\-no\-tui\fR, \fBbaton select\fR) conservan sus flechas.

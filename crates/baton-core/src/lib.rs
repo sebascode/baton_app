@@ -5,6 +5,7 @@ pub mod ascii;
 pub mod ask;
 pub mod askpass;
 pub mod auth_failure;
+pub mod color;
 pub mod compose;
 pub mod config;
 pub mod credential;

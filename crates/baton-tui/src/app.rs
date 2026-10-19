@@ -148,6 +148,8 @@ pub struct App {
     quit_ask: bool,
     /// `[ui] confirm_exit`: si es falso, esc y enter salen sin preguntar.
     quit_confirm: bool,
+    /// Paleta de la interfaz (`[ui] colors`, `BATON_COLORS`).
+    palette: baton_core::color::Palette,
 }
 
 /// Lo que deshace un rollback, del último paso al primero: los que corrieron (o fallaron) con
@@ -197,6 +199,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -210,6 +213,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -223,6 +227,7 @@ impl App {
             protect: None,
             quit_ask: false,
             quit_confirm: true,
+            palette: baton_core::color::Palette::Fixed,
         }
     }
 
@@ -236,6 +241,16 @@ impl App {
     pub fn with_quit_confirm(mut self, ask: bool) -> App {
         self.quit_confirm = ask;
         self
+    }
+
+    /// La paleta de la interfaz: `Terminal` deja que mande el tema de la terminal.
+    pub fn with_palette(mut self, palette: baton_core::color::Palette) -> App {
+        self.palette = palette;
+        self
+    }
+
+    pub fn palette(&self) -> baton_core::color::Palette {
+        self.palette
     }
 
     pub fn with_editor(mut self, editor: EditorState) -> App {
