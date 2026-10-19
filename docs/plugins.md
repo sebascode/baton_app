@@ -271,6 +271,8 @@ Reglas que conviene conocer:
 ## Un ejemplo real
 
 `examples/plugins/terraform` en este repositorio es un plugin completo: detecta `main.tf`, guarda el
+
+`examples/plugins/mariadb` es un segundo ejemplo, más pequeño: ejecuta cada `.sql` con el cliente `mariadb` (las imágenes de MariaDB 11 o más ya no traen `mysql`) y define el tipo de credencial `mariadb`. Muestra cómo un paso reescribe `command` para entrar por `docker exec` sin que la contraseña viaje en un argumento. Un plugin es solo un comando: no respalda ni restaura la base, ni avisa de sentencias destructivas.
 plan y aplica ese mismo plan, pide confirmar si algo se destruye y entrega la credencial `aws`.
 Léelo antes de escribir el tuyo.
 
