@@ -16,6 +16,11 @@ la revisión es estricta a propósito. Lee esto antes de abrir un PR.
 Si haces un fork, trabaja en `feature/<algo>` desde `develop` y abre el PR contra `develop`. Un PR
 contra `main` se cerrará.
 
+Cómo se fusiona cada PR: los de `feature/*` entran a `develop` y los de `release/X.Y.Z` entran a
+`main` siempre con **Create a merge commit**, nunca con squash ni rebase. El squash crea en `main`
+un commit nuevo hecho por GitHub, sin `Signed-off-by` ni firma, y el back-merge a `develop` falla
+el chequeo de DCO (pasó con la 0.10.4).
+
 ## Antes de abrir el PR
 
 ```bash
