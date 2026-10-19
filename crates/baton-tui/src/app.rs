@@ -110,6 +110,8 @@ pub enum Effect {
     SetAmbiente(Option<String>),
     /// Lo mismo, pedido desde la pantalla de mantención (que se vuelve a abrir).
     MaintAmbiente(Option<String>),
+    /// Texto para la entrada estándar de lo que corre en la mantención.
+    MaintInput(crate::maint_view::MaintInput),
     /// Copiar, renombrar o eliminar un plan (ya confirmado en su caja). Quien atiende lo hace en
     /// disco y responde con `plans_changed` (o `notify` si no pudo).
     PlanOp(crate::plan_prompt::PlanRequest),
@@ -306,6 +308,13 @@ impl App {
     pub fn maint_note(&mut self, text: &str) {
         if let Mode::Maintenance(m) = &mut self.mode {
             m.note(text);
+        }
+    }
+
+    /// Una pregunta que dejó el comando sin salto de línea (abre la ventana de entrada).
+    pub fn maint_prompt(&mut self, text: &str) {
+        if let Mode::Maintenance(m) = &mut self.mode {
+            m.prompt_line(text);
         }
     }
 
@@ -568,7 +577,11 @@ impl App {
             return None;
         }
         // Ctrl+C se comporta como `q`: en plena ejecución pide confirmación.
-        let key = if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c')
+        // (en la ventana de entrada de la mantención, ctrl+c y las letras son del comando)
+        let typing = matches!(&self.mode, Mode::Maintenance(m) if m.is_typing());
+        let key = if !typing
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('c')
         {
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
         } else {
@@ -613,6 +626,7 @@ impl App {
             return None;
         }
         if key.code == KeyCode::Char('?')
+            && !typing
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && let Some(help) = crate::help::for_mode(&self.mode)
         {
@@ -670,6 +684,7 @@ impl App {
                 MaintAction::Run(req) => Some(Effect::MaintRun(req)),
                 MaintAction::Cancel => Some(Effect::MaintCancel),
                 MaintAction::SetAmbiente(a) => Some(Effect::MaintAmbiente(a)),
+                MaintAction::Input(i) => Some(Effect::MaintInput(i)),
                 MaintAction::Back => {
                     self.back_to_preview();
                     Some(Effect::MaintCancel)

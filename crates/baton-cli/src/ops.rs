@@ -449,6 +449,7 @@ impl Ctx<'_> {
             line: o.line.clone(),
             timeout: o.timeout,
             all_credentials: o.all_credentials,
+            input: None,
         };
         let result = adhoc::run(
             self.project,
@@ -458,7 +459,7 @@ impl Ctx<'_> {
             job,
             &cancel,
             |stream, line| match stream {
-                Stream::Stdout => {
+                Stream::Stdout | Stream::Prompt => {
                     let mut out = std::io::stdout().lock();
                     let _ = writeln!(out, "{line}");
                     let _ = out.flush();

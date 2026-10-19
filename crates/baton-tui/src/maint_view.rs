@@ -14,8 +14,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use crate::forms::TextField;
 use crate::run_view::{log_glyph, log_style, wrap_text};
 use crate::theme;
 use crate::widgets::{self, frame, hsep, justify, truncate, vsep};
@@ -57,7 +58,37 @@ pub enum MaintAction {
     Back,
     /// Elegir el ambiente de esta sesión (`None`: ninguno).
     SetAmbiente(Option<String>),
+    /// Texto para la entrada estándar de lo que corre.
+    Input(MaintInput),
 }
+
+/// Lo que se le manda a la entrada estándar del comando en curso.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaintInput {
+    /// Una línea (el salto lo agrega quien la entrega).
+    Line(String),
+    /// Fin de la entrada (ctrl+d).
+    Eof,
+}
+
+/// La ventana donde se escribe lo que pide el comando.
+#[derive(Debug, Clone)]
+struct InputBox {
+    /// La pregunta que dejó el comando, si dejó alguna.
+    prompt: Option<String>,
+    field: TextField,
+    /// Lo escrito se ve como puntos y no queda en el log (contraseñas).
+    hidden: bool,
+}
+
+impl PartialEq for InputBox {
+    fn eq(&self, other: &Self) -> bool {
+        self.prompt == other.prompt
+            && self.hidden == other.hidden
+            && self.field.value() == other.field.value()
+    }
+}
+impl Eq for InputBox {}
 
 /// Cómo terminó lo que se pidió.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +146,8 @@ pub struct MaintState {
     ambiente: Option<String>,
     /// Selector de ambiente abierto: posición del cursor (0 es «ninguno»).
     ambiente_picker: Option<usize>,
+    /// Ventana de entrada abierta (el comando en curso espera texto).
+    input: Option<InputBox>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +214,7 @@ impl MaintState {
             ambientes: Vec::new(),
             ambiente: None,
             ambiente_picker: None,
+            input: None,
         }
     }
 
@@ -371,7 +405,119 @@ impl MaintState {
     }
 
     /// Terminó lo que corría. Nada se cierra solo: queda el resultado y las opciones.
+    /// Lo que el comando dejó escrito sin salto de línea (una pregunta): se muestra y se abre la
+    /// ventana para contestar.
+    pub fn prompt_line(&mut self, text: &str) {
+        self.push(LogKind::Output, text);
+        if self.running.is_some() {
+            let hidden = self.input.as_ref().is_some_and(|b| b.hidden);
+            self.input = Some(InputBox {
+                prompt: Some(text.trim().to_string()),
+                field: TextField::new(""),
+                hidden,
+            });
+        }
+    }
+
+    /// La ventana de entrada está abierta: las teclas son texto para el comando.
+    pub fn is_typing(&self) -> bool {
+        self.input.is_some()
+    }
+
+    fn input_key(&mut self, key: KeyEvent) -> Option<MaintAction> {
+        let b = self.input.as_mut()?;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c') if ctrl => return Some(MaintAction::Cancel),
+            KeyCode::Char('d') if ctrl => {
+                self.input = None;
+                self.push(LogKind::Command, tr!("(fin de la entrada)"));
+                return Some(MaintAction::Input(MaintInput::Eof));
+            }
+            KeyCode::Esc => self.input = None,
+            KeyCode::Tab => b.hidden = !b.hidden,
+            KeyCode::Enter => {
+                let text = b.field.value();
+                let shown = if b.hidden {
+                    "•".repeat(text.chars().count().min(12))
+                } else {
+                    text.clone()
+                };
+                self.input = None;
+                self.push(LogKind::Command, format!("› {shown}"));
+                return Some(MaintAction::Input(MaintInput::Line(text)));
+            }
+            _ => {
+                b.field.handle_key(&key, false);
+            }
+        }
+        None
+    }
+
+    fn render_input(&self, buf: &mut Buffer, over: Rect) {
+        let Some(b) = &self.input else {
+            return;
+        };
+        let w = 64.min(over.width);
+        let h = 6.min(over.height);
+        if w < 20 || h < 5 {
+            return;
+        }
+        let area = Rect::new(
+            over.x + over.width.saturating_sub(w) / 2,
+            over.y + over.height.saturating_sub(h) / 2,
+            w,
+            h,
+        );
+        Clear.render(area, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme::border())
+            .title(Span::styled(tr!(" Entrada del comando "), theme::bold()));
+        let inner = block.inner(area);
+        block.render(area, buf);
+        let row = |y: u16, spans: Vec<Span<'static>>, buf: &mut Buffer| {
+            Line::from(spans).render(
+                Rect::new(inner.x + 1, y, inner.width.saturating_sub(2), 1),
+                buf,
+            );
+        };
+        let width = inner.width.saturating_sub(2) as usize;
+        let asked = b
+            .prompt
+            .clone()
+            .unwrap_or_else(|| tr!("El comando lee texto de la entrada estándar."));
+        row(
+            inner.y,
+            vec![Span::styled(truncate(&asked, width), theme::secondary())],
+            buf,
+        );
+        let masked = "•".repeat(b.field.value().chars().count());
+        let shown = b.hidden.then_some(masked.as_str());
+        row(
+            inner.y + 2,
+            b.field.spans(inner.width.saturating_sub(2), true, shown),
+            buf,
+        );
+        row(
+            inner.y + 3,
+            vec![Span::styled(
+                truncate(
+                    &if b.hidden {
+                        tr!("enter enviar · tab mostrar · ctrl+d fin · esc cerrar")
+                    } else {
+                        tr!("enter enviar · tab ocultar · ctrl+d fin · esc cerrar")
+                    },
+                    width,
+                ),
+                theme::muted(),
+            )],
+            buf,
+        );
+    }
+
     pub fn finish(&mut self, result: MaintResult) {
+        self.input = None;
         let label = self.running.take().unwrap_or_default();
         let (kind, msg) = match result {
             MaintResult::Ok => (LogKind::Success, tr!("{label} · listo", label = label)),
@@ -393,6 +539,9 @@ impl MaintState {
         }
         if self.ambiente_picker.is_some() {
             return self.ambiente_key(key);
+        }
+        if self.input.is_some() {
+            return self.input_key(key);
         }
         self.notice = None;
         let page = self.view_height.get().max(1);
@@ -418,6 +567,17 @@ impl MaintState {
             KeyCode::End | KeyCode::Char('G') => self.scroll = 0,
             KeyCode::Home | KeyCode::Char('g') => self.scroll_by(true, usize::MAX / 2),
             KeyCode::Char('x') => return self.running.is_some().then_some(MaintAction::Cancel),
+            KeyCode::Char('i') => {
+                if self.running.is_some() {
+                    self.input = Some(InputBox {
+                        prompt: None,
+                        field: TextField::new(""),
+                        hidden: false,
+                    });
+                } else {
+                    self.notice = Some(tr!("no hay nada en curso que lea texto"));
+                }
+            }
             KeyCode::Char('a') if !self.ambientes.is_empty() => {
                 if self.running.is_some() {
                     self.notice = Some(tr!("ya hay algo en curso (x lo corta)"));
@@ -533,6 +693,7 @@ impl MaintState {
         };
         if self.running.is_some() {
             shortcuts.push(("x", tk!("cortar")));
+            shortcuts.push(("i", tk!("enviar texto")));
         }
         if !self.ambientes.is_empty() && self.focus != Focus::Scripts {
             shortcuts.push(("a", tk!("ambiente")));
@@ -629,6 +790,7 @@ impl MaintState {
 
     /// El selector de ambiente: «ninguno» y los conocidos, con ● el elegido ahora.
     fn render_ambiente_picker(&self, buf: &mut Buffer, over: Rect) {
+        self.render_input(buf, over);
         if self.ambiente_picker.is_none() {
             return;
         }

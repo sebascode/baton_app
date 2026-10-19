@@ -1467,3 +1467,12 @@
 "la prueba no respondió en {n} s" = "the test did not answer in {n} s"
 "la prueba falló" = "the test failed"
 "backup desactivado: no hay respaldo que restaurar" = "backup disabled: there is no backup to restore"
+
+" Entrada del comando " = " Command input "
+"enter enviar · tab ocultar · ctrl+d fin · esc cerrar" = "enter send · tab hide · ctrl+d end · esc close"
+"enter enviar · tab mostrar · ctrl+d fin · esc cerrar" = "enter send · tab show · ctrl+d end · esc close"
+"El comando lee texto de la entrada estándar." = "The command reads text from standard input."
+"(fin de la entrada)" = "(end of input)"
+"no hay nada en curso que lea texto" = "nothing is running that could read text"
+"enviar texto" = "send text"
+"este comando no puede recibir texto (el destino no lo admite o ya terminó)" = "this command cannot receive text (the target does not support it or it already ended)"

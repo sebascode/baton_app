@@ -60,9 +60,13 @@ pub struct RunDriver {
 struct MaintJob {
     rx: std::sync::mpsc::Receiver<MaintMsg>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Por dónde se le escribe al comando en curso (cambia con cada orden).
+    input: Option<baton_exec::adhoc::InputTx>,
 }
 
 enum MaintMsg {
+    Input(baton_exec::adhoc::InputTx),
+    Prompt(String),
     Note(String),
     Line(String, bool),
     Done(baton_tui::maint_view::MaintResult),
@@ -413,6 +417,25 @@ impl RunDriver {
         });
     }
 
+    /// Le escribe al comando en curso. Si no puede recibirlo (el destino lo ocupa para otra cosa,
+    /// como ssh con credenciales, o el comando ya cerró su entrada) lo dice.
+    fn maint_input(&mut self, app: &mut App, input: &baton_tui::maint_view::MaintInput) {
+        use baton_tui::maint_view::MaintInput;
+        let sent = self
+            .maint
+            .as_ref()
+            .and_then(|j| j.input.as_ref())
+            .map(|tx| match input {
+                MaintInput::Line(text) => tx.line(text),
+                MaintInput::Eof => tx.eof(),
+            });
+        if sent != Some(true) {
+            app.notify(&tr!(
+                "este comando no puede recibir texto (el destino no lo admite o ya terminó)"
+            ));
+        }
+    }
+
     /// Cambia el ambiente desde la mantención: se rearma la aplicación (como en la vista del plan)
     /// y se vuelve a abrir la mantención con el ambiente nuevo.
     fn maint_ambiente(&mut self, app: &mut App, ambiente: Option<String>) {
@@ -460,12 +483,15 @@ impl RunDriver {
         std::thread::spawn(move || {
             for o in orders {
                 let _ = tx.send(MaintMsg::Note(o.label.clone()));
+                let (input_tx, input) = baton_exec::adhoc::Input::channel();
+                let _ = tx.send(MaintMsg::Input(input_tx));
                 let job = baton_exec::adhoc::Job {
                     target: o.target,
                     cwd: o.cwd,
                     line: o.line,
                     timeout: o.timeout,
                     all_credentials: o.all_credentials,
+                    input: Some(input),
                 };
                 let lines = tx.clone();
                 let result = baton_exec::adhoc::run(
@@ -478,11 +504,15 @@ impl RunDriver {
                     move |stream, line| {
                         // compose escribe su progreso por stderr: no es un error por eso, y los
                         // colores de la terminal no se dibujan aquí
-                        let _ = stream;
                         let clean = baton_core::plugin::strip_ansi(&line);
-                        if !clean.trim().is_empty() {
-                            let _ = lines.send(MaintMsg::Line(clean, false));
+                        if clean.trim().is_empty() {
+                            return;
                         }
+                        let _ = lines.send(if stream == baton_exec::adhoc::Stream::Prompt {
+                            MaintMsg::Prompt(clean)
+                        } else {
+                            MaintMsg::Line(clean, false)
+                        });
                     },
                 );
                 let done = match result {
@@ -506,17 +536,23 @@ impl RunDriver {
             }
             let _ = tx.send(MaintMsg::Done(MaintResult::Ok));
         });
-        self.maint = Some(MaintJob { rx, cancel });
+        self.maint = Some(MaintJob {
+            rx,
+            cancel,
+            input: None,
+        });
     }
 
     /// Pasa a la pantalla lo que dijo el hilo de la mantención.
     fn poll_maint(&mut self, app: &mut App) {
-        let Some(job) = &self.maint else {
+        let Some(job) = &mut self.maint else {
             return;
         };
         let mut finished = false;
         while let Ok(msg) = job.rx.try_recv() {
             match msg {
+                MaintMsg::Input(tx) => job.input = Some(tx),
+                MaintMsg::Prompt(t) => app.maint_prompt(&t),
                 MaintMsg::Note(t) => app.maint_note(&t),
                 MaintMsg::Line(t, err) => app.maint_line(&t, err),
                 MaintMsg::Done(r) => {
@@ -1230,6 +1266,7 @@ impl Driver for RunDriver {
             Effect::SwitchPlan(name) => self.switch_plan(app, &name),
             Effect::SetAmbiente(amb) => self.set_ambiente(app, amb),
             Effect::MaintAmbiente(amb) => self.maint_ambiente(app, amb),
+            Effect::MaintInput(input) => self.maint_input(app, &input),
             Effect::OpenHistory => self.open_history(app),
             Effect::Maintenance => self.maintenance(app),
             Effect::MaintRun(req) => self.maint_run(app, &req),

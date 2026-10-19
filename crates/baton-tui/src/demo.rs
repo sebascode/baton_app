@@ -232,6 +232,7 @@ impl Driver for DemoDriver {
             | Effect::SwitchPlan(_)
             | Effect::SetAmbiente(_)
             | Effect::MaintAmbiente(_)
+            | Effect::MaintInput(_)
             | Effect::PlanOp(_) => {}
         }
         Flow::Continue

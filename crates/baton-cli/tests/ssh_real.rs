@@ -408,3 +408,48 @@ fn without_the_variable_baton_is_just_baton() {
     );
     assert!(o.stdout.is_empty());
 }
+
+#[test]
+fn ops_runs_a_task_on_a_real_ssh_target_in_the_remote_folder_without_syncing() {
+    let Some(w) = world() else { return };
+    let key = w.keygen("llave", "frase de ops");
+    let Some(srv) = w.sshd("srv", &key) else {
+        return;
+    };
+    w.ssh_wrapper();
+    let p = Project::new(&w, srv.port, &key, Some("frase de ops"));
+    fs::create_dir_all(p.remote.join("sub")).unwrap();
+    let plan = p.root.join("baton/plans/p.toml");
+    let mut body = fs::read_to_string(&plan).unwrap();
+    body.push_str(
+        "\n[[tasks]]\nid = \"quien\"\nname = \"Quién\"\ntarget = \"srv\"\ndir = \"sub\"\n\
+         command = \"echo ops-$(id -un); pwd; test -f dato.txt && echo sincronizado || echo sin-sincronizar\"\n",
+    );
+    fs::write(&plan, body).unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_baton"))
+        .arg("-C")
+        .arg(&p.root)
+        .args(["ops", "p", "-t", "quien", "--assume-yes"])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                w.path("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("CI", "1")
+        .env_remove("SSH_AUTH_SOCK")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let all = text(&o);
+    assert_eq!(o.status.code(), Some(0), "{all}");
+    assert!(all.contains(&format!("ops-{}", w.user)), "{all}");
+    assert!(
+        all.contains(&p.remote.join("sub").display().to_string()),
+        "corre en la carpeta remota\n{all}"
+    );
+    assert!(all.contains("sin-sincronizar"), "ops no sincroniza\n{all}");
+    assert!(!all.contains("frase de ops"), "{all}");
+}
