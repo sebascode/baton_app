@@ -161,6 +161,9 @@ Muestra cómo terminó la última ejecución de un plan: el resultado, una barra
 .TP
 .BI \-\-lines " n"
 Cuántas líneas de la salida del paso que falló se muestran (15 por defecto); el resto está en el log.
+.TP
+.B \-\-json
+En vez del texto, imprime un JSON por stdout con la ejecución (id, resultado, duración, ambiente, pasos con su estado), los conteos, el log y, si se detuvo, el extracto del paso. Los códigos de salida no cambian.
 .SS baton db [base]
 Consulta una base de datos del plan (una credencial \fBdb\fR, \fBmysql\fR o \fBsqlite\fR) con las credenciales de \fI.baton/\fR y muestra el resultado. \fBbase\fR es el id de la credencial; sin él se usa la única del plan. Sin ninguna consulta lista las bases del plan y cómo consultarlas. La consulta es \fBuna sola sentencia\fR (para varias, usa un paso \fBsql\fR) y viaja por la entrada estándar del motor, nunca en un argumento. Corre en tu máquina con \fBpsql\fR, \fBmysql\fR (o \fBdocker exec\fR si la credencial tiene \fBCONTAINER\fR) o \fBsqlite3\fR. Por defecto es de \fBsolo lectura\fR: SQLite abre el archivo en solo lectura y en PostgreSQL se activa \fBdefault_transaction_read_only\fR (un seguro contra accidentes, no una barrera de seguridad); en MySQL, una transacción de solo lectura. Sale con 0 si todo bien, con 1 si faltan datos de la credencial o el programa, con 2 por un error de uso (consulta vacía o de varias sentencias, base ambigua, consulta destructiva sin confirmar) y con 3 si el motor devolvió un error o no respondió a tiempo.
 .TP
@@ -227,8 +230,11 @@ Lista las ejecuciones anteriores de un plan que baton recuerda (la última y has
 .TP
 .BI \-\-limit " n"
 Cuántas ejecuciones se muestran (20 por defecto).
+.TP
+.B \-\-json
+Imprime un JSON por stdout con las ejecuciones (de la más reciente a la más antigua) y los conteos. Sin ejecuciones sale con 0 y \fBruns\fR vacío.
 .SS baton settings [list|get|set|unset]
-La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR, que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
+La configuración global de la app y de dónde sale cada valor. El archivo global es \fI~/.config/baton/config.toml\fR (o \fI$XDG_CONFIG_HOME/baton/config.toml\fR, o el que diga \fBBATON_CONFIG\fR) y vale para todos los proyectos de esta máquina. Admite las secciones \fB[defaults]\fR (solo \fBtarget\fR, \fBsecrets\fR y \fBengine\fR: el ambiente nunca se fija globalmente), \fB[logs]\fR, \fB[secrets.*]\fR, \fB[ambientes.*]\fR y \fB[ui]\fR; los destinos y las credenciales son de cada proyecto. \fBPrecedencia\fR: variable de entorno, luego el proyecto (\fI.baton/config.toml\fR), luego la global y al final el valor por defecto. Las tablas con nombre (\fB[secrets.x]\fR, \fB[ambientes.x]\fR) se juntan y el proyecto pisa por nombre. Sin subcomando equivale a \fBlist\fR (con \fB\-\-json\fR da un JSON con clave, valor y origen), que muestra cada clave con su valor efectivo y su \fBorigen\fR (\fBentorno\fR, \fBproyecto\fR, \fBglobal\fR o \fBpor defecto\fR), para no buscarla a mano en \fI.baton/\fR. \fBget clave\fR imprime solo el valor (el origen va a stderr, así sirve en scripts). \fBset clave valor\fR escribe en el archivo global, conservando sus comentarios, y \fBunset clave\fR la quita; ambos validan la configuración resultante antes de escribir y avisan si algo más fuerte (una variable de entorno, el proyecto) sigue tapando el valor. Claves: \fBdefaults.engine\fR, \fBdefaults.target\fR, \fBdefaults.secrets\fR, \fBlogs.format\fR, \fBlogs.local\fR, \fBlogs.remote\fR, \fBlogs.retention.days\fR, \fBlogs.retention.max_size\fR \fBui.language\fR (idioma de la interfaz: \fBes\fR, \fBen\fR o \fBauto\fR, ver \fBIDIOMA\fR) y \fBui.confirm_exit\fR (preguntar antes de cerrar con \fBesc\fR o \fBenter\fR; por defecto sí). Un error en el archivo global se reporta con su propia ruta (\fBvalidate\fR lo incluye) y \fBbaton config\fR muestra en Logs lo que viene de la global. No necesita proyecto: fuera de uno solo cuenta la global.
 .TP
 .B \-\-proyecto
 En \fBset\fR y \fBunset\fR, escribe en \fI.baton/config.toml\fR del proyecto en vez del archivo global.
@@ -258,8 +264,14 @@ No pregunta.
 Crea \fI./nombre/baton\-plugin.toml\fR con un manifiesto para empezar (que pasa \fBplugin validate\fR) y dice los siguientes pasos. No pisa uno existente. No necesita proyecto.
 .SS baton validate [plan]
 Valida la configuración y los planes (todos, o solo el indicado) y muestra los errores con \fIarchivo:línea:columna\fR. No ejecuta nada. Sale con 1 si hay errores.
+.TP
+.B \-\-json
+Imprime un JSON por stdout (\fBok\fR, \fBerrors\fR, \fBwarnings\fR y, por archivo, sus diagnósticos con línea y columna) en vez del texto; el código de salida es el mismo.
 .SS baton config
 Abre la configuración del proyecto, con pestañas \fBDestinos\fR, \fBLogs\fR, \fBCredenciales\fR y \fBPlanes\fR. Permite probar la conexión de un destino y guardar con \fBctrl s\fR. \fBenter\fR sobre un plan, en la pestaña Planes, lo abre; \fBc\fR lo copia, \fBr\fR lo renombra y \fBd\fR lo elimina. Necesita una terminal.
+.TP
+.B \-\-json
+En vez de abrir la pantalla, imprime la configuración del proyecto como JSON (destinos, logs, ambientes y planes; nunca valores de credenciales ni los comandos de los proveedores de secretos). No necesita terminal.
 .SS baton demo
 Recorre todas las pantallas con datos de mentira, sin tocar ningún proyecto. Sirve para conocer baton y para mostrarlo.
 .TP

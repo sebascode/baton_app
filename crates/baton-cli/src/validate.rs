@@ -6,23 +6,51 @@ use std::process::ExitCode;
 
 use baton_store::{Diagnostic, Project, check_config, check_plan};
 
+use crate::report;
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
 #[derive(Default)]
 struct Tally {
     errors: usize,
     warnings: usize,
+    /// Con `--json`: un objeto por archivo revisado, en vez de imprimir.
+    files: Option<Vec<serde_json::Value>>,
+}
+
+fn diagnostic_json(d: &Diagnostic) -> serde_json::Value {
+    serde_json::json!({
+        "severity": if d.is_error() { "error" } else { "warning" },
+        "line": d.position.map(|p| p.line),
+        "column": d.position.map(|p| p.col),
+        "message": d.message,
+    })
 }
 
 impl Tally {
     /// Imprime los diagnósticos (stderr) y la línea de estado del archivo (stdout).
-    fn report(&mut self, what: &str, diagnostics: &[Diagnostic], detail: Option<String>) {
-        for d in diagnostics {
-            eprintln!("{d}");
-        }
+    fn report(
+        &mut self,
+        what: &str,
+        diagnostics: &[Diagnostic],
+        detail: Option<String>,
+        steps: Option<(usize, usize)>,
+    ) {
         let errors = diagnostics.iter().filter(|d| d.is_error()).count();
         self.errors += errors;
         self.warnings += diagnostics.len() - errors;
+        if let Some(files) = &mut self.files {
+            files.push(serde_json::json!({
+                "file": what,
+                "ok": errors == 0,
+                "steps": steps.map(|s| s.0),
+                "active_steps": steps.map(|s| s.1),
+                "diagnostics": diagnostics.iter().map(diagnostic_json).collect::<Vec<_>>(),
+            }));
+            return;
+        }
+        for d in diagnostics {
+            eprintln!("{d}");
+        }
         match (errors, detail) {
             (0, Some(d)) => println!("{}", tr!("✓ {what} ({d})", what = what, d = d)),
             (0, None) => println!("{}", tr!("✓ {what}", what = what)),
@@ -31,11 +59,14 @@ impl Tally {
     }
 }
 
-pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
-    let mut tally = Tally::default();
+pub fn run(project: &Project, only: Option<&str>, json: bool) -> ExitCode {
+    let mut tally = Tally {
+        files: json.then(Vec::new),
+        ..Tally::default()
+    };
 
     let config = check_config(project);
-    if let Some(g) = baton_store::global::global_path().filter(|g| g.exists()) {
+    if let Some(g) = baton_store::global::global_path().filter(|g| g.exists() && !json) {
         println!(
             "{}",
             tr!("  configuración global: {path}", path = g.display())
@@ -44,6 +75,7 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
     tally.report(
         &project.display_path(&project.config_path()),
         &config.diagnostics,
+        None,
         None,
     );
 
@@ -60,7 +92,7 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
         }
         None => project.list_plans(),
     };
-    if names.is_empty() {
+    if names.is_empty() && !json {
         println!(
             "{}",
             tr!(
@@ -82,10 +114,23 @@ pub fn run(project: &Project, only: Option<&str>) -> ExitCode {
             &project.display_path(&project.plan_path(name)),
             &checked.diagnostics,
             detail,
+            checked
+                .value
+                .as_ref()
+                .map(|p| (p.steps.len(), p.active_steps().count())),
         );
     }
 
-    println!("{}", summary(tally.errors, tally.warnings));
+    if let Some(files) = tally.files.take() {
+        report::json(&serde_json::json!({
+            "ok": tally.errors == 0,
+            "errors": tally.errors,
+            "warnings": tally.warnings,
+            "files": files,
+        }));
+    } else {
+        println!("{}", summary(tally.errors, tally.warnings));
+    }
     if tally.errors > 0 {
         ExitCode::from(EXIT_INVALID)
     } else {

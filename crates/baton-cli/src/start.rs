@@ -12,6 +12,7 @@ use baton_core::{Config, Plan};
 use baton_store::scaffold::{CreateError, create_plan};
 use baton_store::{Project, check_config, check_plan};
 
+use crate::report;
 use crate::tui_run::{Flags, RunDriver};
 use crate::{EXIT_INVALID, EXIT_USAGE};
 
@@ -83,7 +84,7 @@ pub fn create(project: &Project, given: &str) -> ExitCode {
             ExitCode::from(EXIT_USAGE)
         }
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::from(EXIT_INVALID)
         }
     }
@@ -107,7 +108,7 @@ pub fn start(project: &Project, given: &str) -> ExitCode {
                 )
             ),
             Err(e) => {
-                eprintln!("{}", tr!("error: {e}", e = e));
+                report::error(&e);
                 return ExitCode::from(EXIT_INVALID);
             }
         }
@@ -120,10 +121,7 @@ fn has_terminal() -> bool {
 }
 
 fn needs_terminal(plan: &str) -> ExitCode {
-    eprintln!(
-        "{}",
-        tr!("error: baton start necesita una terminal interactiva")
-    );
+    report::error(tr!("baton start necesita una terminal interactiva"));
     eprintln!(
         "{}",
         tr!(
@@ -147,7 +145,7 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     let empty = plan.steps.is_empty();
     // un ambiente inválido no impide abrir el plan (el editor sirve para arreglarlo): se avisa
     let ambiente = crate::ambiente::resolve(None, &config).unwrap_or_else(|e| {
-        eprintln!("{}", tr!("aviso: {e}; se ignora", e = e));
+        report::warn(tr!("{e}; se ignora", e = e));
         None
     });
     let mut driver = RunDriver::new(
@@ -180,7 +178,7 @@ pub fn open(project: &Project, plan_name: &str, editor_first: bool) -> ExitCode 
     match baton_tui::demo::run_app(app, &mut driver) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{}", tr!("error: {e}", e = e));
+            report::error(&e);
             ExitCode::FAILURE
         }
     }

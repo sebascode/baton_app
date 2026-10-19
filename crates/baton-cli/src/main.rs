@@ -16,6 +16,7 @@ mod plans_cmd;
 mod plugin_add;
 mod plugin_cmd;
 mod proc;
+mod report;
 mod run;
 mod settings_cmd;
 mod shell_init;
@@ -91,6 +92,9 @@ enum Command {
     Validate {
         /// Nombre del plan (archivo en baton/plans/)
         plan: Option<String>,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Ejecuta un plan directo, sin pasar por la vista previa (también: `baton <plan>`)
     Run(RunArgs),
@@ -252,6 +256,9 @@ enum Command {
         /// Cuántas líneas de la salida del paso que falló se muestran
         #[arg(long, default_value_t = 15, value_name = "N")]
         lines: usize,
+        /// Salida para máquinas: un JSON por stdout (los códigos de salida no cambian)
+        #[arg(long)]
+        json: bool,
     },
     /// Documenta un plan en markdown con diagramas mermaid (sin valores de credenciales)
     Docs {
@@ -341,9 +348,16 @@ enum Command {
         /// Cuántas ejecuciones se muestran, de la más reciente a la más antigua
         #[arg(long, default_value_t = 20, value_name = "N")]
         limit: usize,
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
     },
     /// Muestra la configuración del proyecto (destinos, logs, credenciales y planes)
-    Config,
+    Config {
+        /// En vez de abrir la pantalla, imprime la configuración como JSON (sin valores secretos)
+        #[arg(long)]
+        json: bool,
+    },
     /// Recorre las pantallas con datos falsos (no toca ningún proyecto)
     Demo {
         /// Acorta las esperas del escenario para probar rápido
@@ -361,7 +375,11 @@ enum Command {
 #[derive(Subcommand)]
 enum SettingsAction {
     /// Muestra cada clave con su valor y de dónde sale (es lo que hace sin subcomando)
-    List,
+    List {
+        /// Salida para máquinas: un JSON por stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Imprime el valor efectivo de una clave (el origen va a stderr)
     Get {
         /// Por ejemplo defaults.engine, logs.format, ui.confirm_exit
@@ -632,7 +650,8 @@ fn main() -> ExitCode {
             None => std::env::current_dir().unwrap_or_default(),
         };
         let action = match action {
-            None | Some(SettingsAction::List) => settings_cmd::Action::List,
+            None => settings_cmd::Action::List { json: false },
+            Some(SettingsAction::List { json }) => settings_cmd::Action::List { json: *json },
             Some(SettingsAction::Get { clave }) => settings_cmd::Action::Get {
                 clave: clave.clone(),
             },
@@ -658,7 +677,7 @@ fn main() -> ExitCode {
         None => match std::env::current_dir() {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("error: no se pudo leer la carpeta actual: {e}");
+                report::error(format!("no se pudo leer la carpeta actual: {e}"));
                 return ExitCode::from(EXIT_USAGE);
             }
         },
@@ -769,17 +788,17 @@ fn main() -> ExitCode {
             report_near(&near);
             return ExitCode::from(EXIT_USAGE);
         }
-        eprintln!(
-            "error: no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
+        report::error(format!(
+            "no se encontró un proyecto baton desde {} hacia arriba (se busca baton/plans/ o .baton/)",
             start.display()
-        );
-        eprintln!("  para crear uno aquí: baton init   (o baton import <archivo>)");
+        ));
+        report::hint("para crear uno aquí: baton init   (o baton import <archivo>)");
         return ExitCode::from(EXIT_USAGE);
     };
 
     match command {
-        Command::Validate { plan } => validate::run(&project, plan.as_deref()),
-        Command::Config => config(&project),
+        Command::Validate { plan, json } => validate::run(&project, plan.as_deref(), json),
+        Command::Config { json } => config(&project, json),
         Command::Run(args) => {
             let (plan, flags) = args.into();
             match pick::resolve(&project, plan, "run", "ejecutar") {
@@ -808,7 +827,9 @@ fn main() -> ExitCode {
             interactivo,
         } => {
             let Ok(timeout) = timeout.parse::<baton_core::units::Dur>() else {
-                eprintln!("error: --timeout '{timeout}' no es una duración (ej. 30s, 5m)");
+                report::error(format!(
+                    "--timeout '{timeout}' no es una duración (ej. 30s, 5m)"
+                ));
                 return ExitCode::from(EXIT_USAGE);
             };
             db_cmd::run(
@@ -856,16 +877,18 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::History { plan, limit } => {
+        Command::History { plan, limit, json } => {
             match pick::resolve(&project, plan, "history", "consultar") {
-                Ok(plan) => history_cmd::run(&project, &plan, limit),
+                Ok(plan) => history_cmd::run(&project, &plan, limit, json),
                 Err(code) => code,
             }
         }
-        Command::Last { plan, lines } => match pick::resolve(&project, plan, "last", "consultar") {
-            Ok(plan) => last::run(&project, &plan, lines),
-            Err(code) => code,
-        },
+        Command::Last { plan, lines, json } => {
+            match pick::resolve(&project, plan, "last", "consultar") {
+                Ok(plan) => last::run(&project, &plan, lines, json),
+                Err(code) => code,
+            }
+        }
         Command::Docs {
             plan,
             salida,
@@ -968,9 +991,12 @@ fn near_subcommand(args: &[OsString]) -> Option<NearSubcommand> {
 }
 
 fn report_near(near: &NearSubcommand) {
-    eprintln!("error: '{}' no es un comando de baton", near.word);
-    eprintln!("  ¿quisiste decir `baton {}`?", near.suggestion);
-    eprintln!("  si es un plan, ejecútalo con: baton run {}", near.word);
+    report::error(format!("'{}' no es un comando de baton", near.word));
+    report::hint(format!("¿quisiste decir `baton {}`?", near.suggestion));
+    report::hint(format!(
+        "si es un plan, ejecútalo con: baton run {}",
+        near.word
+    ));
 }
 
 /// Busca el proyecto desde `start` hacia arriba. Si lo encuentra en una carpeta superior (se está
@@ -992,12 +1018,15 @@ fn open_project(start: &Path) -> Option<Project> {
 fn require_terminal(command: &str) -> bool {
     let ok = std::io::stdout().is_terminal() && std::io::stdin().is_terminal();
     if !ok {
-        eprintln!("error: baton {command} necesita una terminal interactiva");
+        report::error(format!("baton {command} necesita una terminal interactiva"));
     }
     ok
 }
 
-fn config(project: &Project) -> ExitCode {
+fn config(project: &Project, json: bool) -> ExitCode {
+    if json {
+        return config_json(project);
+    }
     if !require_terminal("config") {
         return ExitCode::from(EXIT_USAGE);
     }
@@ -1007,7 +1036,7 @@ fn config(project: &Project) -> ExitCode {
     }
     let valid = checked.is_valid();
     let Some(config) = checked.value.filter(|_| valid) else {
-        eprintln!("error: corrige la configuración antes de abrirla (baton validate)");
+        report::error("corrige la configuración antes de abrirla (baton validate)".to_string());
         return ExitCode::from(EXIT_INVALID);
     };
     let name = project.root.file_name().map_or_else(
@@ -1024,10 +1053,59 @@ fn config(project: &Project) -> ExitCode {
             None => ExitCode::SUCCESS,
         },
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }
+}
+
+/// `baton config --json`: la configuración del proyecto sin abrir la pantalla. Solo referencias
+/// y nombres: nunca valores de credenciales ni comandos de los proveedores de secretos.
+fn config_json(project: &Project) -> ExitCode {
+    use baton_core::config::Target;
+    use serde_json::{Value, json};
+    let checked = baton_store::check_project_config(project);
+    for d in &checked.diagnostics {
+        eprintln!("{d}");
+    }
+    let valid = checked.is_valid();
+    let Some(c) = checked.value.filter(|_| valid) else {
+        report::error("corrige la configuración antes de leerla (baton validate)".to_string());
+        return ExitCode::from(EXIT_INVALID);
+    };
+    let targets: Vec<Value> = c
+        .targets
+        .iter()
+        .map(|(name, t)| match t {
+            Target::Ssh(s) => json!({
+                "name": name, "type": "ssh", "host": s.host, "port": s.port, "user": s.user,
+                "remote_dir": s.remote_dir, "bastion": s.bastion, "sync": s.sync,
+            }),
+            other => json!({ "name": name, "type": other.kind_label() }),
+        })
+        .collect();
+    let value = json!({
+        "project": project.root.display().to_string(),
+        "defaults": {
+            "target": c.defaults.target, "ambiente": c.defaults.ambiente,
+            "secrets": c.defaults.secrets, "engine": c.defaults.engine,
+        },
+        "targets": targets,
+        "logs": {
+            "local": c.logs.local, "remote": c.logs.remote,
+            "format": match c.logs.format {
+                baton_core::config::LogFormat::Text => "text",
+                baton_core::config::LogFormat::Json => "json",
+            },
+        },
+        "ambientes": c.ambientes.iter()
+            .map(|(n, a)| json!({ "name": n, "protected": a.protegido }))
+            .collect::<Vec<_>>(),
+        "secret_providers": c.secrets.keys().collect::<Vec<_>>(),
+        "plans": project.list_plans(),
+    });
+    report::json(&value);
+    ExitCode::SUCCESS
 }
 
 fn demo(fast: bool, screen: Screen) -> ExitCode {
@@ -1037,7 +1115,7 @@ fn demo(fast: bool, screen: Screen) -> ExitCode {
     match baton_tui::demo::run(fast, screen) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
+            report::error(format!("{e}"));
             ExitCode::FAILURE
         }
     }

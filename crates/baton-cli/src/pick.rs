@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use baton_store::Project;
 
 use crate::EXIT_USAGE;
+use crate::report;
 
 /// `command` es el subcomando (`run`) y `verb` lo que se hará con el plan (`ejecutar`).
 pub fn resolve(
@@ -26,7 +27,7 @@ pub fn resolve(
     let plans = project.list_plans();
     match plans.as_slice() {
         [] => {
-            eprintln!("{}", tr!("error: este proyecto no tiene planes todavía"));
+            report::error(tr!("este proyecto no tiene planes todavía"));
             eprintln!("{}", tr!("  crea uno con:"));
             eprintln!(
                 "{}",
@@ -54,13 +55,10 @@ pub fn resolve(
             ask(many, verb).ok_or(ExitCode::from(EXIT_USAGE))
         }
         many => {
-            eprintln!(
-                "{}",
-                tr!(
-                    "error: hay varios planes, indica cuál: baton {command} <plan>",
-                    command = command
-                )
-            );
+            report::error(tr!(
+                "hay varios planes, indica cuál: baton {command} <plan>",
+                command = command
+            ));
             eprintln!("{}", tr!("  planes: {list}", list = many.join(", ")));
             Err(ExitCode::from(EXIT_USAGE))
         }
