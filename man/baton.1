@@ -309,6 +309,9 @@ Si baton se instaló con Homebrew, \fBupdate\fR no lo toca y te indica \fBbrew u
 .B \-\-check
 Solo avisa si hay una versión nueva; no descarga ni instala nada.
 .TP
+.B \-\-verify
+Además de la suma sha256, comprueba la \fBatestación de procedencia\fR de la descarga con \fBgh attestation verify\fR: una firma (Sigstore, sin llaves propias) que prueba que el archivo lo construyó el workflow \fBrelease\fR del repositorio de baton en GitHub. Necesita la GitHub CLI (\fBgh\fR) instalada y con sesión iniciada; si la comprobación falla, o falta \fBgh\fR, no se instala nada. No se combina con \fB\-\-check\fR ni \fB\-\-rollback\fR.
+.TP
 .B \-\-rollback
 Vuelve a la versión que había antes de la última actualización (\fBbaton.prev\fR).
 .SS baton (sin argumentos)

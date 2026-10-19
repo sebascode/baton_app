@@ -40,7 +40,7 @@ Elige una:
 curl -fsSL https://raw.githubusercontent.com/sebascode/baton_app/main/scripts/get.sh | sh
 ```
 
-Con otra versión o carpeta: `... | sh -s -- --version X.Y.Z --dir /usr/local/bin`.
+Con otra versión o carpeta: `... | sh -s -- --version X.Y.Z --dir /usr/local/bin`. Con `--verify` comprueba además la firma de procedencia (ver [Verificar un release](#verificar-un-release)).
 
 **Homebrew** (macOS y Linux), compilando desde el código fuente:
 
@@ -74,9 +74,21 @@ Para volver a la versión anterior: `scripts/install.sh --rollback`. Comprueba c
 baton update --check      # ¿hay una versión nueva? (una consulta a GitHub, no descarga nada)
 baton update              # baja el binario del release, verifica su sha256 y lo reemplaza
 baton update --rollback   # vuelve a la versión anterior
+baton update --verify     # además del sha256, verifica la firma de procedencia (necesita gh)
 ```
 
 Cada release de GitHub trae binarios para Linux (x86_64 y aarch64) y macOS (Apple Silicon). `baton update` necesita `curl`, `tar` y `sha256sum` (o `shasum`), y nunca consulta la red por su cuenta.
+
+### Verificar un release
+
+Desde la 0.12.0 cada archivo de un release (tarballs, `.deb` y `.rpm`) lleva una **atestación de procedencia** firmada con Sigstore por el workflow `release` de este repositorio: prueba que el archivo lo construyó ese workflow, desde el commit del tag, y no se subió a mano. El `.sha256` solo detecta una descarga corrupta; la atestación detecta un archivo que no salió de la construcción oficial. Para comprobarla hace falta la [GitHub CLI](https://cli.github.com) con sesión iniciada:
+
+```sh
+gh attestation verify baton-vX.Y.Z-linux-x86_64.tar.gz --repo sebascode/baton_app \
+  --signer-workflow sebascode/baton_app/.github/workflows/release.yml
+```
+
+`get.sh --verify` y `baton update --verify` hacen esa misma comprobación antes de instalar y, si falla, no instalan nada. Es opcional: sin `--verify` se sigue comprobando el sha256. Los releases anteriores a la 0.12.0 no tienen atestación.
 
 ## Cómo usarlo
 
@@ -196,7 +208,7 @@ Qué se fue agregando y cuándo (las fechas son las de los commits del repositor
 | 2026-10-17 | **0.10.4.** Opción global `--quiet` / `-q` para callar los avisos de contexto (`proyecto:`, `plan:`, `ambiente:`), alias `-n` para `--dry-run`, `NO_COLOR` en la TUI y un solo formato para errores de plan inexistente. |
 | 2026-10-18 | **0.10.5.** `baton docs` más completo: índice, resumen en tabla, cómo se usa, variables, destinos con su host (sin usuarios), planes y ambientes del proyecto y la mantención de `baton ops`. Cada ejecución registra con qué ambiente corrió (`last`, `history`, la TUI) y `--resume` y `rollback` avisan si fue otro; tecla `a` para elegirlo en la TUI. `baton plugin add <nombre>` copia al proyecto un plugin global sin volver a bajarlo, y el editor tiene el campo `dry-run`. Más textos en inglés (`last`, `history`, `update`, `import`, `db`, `validate`). |
 | 2026-10-18 | **0.11.0.** `baton docs` más completo: cabecera con la versión de baton y el hash del plan, notas manuales que se conservan al regenerar con `-o` (entre `<!-- baton:notas-manuales -->` y su cierre), duración estimada, y secciones de requisitos (programas que necesita el plan), resultados (dónde quedan logs, estado y respaldos) y qué hacer si algo falla. |
-| 2026-10-19 | **0.12.0.** Plugins con capacidades (`api = 2`): respaldo y restauración en el rollback, revisión de contenido destructivo y prueba de conexión de credenciales, con un plugin de ejemplo para MariaDB 11+. `baton ops` en la interfaz: selector de ambiente (`a`) y ventana para escribirle al comando en curso (`i`). `--help` y manual en inglés, flags en inglés (los nombres en español siguen como alias), `--json` en `validate`, `history`, `last`, `config` y `settings list`, `--no-color`, `FORCE_COLOR`, `BATON_ASCII` y paleta `terminal`. |
+| 2026-10-19 | **0.12.0.** Plugins con capacidades (`api = 2`): respaldo y restauración en el rollback, revisión de contenido destructivo y prueba de conexión de credenciales, con un plugin de ejemplo para MariaDB 11+. `baton ops` en la interfaz: selector de ambiente (`a`) y ventana para escribirle al comando en curso (`i`). `--help` y manual en inglés, flags en inglés (los nombres en español siguen como alias), `--json` en `validate`, `history`, `last`, `config` y `settings list`, `--no-color`, `FORCE_COLOR`, `BATON_ASCII` y paleta `terminal`. Los archivos del release llevan una atestación de procedencia firmada y `baton update --verify` y `get.sh --verify` la comprueban. |
 
 ## Desarrollo
 
