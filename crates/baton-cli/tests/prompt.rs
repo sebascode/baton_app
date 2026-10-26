@@ -370,3 +370,46 @@ fn zsh_if_installed_agrees_with_baton_prompt() {
         assert_eq!(out(&o), expected, "{}", dir.display());
     }
 }
+
+#[test]
+fn completions_work_in_bash_and_shell_init_includes_them_unless_asked_not_to() {
+    let tmp = tempfile::tempdir().unwrap();
+    for shell in ["bash", "zsh", "fish"] {
+        let o = baton_in(tmp.path(), &["completions", shell]);
+        assert_eq!(o.status.code(), Some(0), "{shell}");
+        assert!(out(&o).contains("baton"), "{shell}");
+        let with = out(&baton_in(tmp.path(), &["shell-init", shell]));
+        let without = out(&baton_in(
+            tmp.path(),
+            &["shell-init", shell, "--no-completions"],
+        ));
+        assert!(
+            with.contains(&out(&o)),
+            "{shell}: shell-init sin el completado"
+        );
+        assert!(
+            !without.contains(&out(&o)),
+            "{shell}: --no-completions lo dejó"
+        );
+    }
+    assert_eq!(
+        baton_in(tmp.path(), &["completions", "tcsh"]).status.code(),
+        Some(2)
+    );
+
+    // El script de bash completa de verdad un subcomando y una opción.
+    let script = format!(
+        "source <('{bin}' completions bash)\n\
+         COMP_WORDS=(baton ru); COMP_CWORD=1; _baton baton ru baton; echo \"sub:${{COMPREPLY[*]}}\"\n\
+         COMP_WORDS=(baton run --dry); COMP_CWORD=2; _baton baton --dry run; echo \"opt:${{COMPREPLY[*]}}\"\n",
+        bin = baton_bin()
+    );
+    let o = Command::new("bash")
+        .args(["-c", &script])
+        .env("PATH", path_with_baton())
+        .output()
+        .unwrap();
+    let text = out(&o);
+    assert!(text.contains("sub:run"), "{text}");
+    assert!(text.contains("opt:--dry-run"), "{text}");
+}
