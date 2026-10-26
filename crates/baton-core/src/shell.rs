@@ -253,6 +253,56 @@ end
     s
 }
 
+/// Subcomandos cuyo primer argumento es el nombre de un plan.
+pub const PLAN_COMMANDS: [&str; 10] = [
+    "run", "start", "rollback", "ops", "last", "history", "copy", "rename", "delete", "edit",
+];
+
+/// Completa nombres de plan (`baton <plan>` y `baton run <plan>`...) encima del completado
+/// estático. Pregunta a `baton __plans` solo cuando se pulsa tab, no en cada prompt.
+pub fn completion_extras(shell: Shell) -> String {
+    let words = PLAN_COMMANDS.join(" ");
+    match shell {
+        Shell::Bash => format!(
+            r#"
+_baton_dynamic() {{
+    _baton "$@"
+    local cur=${{COMP_WORDS[COMP_CWORD]}} first=${{COMP_WORDS[1]}} plans
+    [[ $cur == -* ]] && return
+    if (( COMP_CWORD == 1 )) || {{ (( COMP_CWORD == 2 )) && [[ " {words} " == *" $first "* ]]; }}; then
+        plans=$(command baton __plans 2>/dev/null) || return
+        COMPREPLY+=( $(compgen -W "$plans" -- "$cur") )
+    fi
+}}
+complete -F _baton_dynamic -o bashdefault -o default baton
+"#
+        ),
+        Shell::Zsh => format!(
+            r#"
+__baton_dynamic() {{
+    local out
+    local -a plans
+    if (( CURRENT == 2 )) || {{ (( CURRENT == 3 )) && [[ " {words} " == *" ${{words[2]}} "* ]]; }}; then
+        out=$(command baton __plans 2>/dev/null)
+        if [[ -n $out ]]; then
+            plans=(${{(f)out}})
+            compadd -a plans
+        fi
+    fi
+    _baton "$@"
+}}
+compdef __baton_dynamic baton
+"#
+        ),
+        Shell::Fish => format!(
+            r#"
+complete -c baton -n '__fish_use_subcommand' -f -a '(command baton __plans 2>/dev/null)'
+complete -c baton -n '__fish_seen_subcommand_from {words}' -f -a '(command baton __plans 2>/dev/null)'
+"#
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

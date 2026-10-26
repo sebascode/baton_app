@@ -298,7 +298,7 @@ La etiqueta en cian.
 .B \-\-no\-completions
 No agrega el completado con tab (por defecto, \fBshell\-init\fR también lo incluye).
 .SS baton completions [bash|zsh|fish]
-Imprime solo el completado con tab de comandos y opciones de \fBbaton\fR, con las descripciones en el idioma elegido. Sin argumento usa el shell de \fB$SHELL\fR. Para activarlo sin el prompt: \fBeval "$(baton completions bash)"\fR en \fI~/.bashrc\fR (en fish, \fBbaton completions fish | source\fR). Completa subcomandos y opciones, no los nombres de los planes. No necesita proyecto.
+Imprime solo el completado con tab de comandos y opciones de \fBbaton\fR, con las descripciones en el idioma elegido. Sin argumento usa el shell de \fB$SHELL\fR. Para activarlo sin el prompt: \fBeval "$(baton completions bash)"\fR en \fI~/.bashrc\fR (en fish, \fBbaton completions fish | source\fR). Completa subcomandos, opciones y los nombres de los planes del proyecto (donde un plan es el argumento: \fBbaton <tab>\fR, \fBbaton run <tab>\fR...); los consulta solo al pulsar tab. No necesita proyecto.
 .SS baton prompt
 Imprime la etiqueta del proyecto que contiene la carpeta actual, por ejemplo \fB(baton:app1)\fR. Fuera de un proyecto no imprime nada y sale con 1, de modo que sirve como condición en herramientas de prompt (por ejemplo starship).
 .TP

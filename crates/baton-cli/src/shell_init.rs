@@ -6,7 +6,8 @@ use clap::CommandFactory;
 use std::process::ExitCode;
 
 use baton_core::shell::{
-    DEFAULT_FORMAT, InitOptions, Shell, format_prompt, init_script, project_label,
+    DEFAULT_FORMAT, InitOptions, Shell, completion_extras, format_prompt, init_script,
+    project_label,
 };
 use baton_store::Project;
 
@@ -38,7 +39,20 @@ fn completion_script(shell: Shell) -> String {
     let mut cmd = crate::clap_i18n::localize(crate::Cli::command());
     let mut out = Vec::new();
     clap_complete::generate(target, &mut cmd, "baton", &mut out);
-    String::from_utf8_lossy(&out).into_owned()
+    let mut script = String::from_utf8_lossy(&out).into_owned();
+    script.push_str(&completion_extras(shell));
+    script
+}
+
+/// Los nombres de plan del proyecto, uno por línea (lo usa el completado con tab). Sin proyecto
+/// no imprime nada: un tab en cualquier carpeta no debe dar errores.
+pub fn plans(start: &Path) -> ExitCode {
+    if let Some(project) = Project::discover(start) {
+        for name in project.list_plans() {
+            println!("{name}");
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// Imprime el código para el shell dado o, sin él, el de `$SHELL`.

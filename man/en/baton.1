@@ -299,7 +299,7 @@ The label in cyan.
 .B \-\-no\-completions
 Does not add tab completion (by default \fBshell\-init\fR includes it too).
 .SS baton completions [bash|zsh|fish]
-Prints only the tab completion of the commands and options of \fBbaton\fR, with the descriptions in the chosen language. Without an argument it uses the shell in \fB$SHELL\fR. To enable it without the prompt: \fBeval "$(baton completions bash)"\fR in \fI~/.bashrc\fR (in fish, \fBbaton completions fish | source\fR). It completes subcommands and options, not the names of plans. It needs no project.
+Prints only the tab completion of the commands and options of \fBbaton\fR, with the descriptions in the chosen language. Without an argument it uses the shell in \fB$SHELL\fR. To enable it without the prompt: \fBeval "$(baton completions bash)"\fR in \fI~/.bashrc\fR (in fish, \fBbaton completions fish | source\fR). It completes subcommands, options and the names of the plans of the project (wherever a plan is the argument: \fBbaton <tab>\fR, \fBbaton run <tab>\fR...); it looks them up only when you press tab. It needs no project.
 .SS baton prompt
 Prints the label of the project that contains the current folder, for example \fB(baton:app1)\fR. Outside a project it prints nothing and exits with 1, so it works as a condition in prompt tools (for example starship).
 .TP

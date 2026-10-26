@@ -413,3 +413,76 @@ fn completions_work_in_bash_and_shell_init_includes_them_unless_asked_not_to() {
     assert!(text.contains("sub:run"), "{text}");
     assert!(text.contains("opt:--dry-run"), "{text}");
 }
+
+#[test]
+fn completions_offer_the_plans_of_the_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    project(root);
+    fs::write(
+        root.join("baton/plans/instalar.toml"),
+        "name = \"instalar\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("baton/plans/zeta.toml"), "name = \"zeta\"\n").unwrap();
+    fs::create_dir_all(root.join("web")).unwrap();
+
+    // Desde una subcarpeta, y sin proyecto no imprime nada ni falla.
+    assert_eq!(
+        out(&baton_in(&root.join("web"), &["__plans"])),
+        "instalar\nzeta\n"
+    );
+    let none = tempfile::tempdir().unwrap();
+    let o = baton_in(none.path(), &["__plans"]);
+    assert_eq!((o.status.code(), out(&o).as_str()), (Some(0), ""));
+
+    let bash = |words: &str, cword: usize| {
+        let script = format!(
+            "source <('{bin}' completions bash)\n\
+             COMP_WORDS=({words}); COMP_CWORD={cword}; _baton_dynamic baton '{cur}' baton; echo \"[${{COMPREPLY[*]}}]\"\n",
+            bin = baton_bin(),
+            cur = words.rsplit(' ').next().unwrap()
+        );
+        let o = Command::new("bash")
+            .args(["-c", &script])
+            .current_dir(root)
+            .env("PATH", path_with_baton())
+            .output()
+            .unwrap();
+        out(&o)
+    };
+    // Primer argumento: subcomandos y planes. Tras `run`: planes. Tras un plan o con `-`: no.
+    let first = bash("baton in", 1);
+    assert!(first.contains("instalar"), "{first}");
+    let after_run = bash("baton run z", 2);
+    assert!(after_run.contains("[zeta]"), "{after_run}");
+    let flags = bash("baton run --d", 2);
+    assert!(
+        !flags.contains("zeta") && flags.contains("--dry-run"),
+        "{flags}"
+    );
+    let third = bash("baton run instalar z", 3);
+    assert!(!third.contains("zeta"), "{third}");
+
+    // fish: las dos reglas están en el script y fish las carga sin errores.
+    if Command::new("fish").arg("--version").output().is_ok() {
+        let o = Command::new("fish")
+            .args([
+                "-c",
+                &format!(
+                    "'{bin}' completions fish | source; complete -C 'baton run z'",
+                    bin = baton_bin()
+                ),
+            ])
+            .current_dir(root)
+            .env("PATH", path_with_baton())
+            .output()
+            .unwrap();
+        assert!(
+            out(&o).contains("zeta"),
+            "{} {}",
+            out(&o),
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}

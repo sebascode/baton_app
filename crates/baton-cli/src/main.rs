@@ -217,6 +217,9 @@ enum Command {
         #[arg(long)]
         no_completions: bool,
     },
+    // Lo usa el completado con tab para ofrecer los planes del proyecto.
+    #[command(name = "__plans", hide = true)]
+    CompletePlans,
     /// Imprime el completado con tab de comandos y opciones para bash, zsh o fish
     Completions {
         /// bash, zsh o fish (por defecto, el de $SHELL)
@@ -654,6 +657,9 @@ fn main() -> ExitCode {
         }) => {
             return shell_init::init(shell.as_deref(), !*no_prefix, *color, !*no_completions);
         }
+        Some(Command::CompletePlans) => {
+            return shell_init::plans(&cli.dir.clone().unwrap_or_else(|| ".".into()));
+        }
         Some(Command::Completions { shell }) => return shell_init::completions(shell.as_deref()),
         Some(Command::Select {
             prompt,
@@ -1000,6 +1006,7 @@ fn main() -> ExitCode {
         }
         Command::ShellInit { .. }
         | Command::Completions { .. }
+        | Command::CompletePlans
         | Command::Prompt { .. }
         | Command::Select { .. }
         | Command::Multiselect { .. }
