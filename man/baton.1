@@ -121,7 +121,7 @@ Elimina el archivo de un plan y su estado en \fI.baton/state.json\fR; los logs y
 .B \-\-assume\-yes
 No pregunta.
 .PP
-Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
+Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBcompletions\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
 .SS baton init [plan]
 Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR, \fIDockerfile\fR y archivos \fI*.sql\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma los pasos: \fIbuild\fR (los Dockerfile) y \fIservicios\fR (los compose). Los \fI.sql\fR \fBno\fR se convierten en pasos (suelen ser el \fIinit.sql\fR que el contenedor de la base ya carga al arrancar): \fBinit\fR dice cuántos encontró, y para ejecutarlos se crea a mano un paso \fBsql\fR. Los scripts \fI*.sh\fR \fBno\fR se convierten en pasos: son de mantención (muchos son de recuperación o de datos) y quedan disponibles en \fBbaton ops\fR y en la tecla \fBm\fR de la vista del plan, organizados por carpeta; para que un script sea parte del plan se crea a mano un paso \fBscript\fR o \fBcomando\fR. Un script dentro de una carpeta con Dockerfile se ignora (es de la imagen). Siempre agrega \fI.baton/\fR al \fI.gitignore\fR. Con terminal, si la carpeta no está en un repositorio git ofrece iniciar uno, y si está dentro de uno cuya raíz es otra carpeta (y todavía no hay proyecto) ofrece crear el proyecto en esa raíz; sin terminal no pregunta nada. El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
 .TP
@@ -294,6 +294,11 @@ Solo define la función \fB__baton_ps1\fR y no toca el prompt (para quien arma s
 .TP
 .B \-\-color
 La etiqueta en cian.
+.TP
+.B \-\-no\-completions
+No agrega el completado con tab (por defecto, \fBshell\-init\fR también lo incluye).
+.SS baton completions [bash|zsh|fish]
+Imprime solo el completado con tab de comandos y opciones de \fBbaton\fR, con las descripciones en el idioma elegido. Sin argumento usa el shell de \fB$SHELL\fR. Para activarlo sin el prompt: \fBeval "$(baton completions bash)"\fR en \fI~/.bashrc\fR (en fish, \fBbaton completions fish | source\fR). Completa subcomandos y opciones, no los nombres de los planes. No necesita proyecto.
 .SS baton prompt
 Imprime la etiqueta del proyecto que contiene la carpeta actual, por ejemplo \fB(baton:app1)\fR. Fuera de un proyecto no imprime nada y sale con 1, de modo que sirve como condición en herramientas de prompt (por ejemplo starship).
 .TP
