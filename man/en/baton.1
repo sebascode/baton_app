@@ -103,7 +103,7 @@ Runs nothing: shows which commands it would run. It leaves no trace (it does not
 Skips the steps that finished well in the last run (it shows them as skipped).
 .TP
 .B \-\-assume\-yes
-Answers yes to manual gates when there is no terminal. Without this option, a plan with a manual gate fails before running if there is no terminal.
+Answers yes to manual gates when there is no terminal. Without this option, a plan with a manual gate fails before running if there is no terminal. To approve only the gate of one step, set \fBBATON_GATE_<ID>=yes\fR (the step id in capitals, with \fB_\fR in place of anything that is not a letter or digit: \fBdeploy\-web\fR is \fBBATON_GATE_DEPLOY_WEB\fR); a value that is not a yes or no warns and leaves the gate closed.
 .TP
 .BR \-\-backup ", " \-\-no\-backup
 Force making (or not making) a backup, over what the plan says.
@@ -740,6 +740,9 @@ If set, \fBrun\fR uses plain text and the helpers do not ask.
 .TP
 .B BATON_NONINTERACTIVE
 The helpers never ask.
+.TP
+.B BATON_GATE_<ID>
+With \fByes\fR, approves the manual gate of the step with that id when there is no terminal (without needing \fB\-\-assume\-yes\fR, which approves all of them). It does not approve confirmations of destructive statements.
 .TP
 .B BATON_<NAME>
 The answer to a question of \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR or \fBinput\fR.
