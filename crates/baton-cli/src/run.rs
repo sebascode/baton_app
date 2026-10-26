@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use baton_core::events::RunOutcome;
+use baton_core::plan::GateMode;
 use baton_core::tr;
 use baton_core::{Config, Plan};
 use baton_exec::{Mode, RunInput, RunOptions, spawn};
@@ -157,6 +158,7 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
     options.dry_run |= flags.dry_run;
     options.resume = flags.resume;
     options.assume_yes = flags.assume_yes;
+    options.approved_gates = approved_gates(&plan);
     options.interactive = false;
     options.ambiente = flags.ambiente.clone();
     if let Some(b) = flags.backup {
@@ -473,4 +475,40 @@ fn start_text(input: RunInput) -> ExitCode {
             ExitCode::from(EXIT_INVALID)
         }
     }
+}
+
+/// Pasos con gate manual cuya variable `BATON_GATE_<ID>` dice que sí. Un valor que no se entiende
+/// avisa y no aprueba nada: ante la duda el gate sigue cerrado.
+fn approved_gates(plan: &Plan) -> Vec<String> {
+    let mut approved = Vec::new();
+    for step in &plan.steps {
+        let manual = step
+            .gate
+            .as_ref()
+            .is_some_and(|g| g.mode == GateMode::Manual);
+        if !manual {
+            continue;
+        }
+        let var = baton_core::ask::gate_env_name(&step.id);
+        let Ok(value) = std::env::var(&var) else {
+            continue;
+        };
+        if value.trim().is_empty() {
+            continue;
+        }
+        match baton_core::ask::parse_yes_no(&value) {
+            Some(true) => approved.push(step.id.clone()),
+            Some(false) => {}
+            None => eprintln!(
+                "{}",
+                tr!(
+                    "{var}: «{value}» no es un sí/no; el gate de «{step}» sigue cerrado",
+                    var = var,
+                    value = value,
+                    step = step.name
+                )
+            ),
+        }
+    }
+    approved
 }

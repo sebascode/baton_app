@@ -246,6 +246,28 @@ fn manual_gates_need_assume_yes_without_a_terminal() {
 }
 
 #[test]
+fn a_gate_variable_approves_only_that_gate_without_a_terminal() {
+    let plan = format!(
+        "{PLAN}\n[[steps]]\nid = \"ok\"\nname = \"Confirmar\"\ntype = \"gate\"\n[steps.gate]\nmode = \"manual\"\n"
+    );
+    let fx = Fx::new(&plan);
+    let run = |value: &str| fx.baton_env(&["run", "instalar"], &[("BATON_GATE_OK", value)]);
+    let o = run("yes");
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("gate manual confirmado con BATON_GATE_OK"),
+        "{}",
+        out(&o)
+    );
+    let o = run("no");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).contains("BATON_GATE_OK=yes"), "{}", err(&o));
+    let o = run("quizas");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).contains("no es un sí/no"), "{}", err(&o));
+}
+
+#[test]
 fn auto_gates_run_their_checks_and_non_critical_failures_are_only_warnings() {
     let plan = format!(
         "{PLAN}\n[[steps]]\nid = \"ok\"\nname = \"Verificar\"\ntype = \"gate\"\ndepends_on = [\"db\"]\n\

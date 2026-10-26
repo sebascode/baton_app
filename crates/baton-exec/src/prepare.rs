@@ -40,6 +40,9 @@ pub struct RunOptions {
     pub interactive: bool,
     /// Responde "sí" a los gates manuales cuando no hay quién responda.
     pub assume_yes: bool,
+    /// Ids de pasos cuyo gate manual se aprobó de antemano (`BATON_GATE_<ID>=yes`), para cuando
+    /// no hay quién responda. Solo vale para el gate del propio paso.
+    pub approved_gates: Vec<String>,
     /// Salta los pasos que terminaron bien en la última ejecución.
     pub resume: bool,
     /// Espera entre reintentos de un comando.
@@ -62,6 +65,7 @@ impl RunOptions {
             auto_rollback: plan.options.auto_rollback,
             interactive: true,
             assume_yes: false,
+            approved_gates: Vec::new(),
             resume: false,
             retry_delay: Duration::from_secs(2),
             env: Vec::new(),
@@ -392,10 +396,16 @@ pub fn prepare_run(
         if let Some(g) = &s.gate {
             match g.mode {
                 GateMode::Auto => {}
-                GateMode::Manual if !opts.interactive && !opts.assume_yes && !opts.dry_run => {
+                GateMode::Manual
+                    if !opts.interactive
+                        && !opts.assume_yes
+                        && !opts.dry_run
+                        && !opts.approved_gates.contains(&s.id) =>
+                {
                     errors.push(tr!(
-                        "{step} tiene un gate manual y no hay terminal para responder: ejecuta en una terminal o usa --assume-yes",
-                        step = label(s)
+                        "{step} tiene un gate manual y no hay terminal para responder: ejecuta en una terminal, usa --assume-yes o define {var}=yes",
+                        step = label(s),
+                        var = baton_core::ask::gate_env_name(&s.id)
                     ));
                 }
                 GateMode::Manual => {}
@@ -921,9 +931,13 @@ mod tests {
         o.interactive = false;
         let e = prepare_run(&proj, &Config::default(), &p, &o).unwrap_err();
         assert!(e.0[0].contains("--assume-yes"), "{e}");
+        assert!(e.0[0].contains("BATON_GATE_G=yes"), "{e}");
         o.assume_yes = true;
         assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
         o.assume_yes = false;
+        o.approved_gates = vec!["g".into()];
+        assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
+        o.approved_gates.clear();
         o.dry_run = true; // en dry-run no se pregunta nada
         assert!(prepare_run(&proj, &Config::default(), &p, &o).is_ok());
     }
