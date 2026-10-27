@@ -126,3 +126,5 @@
 "`github:dueño/repo@versión` (un tag o un commit) o una carpeta local" = "`github:owner/repo@version` (a tag or a commit) or a local folder"
 "bash, zsh o fish (por defecto, el de $SHELL)" = "bash, zsh or fish (by default, the one in $SHELL)"
 "Además del sha256, verifica la firma de procedencia del release con `gh attestation verify` (necesita `gh` con sesión iniciada)" = "Besides the sha256, verifies the release provenance signature with `gh attestation verify` (needs `gh` signed in)"
+"Corre en segundo plano y vuelve; la retomas con `baton attach` (credenciales resueltas de antemano, como en CI)" = "Runs in the background and returns; resume it with `baton attach` (credentials resolved beforehand, as in CI)"
+"Se conecta a la ejecución en segundo plano de un plan (la que lanzó `baton run --detach`)" = "Connects to the background run of a plan (the one launched by `baton run --detach`)"

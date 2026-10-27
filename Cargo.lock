@@ -154,6 +154,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "humantime",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

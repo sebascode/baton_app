@@ -38,6 +38,10 @@ pub struct RunOptions {
     pub auto_rollback: bool,
     /// Hay alguien que pueda responder (reintentar, confirmar gates). Sin terminal es `false`.
     pub interactive: bool,
+    /// Corre en segundo plano (`baton run --detach`): alguien podrá responder gates y fallos
+    /// cuando se conecte, pero no hubo quién confirmara las credenciales, así que deben venir
+    /// resueltas como en CI.
+    pub detached: bool,
     /// Responde "sí" a los gates manuales cuando no hay quién responda.
     pub assume_yes: bool,
     /// Ids de pasos cuyo gate manual se aprobó de antemano (`BATON_GATE_<ID>=yes`), para cuando
@@ -64,6 +68,7 @@ impl RunOptions {
             backup: plan.options.backup,
             auto_rollback: plan.options.auto_rollback,
             interactive: true,
+            detached: false,
             assume_yes: false,
             approved_gates: Vec::new(),
             resume: false,
@@ -235,7 +240,7 @@ pub fn prepare_run(
 
     // Sin quién responda no se pregunta nada: las credenciales que falten deben venir ya
     // resueltas (archivo o variable de entorno), o se falla diciendo cuál y dónde se esperaba.
-    if !opts.interactive && !opts.dry_run {
+    if (!opts.interactive || opts.detached) && !opts.dry_run {
         for req in baton_core::required_credentials(plan, config) {
             for field in baton_core::fields_for(req.kind) {
                 if field.optional {
