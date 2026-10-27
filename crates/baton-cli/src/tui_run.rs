@@ -403,6 +403,11 @@ impl RunDriver {
         }
     }
 
+    /// Usa una ejecución que corre en otro proceso (`baton attach`) como si fuera la propia.
+    pub fn attach(&mut self, handle: RunHandle) {
+        self.handle = Some(handle);
+    }
+
     /// Abre la pantalla de mantención del plan (servicios, acciones y la salida en vivo).
     pub fn open_maintenance(&self, app: &mut App) {
         self.maintenance(app);
@@ -1289,6 +1294,10 @@ impl Driver for RunDriver {
         };
         while let Ok(ev) = h.events.try_recv() {
             match &ev {
+                // una ejecución que no lanzó este proceso (attach) dice aquí cuáles son sus pasos
+                RunEvent::RunStarted { steps, .. } => {
+                    self.run_steps = steps.iter().map(|s| s.id.clone()).collect();
+                }
                 RunEvent::RunFinished { outcome, .. } => self.outcome = Some(*outcome),
                 RunEvent::StepFailed { step, .. } => self.failed_step = Some(*step),
                 RunEvent::StepStarted { .. } => self.failed_step = None,

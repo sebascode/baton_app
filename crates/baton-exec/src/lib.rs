@@ -2,6 +2,7 @@
 //! `baton_core::events::RunEvent` y responde a `RunCommand`.
 
 pub mod adhoc;
+pub mod detach;
 mod export;
 mod gate;
 pub mod prepare;

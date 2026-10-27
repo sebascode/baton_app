@@ -10,6 +10,7 @@ mod clap_i18n;
 mod config_run;
 mod db_cmd;
 mod db_session;
+mod detach_cmd;
 mod docs_cmd;
 mod history_cmd;
 mod import;
@@ -264,6 +265,14 @@ enum Command {
         #[arg(long = "assume-yes", alias = "yes")]
         yes: bool,
     },
+    /// Se conecta a la ejecución en segundo plano de un plan (la que lanzó `baton run --detach`)
+    Attach {
+        /// Nombre del plan; sin él, el único del proyecto o se pregunta
+        plan: Option<String>,
+    },
+    // Lo que corre el proceso desacoplado de `baton run --detach`.
+    #[command(name = "__daemon", hide = true)]
+    Daemon(DaemonArgs),
     /// Deshace lo que hizo la última ejecución de un plan (corre los `rollback` de sus pasos)
     Rollback {
         /// Nombre del plan; sin él, el único del proyecto o se pregunta
@@ -503,6 +512,25 @@ struct RunArgs {
     /// (sin él: la variable BATON_AMBIENTE o `ambiente` en [defaults] de .baton/config.toml)
     #[arg(long = "env", alias = "ambiente", value_name = "ENV")]
     ambiente: Option<String>,
+    /// Corre en segundo plano y vuelve; la retomas con `baton attach` (credenciales resueltas de antemano, como en CI)
+    #[arg(long, conflicts_with_all = ["no_tui", "dry_run"])]
+    detach: bool,
+}
+
+// Lo que `baton run --detach` le pasa al proceso en segundo plano.
+#[derive(Args, Debug, Clone)]
+struct DaemonArgs {
+    plan: String,
+    #[arg(long)]
+    resume: bool,
+    #[arg(long)]
+    assume_yes: bool,
+    #[arg(long, conflicts_with = "no_backup")]
+    backup: bool,
+    #[arg(long)]
+    no_backup: bool,
+    #[arg(long = "env", value_name = "ENV")]
+    ambiente: Option<String>,
 }
 
 /// Solo para leer las opciones de `baton <plan> ...` con el mismo parser de `run`.
@@ -532,6 +560,7 @@ impl From<RunArgs> for (Option<String>, run::RunFlags) {
                 assume_yes: a.assume_yes,
                 backup,
                 ambiente: a.ambiente,
+                detach: a.detach,
             },
         )
     }
@@ -875,6 +904,25 @@ fn main() -> ExitCode {
                 Ok(plan) => run::run(&project, &plan, flags),
                 Err(code) => code,
             }
+        }
+        Command::Attach { plan } => match pick::resolve(&project, plan, "attach", "conectar") {
+            Ok(plan) => detach_cmd::attach(&project, &plan),
+            Err(code) => code,
+        },
+        Command::Daemon(a) => {
+            let backup = match (a.backup, a.no_backup) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
+            let flags = run::RunFlags {
+                resume: a.resume,
+                assume_yes: a.assume_yes,
+                backup,
+                ambiente: a.ambiente,
+                ..run::RunFlags::default()
+            };
+            detach_cmd::daemon(&project, &a.plan, flags)
         }
         Command::Rollback { plan, ambiente } => {
             match pick::resolve(&project, plan, "rollback", "deshacer") {

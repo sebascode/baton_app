@@ -57,6 +57,16 @@ pub struct RunHandle {
 }
 
 impl RunHandle {
+    /// Una conexión armada con canales que llenan otros (un cliente de `baton attach`): no hay
+    /// hilo de runner que esperar.
+    pub fn from_channels(events: Rx<RunEvent>, commands: Tx<RunCommand>) -> RunHandle {
+        RunHandle {
+            events,
+            commands,
+            thread: None,
+        }
+    }
+
     /// Espera a que termine el hilo del runner.
     pub fn wait(mut self) {
         if let Some(t) = self.thread.take() {

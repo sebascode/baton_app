@@ -351,8 +351,18 @@ fn shortcut_items(s: &RunState) -> Vec<(&'static str, &'static str)> {
         ),
         ("r", tk!("rollback")),
         ("s", tk!("saltar gate")),
-        ("q", tk!("salir")),
+        (
+            "q",
+            if s.detached {
+                tk!("desconectar")
+            } else {
+                tk!("salir")
+            },
+        ),
     ]
+    .into_iter()
+    .chain(s.detached.then_some(("x", tk!("abortar"))))
+    .collect()
 }
 
 pub(crate) fn log_glyph(kind: LogKind) -> &'static str {

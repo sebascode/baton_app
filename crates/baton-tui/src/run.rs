@@ -115,6 +115,9 @@ pub struct RunState {
     /// Gate manual esperando respuesta: paso y pregunta.
     pub ask: Option<(usize, String)>,
     pub quit_confirm: bool,
+    /// Conectado a una ejecución en segundo plano (`baton attach`): `q` solo se desconecta (la
+    /// ejecución sigue) y abortar es `x`.
+    pub detached: bool,
     pub failure_cursor: usize,
     /// Mostrar el pipeline (pantalla 9) en lugar de la pantalla de la fase actual.
     pub view_pipeline: bool,
@@ -144,6 +147,7 @@ impl Default for RunState {
             cursor_on: true,
             ask: None,
             quit_confirm: false,
+            detached: false,
             failure_cursor: 0,
             view_pipeline: false,
             log_view: false,
@@ -197,6 +201,7 @@ impl RunState {
                             gate: None,
                         })
                         .collect(),
+                    detached: self.detached,
                     ..RunState::default()
                 };
             }
@@ -539,6 +544,8 @@ impl RunState {
         }
         let options = self.failure_options();
         match key.code {
+            KeyCode::Char('q') | KeyCode::Esc if self.detached => return Some(RunAction::Quit),
+            KeyCode::Char('x') if self.detached => self.quit_confirm = true,
             KeyCode::Char('q') | KeyCode::Esc => self.quit_confirm = true,
             KeyCode::Char('l') => self.open_log_view(),
             KeyCode::Up | KeyCode::Char('k') => {
@@ -631,6 +638,8 @@ impl RunState {
             KeyCode::Char('s') if self.has_active_gate() => {
                 return Some(RunAction::Command(RunCommand::SkipGate));
             }
+            KeyCode::Char('q') | KeyCode::Esc if self.detached => return Some(RunAction::Quit),
+            KeyCode::Char('x') if self.detached => self.quit_confirm = true,
             KeyCode::Char('q') | KeyCode::Esc => self.quit_confirm = true,
             _ => {}
         }
@@ -847,6 +856,44 @@ mod tests {
         // enter no confirma la salida: solo s o y
         s.handle_key(key(KeyCode::Char('q')));
         assert_eq!(s.handle_key(key(KeyCode::Enter)), None);
+    }
+
+    #[test]
+    fn attached_q_only_disconnects_and_x_is_what_aborts() {
+        let mut s = started(2);
+        s.detached = true;
+        s.apply(RunEvent::StepStarted { step: 0 });
+        // un reinicio de la ejecución (otro RunStarted) no pierde que es una conexión
+        s.apply(RunEvent::RunStarted {
+            plan: "p".into(),
+            root: ".".into(),
+            badges: vec![],
+            steps: vec![],
+        });
+        assert!(s.detached);
+        for quit in [KeyCode::Char('q'), KeyCode::Esc] {
+            assert_eq!(s.handle_key(key(quit)), Some(RunAction::Quit));
+            assert!(!s.quit_confirm);
+        }
+        assert_eq!(s.handle_key(key(KeyCode::Char('x'))), None);
+        assert!(s.quit_confirm);
+        assert_eq!(
+            s.handle_key(key(KeyCode::Char('s'))),
+            Some(RunAction::Command(RunCommand::Abort))
+        );
+    }
+
+    #[test]
+    fn attached_q_also_disconnects_from_the_failure_screen() {
+        let mut s = started(2);
+        s.detached = true;
+        s.apply(RunEvent::StepFailed {
+            step: 1,
+            failure: failure(FailureKind::Other, None),
+        });
+        assert_eq!(s.handle_key(key(KeyCode::Char('q'))), Some(RunAction::Quit));
+        s.handle_key(key(KeyCode::Char('x')));
+        assert!(s.quit_confirm);
     }
 
     #[test]

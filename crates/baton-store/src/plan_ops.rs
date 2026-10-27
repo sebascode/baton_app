@@ -16,7 +16,7 @@ use crate::state::State;
 
 /// Nombres que no se pueden usar: son subcomandos de baton y ganarían sobre el atajo
 /// `baton <plan>`, así que un plan con ese nombre no se podría ejecutar así.
-pub const RESERVED_NAMES: [&str; 29] = [
+pub const RESERVED_NAMES: [&str; 30] = [
     "ops",
     "run",
     "config",
@@ -46,6 +46,7 @@ pub const RESERVED_NAMES: [&str; 29] = [
     "settings",
     "docs",
     "plugin",
+    "attach",
 ];
 
 #[derive(Debug)]

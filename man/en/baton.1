@@ -110,6 +110,11 @@ Force making (or not making) a backup, over what the plan says.
 .TP
 .BI \-\-env " environment"
 Environment: credentials folder and value of \fB{ambiente}\fR in commands. See \fBambiente\fR in the CONCEPTS section.
+.TP
+.B \-\-detach
+Runs the plan in the background and returns: a process without a terminal keeps running even if you close this one. Everything is validated before launching it and problems show here. Since nobody confirms the credentials, they must already be resolved (file, variable or provider), as in CI; manual gates and failures wait until someone connects with \fBbaton attach\fR. It does not combine with \fB\-\-no\-tui\fR or \fB\-\-dry\-run\fR.
+.SS baton attach [plan]
+Connects to the background run of a plan (the one launched by \fBbaton run \-\-detach\fR) and shows the same run screen, with everything that happened since the start and live. It needs a terminal. Only one terminal can be connected at a time. \fBq\fR disconnects and the run keeps going; \fBx\fR aborts it. What travels over the socket (\fI.baton/run/<plan>.sock\fR, for your user only) is what the screen already shows, with secrets redacted; credentials are resolved inside the background process. When it finishes, the process waits 10 minutes for someone to come and see the result and then leaves. Without a background run, or if another terminal is already connected, it exits with 2.
 .SS baton create plan
 Creates the file of an empty plan and nothing else (it does not open it or touch \fI.baton/\fR). It does not overwrite an existing plan. The name is normalized to lowercase letters, digits, \fB\-\fR and \fB_\fR, and you are told if it changed.
 .SS baton copy plan new
@@ -715,6 +720,9 @@ Suspend \fBbaton\fR and go back to the shell, like any program; \fBfg\fR brings 
 On a failure you can retry, update the credential and retry, roll back, \fBsee the full log\fR (\fBl\fR, inside the application, positioned on the step that failed), \fBopen a shell\fR to investigate (in the project folder if the step ran on your machine; in an ssh session in the remote directory, with the same key and bastion, if it ran on an ssh target; with \fBDOCKER_CONTEXT\fR set if it was a docker context; never with the credentials) (on leaving with \fBexit\fR you go back to the application) or abort. When finished or aborted, \fBenter\fR goes back to the plan view, which shows at the top how the last run ended and leaves the cursor on the step that failed; only \fBq\fR closes \fBbaton\fR. To fix a step: \fBe\fR (edit), \fBctrl + s\fR (save) and \fBu\fR (resume).
 .
 .SH ENVIRONMENT
+.TP
+.B BATON_DETACH_LINGER
+Seconds a background process (\fBbaton run \-\-detach\fR) waits, after finishing, for someone to connect with \fBbaton attach\fR (600 by default).
 .TP
 .B BATON_ENGINE
 Container engine: \fBdocker\fR, \fBpodman\fR or \fBauto\fR (it takes precedence over \fBengine\fR in \fB[defaults]\fR). In \fBauto\fR docker is used if installed and, if not, podman. With podman, every \fBdocker\fR of a command (those of the plan too) runs as \fBpodman\fR and \fBcompose\fR goes through \fBpodman compose\fR. An ssh target cannot be inspected from here: in \fBauto\fR each command chooses on the target itself (docker if it exists and, if not, podman) and, if the engine was set by hand, that one is used; a docker context is always docker. The \fBbaton ops\fR actions that depend on the engine use docker on an ssh target unless it was set.
