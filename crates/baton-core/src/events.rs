@@ -7,8 +7,10 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Estado de un paso, con el color y símbolo definidos en `docs/design/screens.md`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepStatus {
     /// `○` gris.
     #[default]
@@ -26,7 +28,7 @@ pub enum StepStatus {
 }
 
 /// Tipo de línea del log en vivo (define su color).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogKind {
     /// Comando ejecutado (`▸`, gris).
     Command,
@@ -40,7 +42,7 @@ pub enum LogKind {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLine {
     /// Hora local `HH:MM:SS`, ya formateada por quien emite el evento.
     pub at: String,
@@ -49,21 +51,21 @@ pub struct LogLine {
 }
 
 /// Tono de una etiqueta de la cabecera (`[backup ok]`, `[rollback listo]`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BadgeTone {
     Ok,
     Info,
     Warn,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Badge {
     pub label: String,
     pub tone: BadgeTone,
 }
 
 /// Estado de un check de un gate.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CheckState {
     /// `○` todavía no corre.
     #[default]
@@ -81,7 +83,7 @@ pub enum CheckState {
 }
 
 /// Un check de un gate, tal como se muestra en el pipeline.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckInfo {
     /// Servicio o nombre (`api`, `pg_isready`).
     pub label: String,
@@ -96,7 +98,7 @@ pub struct CheckInfo {
 }
 
 /// El gate de un paso: modo, resumen y checks.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GateInfo {
     pub manual: bool,
     /// `auto por servicio · todos pasan · 60s` o `manual · ¿Continuar?`.
@@ -105,7 +107,7 @@ pub struct GateInfo {
 }
 
 /// Dato estático de un paso para dibujar el pipeline antes de que corra.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepInfo {
     pub id: String,
     pub name: String,
@@ -123,7 +125,7 @@ pub struct StepInfo {
     pub undo: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureKind {
     /// Error de autenticación: la primera opción ofrecida es "Actualizar credencial y reintentar".
     Auth,
@@ -131,7 +133,7 @@ pub enum FailureKind {
 }
 
 /// Lo que muestra la pantalla de fallo.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Failure {
     /// Mensaje humano de una línea.
     pub message: String,
@@ -144,7 +146,7 @@ pub struct Failure {
 }
 
 /// Lo que muestra el resumen final además de los tiempos por paso.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunSummary {
     pub containers: Option<u32>,
     pub images: Option<u32>,
@@ -156,7 +158,7 @@ pub struct RunSummary {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunOutcome {
     Completed,
     /// Terminó, pero hubo checks no críticos fallidos.
@@ -208,7 +210,7 @@ pub struct LastRunBanner {
     pub ambiente: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunEvent {
     RunStarted {
         plan: String,
@@ -259,7 +261,7 @@ pub enum RunEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunCommand {
     Pause,
     Resume,
