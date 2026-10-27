@@ -255,3 +255,45 @@ fn a_suggested_credential_pasted_into_the_plan_validates() {
     let v = baton(root, &["validate", "deploy"]);
     assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
 }
+
+const SQL_PIPELINE: &str = "jobs:\n  d:\n    steps:\n      - run: psql -f db/init.sql\n      - run: psql -h db -U app -f db/otro.sql\n";
+
+#[test]
+fn without_a_terminal_a_psql_file_stays_a_command_and_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, ".github/workflows/deploy.yml", SQL_PIPELINE);
+    write(root, "db/init.sql", "select 1;\n");
+    let o = baton(root, &["import", ".github/workflows/deploy.yml"]);
+    assert_eq!(o.status.code(), Some(0), "{}\n{}", out(&o), err(&o));
+    assert!(
+        err(&o).contains("1 paso(s) ejecutan un .sql con psql"),
+        "{}",
+        err(&o)
+    );
+    let plan = fs::read_to_string(root.join("baton/plans/deploy.toml")).unwrap();
+    assert!(
+        !plan.contains("type = \"sql\"") && !plan.contains("[[credentials]]"),
+        "{plan}"
+    );
+    let v = baton(root, &["validate", "deploy"]);
+    assert_eq!(v.status.code(), Some(0), "{}\n{}", out(&v), err(&v));
+}
+
+#[test]
+fn a_dry_run_mentions_the_question_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(root, ".github/workflows/deploy.yml", SQL_PIPELINE);
+    let o = baton(
+        root,
+        &["import", ".github/workflows/deploy.yml", "--dry-run"],
+    );
+    assert_eq!(o.status.code(), Some(0));
+    assert!(
+        out(&o).contains("se te pregunta con qué credencial"),
+        "{}",
+        out(&o)
+    );
+    assert!(!root.join("baton").exists());
+}
