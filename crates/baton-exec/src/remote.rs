@@ -118,8 +118,9 @@ fn engine_with(config: &Config, extra: &[(String, String)]) -> Engine {
     })
 }
 
-/// El motor de un destino. Un destino ssh no se puede mirar desde aquí, así que solo cambia si
-/// el motor se fijó a mano (`BATON_ENGINE` o `[defaults] engine`); un docker context es docker.
+/// El motor de un destino. Un destino ssh no se puede mirar desde aquí: esto da docker salvo que
+/// el motor se fijó a mano (`BATON_ENGINE` o `[defaults] engine`); en `auto` cada comando elige
+/// en el propio destino (ver `Engine::AUTO_PRELUDE`). Un docker context es docker.
 /// El motor del destino `target` (para elegir la forma de un comando que cambia según el motor).
 pub fn target_engine(config: &Config, target: &str) -> Engine {
     engine_of(config, config.targets.get(target), &[])
@@ -128,21 +129,23 @@ pub fn target_engine(config: &Config, target: &str) -> Engine {
 fn engine_of(config: &Config, target: Option<&Target>, extra: &[(String, String)]) -> Engine {
     match target {
         Some(Target::Context(_)) => Engine::Docker,
-        Some(Target::Ssh(_)) => {
-            let setting = extra
-                .iter()
-                .rev()
-                .find(|(k, _)| k == "BATON_ENGINE")
-                .map(|(_, v)| v.clone())
-                .or_else(|| std::env::var("BATON_ENGINE").ok())
-                .filter(|v| !v.trim().is_empty())
-                .or_else(|| config.defaults.engine.clone());
-            setting
-                .and_then(|v| engine::parse(&v).ok().flatten())
-                .unwrap_or(Engine::Docker)
-        }
+        Some(Target::Ssh(_)) => ssh_setting(config, extra).unwrap_or(Engine::Docker),
         _ => engine_with(config, extra),
     }
+}
+
+/// El motor fijado a mano para los destinos ssh (`BATON_ENGINE` o `[defaults] engine`), si lo hay.
+/// Sin él (o con `auto`) se elige en el propio destino, ver [`Engine::AUTO_PRELUDE`].
+fn ssh_setting(config: &Config, extra: &[(String, String)]) -> Option<Engine> {
+    extra
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "BATON_ENGINE")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("BATON_ENGINE").ok())
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.defaults.engine.clone())
+        .and_then(|v| engine::parse(&v).ok().flatten())
 }
 
 /// Un transporte que, con podman, hace que `docker` dentro de cada línea sea `podman`.
@@ -167,15 +170,16 @@ impl Transport for EngineTransport {
     }
 }
 
-fn with_engine(inner: Box<dyn Transport>, engine: Engine) -> Box<dyn Transport> {
-    if engine.prelude().is_empty() {
+fn with_prelude(inner: Box<dyn Transport>, prelude: &'static str) -> Box<dyn Transport> {
+    if prelude.is_empty() {
         inner
     } else {
-        Box::new(EngineTransport {
-            inner,
-            prelude: engine.prelude(),
-        })
+        Box::new(EngineTransport { inner, prelude })
     }
+}
+
+fn with_engine(inner: Box<dyn Transport>, engine: Engine) -> Box<dyn Transport> {
+    with_prelude(inner, engine.prelude())
 }
 
 /// El transporte de un destino (y, si es ssh, sus datos de conexión). Un nombre que no existe
@@ -204,7 +208,11 @@ pub(crate) fn make_transport(
                 project_root: project.root.clone(),
                 ssh_bin: "ssh".to_string(),
             };
-            (with_engine(Box::new(t), engine), Some(conn))
+            let wrapped = match ssh_setting(config, env) {
+                Some(fixed) => with_engine(Box::new(t), fixed),
+                None => with_prelude(Box::new(t), Engine::AUTO_PRELUDE),
+            };
+            (wrapped, Some(conn))
         }
         _ => (with_engine(Box::new(LocalTransport), engine), None),
     }
@@ -297,6 +305,50 @@ mod tests {
             files: vec![],
             scan: vec![],
         }
+    }
+
+    /// Corre `docker hola` precedido del prelude de `auto` con un `PATH` que solo tiene `bins`
+    /// (cada uno imprime su propio nombre).
+    fn run_auto(bins: &[&str]) -> (bool, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for b in bins {
+            let p = dir.path().join(b);
+            std::fs::write(&p, format!("#!/bin/sh\necho {b} \"$@\"\n")).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{}docker hola", Engine::AUTO_PRELUDE))
+            .env("PATH", dir.path())
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    }
+
+    #[test]
+    fn an_ssh_target_without_a_fixed_engine_picks_one_where_it_runs() {
+        assert_eq!(run_auto(&["podman"]), (true, "podman hola".into()));
+        assert_eq!(
+            run_auto(&["docker", "podman"]),
+            (true, "docker hola".into())
+        );
+        assert_eq!(run_auto(&["docker"]), (true, "docker hola".into()));
+        assert!(!run_auto(&[]).0, "sin ningún motor falla como siempre");
+    }
+
+    #[test]
+    fn only_an_ssh_target_without_a_fixed_engine_gets_the_auto_prelude() {
+        let config =
+            Config::parse("[targets.prod]\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\n").unwrap();
+        assert_eq!(ssh_setting(&config, &[]), None);
+        let fixed = [("BATON_ENGINE".to_string(), "podman".to_string())];
+        assert_eq!(ssh_setting(&config, &fixed), Some(Engine::Podman));
+        let auto = [("BATON_ENGINE".to_string(), "auto".to_string())];
+        assert_eq!(ssh_setting(&config, &auto), None);
     }
 
     #[test]

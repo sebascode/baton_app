@@ -638,6 +638,43 @@ fn detect_script(command: &str, workdir: Option<&str>) -> Option<(String, Option
     Some((rel, interp.map(|i| format!("{i} {{script}}"))))
 }
 
+/// `psql -f archivo.sql` (o `psql < archivo.sql`) suelto en una línea, sin datos de conexión: la
+/// ruta del `.sql`, relativa al proyecto. Solo se aceptan los flags que no cambian lo que el paso
+/// `sql` hace por su cuenta (`-X`, `-q`, `-v ON_ERROR_STOP=1`); `-h`, `-U`, `-d`, una URL o
+/// cualquier otra cosa no se pueden traducir sin perder la conexión, así que no se detecta.
+pub fn sql_source(command: &str) -> Option<String> {
+    let line = command.trim();
+    if line.contains(['&', '|', ';', '$', '`', '\'', '"', '*', '?', '(', ')', '>']) {
+        return None;
+    }
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let ["psql", rest @ ..] = tokens.as_slice() else {
+        return None;
+    };
+    let mut path: Option<&str> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "-X" | "-q" | "--no-psqlrc" | "--quiet" => i += 1,
+            "-v" if rest.get(i + 1) == Some(&"ON_ERROR_STOP=1") => i += 2,
+            "-f" | "--file" | "<" if path.is_none() => {
+                path = Some(rest.get(i + 1).copied()?);
+                i += 2;
+            }
+            _ => return None,
+        }
+    }
+    let path = path?.trim_start_matches("./");
+    let safe = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'));
+    let ok = safe
+        && path.ends_with(".sql")
+        && !path.starts_with('/')
+        && !path.split('/').any(|p| p == "..");
+    ok.then(|| path.to_string())
+}
+
 /// `docker compose [-f archivo] ... up ...` suelto en una línea: devuelve el origen y el comando
 /// reescrito para correr dentro de la carpeta del archivo (`-f` queda con solo el nombre).
 fn detect_compose(command: &str, workdir: Option<&str>) -> Option<(String, String)> {
@@ -829,6 +866,35 @@ mod tests {
             None,
             "el directorio de trabajo no puede salir"
         );
+    }
+
+    #[test]
+    fn detects_a_bare_psql_file_and_refuses_anything_that_carries_a_connection() {
+        let d = |c: &str| sql_source(c);
+        assert_eq!(d("psql -f db/init.sql"), Some("db/init.sql".into()));
+        assert_eq!(
+            d("psql -X -q -v ON_ERROR_STOP=1 --file ./a.sql"),
+            Some("a.sql".into())
+        );
+        assert_eq!(
+            d("psql < migrations/001.sql"),
+            Some("migrations/001.sql".into())
+        );
+        for no in [
+            "psql -h db -U app -f a.sql",
+            "psql -d tienda -f a.sql",
+            "psql postgres://u@h/db -f a.sql",
+            "psql -c 'select 1'",
+            "psql -f a.sql && echo ok",
+            "psql -f ../a.sql",
+            "psql -f /tmp/a.sql",
+            "psql -f a.txt",
+            "psql -f a.sql -f b.sql",
+            "mysql < a.sql",
+            "psql",
+        ] {
+            assert_eq!(d(no), None, "{no}");
+        }
     }
 
     #[test]

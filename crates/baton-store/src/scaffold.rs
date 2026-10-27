@@ -95,6 +95,48 @@ pub fn add_db_credential(project: &Project, plan_name: &str) -> io::Result<()> {
     fs::write(&path, format!("{text}{sep}{DB_CREDENTIAL}"))
 }
 
+/// Agrega al final del plan un `[[credentials]]` (después de `name = ...`, ver
+/// [`add_db_credential`]). Solo lleva la referencia: los valores nunca van en el plan.
+pub fn append_credential(
+    project: &Project,
+    plan_name: &str,
+    id: &str,
+    kind: &str,
+    reference: &str,
+) -> io::Result<()> {
+    let path = project.plan_path(plan_name);
+    let text = fs::read_to_string(&path)?;
+    let sep = if text.ends_with('\n') { "" } else { "\n" };
+    fs::write(
+        &path,
+        format!(
+            "{text}{sep}\n[[credentials]]\nid = \"{id}\"\nkind = \"{kind}\"\nref = \"{reference}\"\n"
+        ),
+    )
+}
+
+/// Las credenciales `db` que ya declaran los planes del proyecto, sin repetir una misma
+/// referencia (id, referencia). Un plan que no se puede leer se ignora.
+pub fn existing_db_credentials(project: &Project) -> Vec<(String, String)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for name in project.list_plans() {
+        let Ok(text) = fs::read_to_string(project.plan_path(&name)) else {
+            continue;
+        };
+        let Ok(plan) = baton_core::Plan::parse(&text) else {
+            continue;
+        };
+        for c in plan.db_credentials() {
+            let reference = c.reference.to_string();
+            if seen.insert(reference.clone()) {
+                out.push((c.id.clone(), reference));
+            }
+        }
+    }
+    out
+}
+
 fn step(
     id: &str,
     name: &str,
@@ -253,6 +295,25 @@ mod tests {
             .collect();
         assert_eq!(got, [("servicios", true, StepKind::Compose)]);
         assert_eq!(steps[0].target.as_deref(), Some("prod"));
+    }
+
+    #[test]
+    fn a_credential_is_appended_with_only_its_reference_and_listed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Project::at(tmp.path());
+        create_plan(&p, "uno").unwrap();
+        append_credential(&p, "uno", "tienda", "db", "db.env#TIENDA").unwrap();
+        create_plan(&p, "dos").unwrap();
+        append_credential(&p, "dos", "otra", "db", "db.env#TIENDA").unwrap();
+        let text = fs::read_to_string(p.plan_path("uno")).unwrap();
+        assert!(text.starts_with("name = \"uno\"\n"), "{text}");
+        let plan = baton_core::Plan::parse(&text).unwrap();
+        assert_eq!(plan.credentials.len(), 1);
+        assert_eq!(
+            existing_db_credentials(&p),
+            // los planes se leen por orden alfabético: gana el primero que la declara
+            [("otra".to_string(), "db.env#TIENDA".to_string())]
+        );
     }
 
     #[test]
