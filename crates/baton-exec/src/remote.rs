@@ -118,8 +118,9 @@ fn engine_with(config: &Config, extra: &[(String, String)]) -> Engine {
     })
 }
 
-/// El motor de un destino. Un destino ssh no se puede mirar desde aquí, así que solo cambia si
-/// el motor se fijó a mano (`BATON_ENGINE` o `[defaults] engine`); un docker context es docker.
+/// El motor de un destino. Un destino ssh no se puede mirar desde aquí: esto da docker salvo que
+/// el motor se fijó a mano (`BATON_ENGINE` o `[defaults] engine`); en `auto` cada comando elige
+/// en el propio destino (ver `Engine::AUTO_PRELUDE`). Un docker context es docker.
 /// El motor del destino `target` (para elegir la forma de un comando que cambia según el motor).
 pub fn target_engine(config: &Config, target: &str) -> Engine {
     engine_of(config, config.targets.get(target), &[])
