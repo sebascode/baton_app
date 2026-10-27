@@ -412,6 +412,15 @@ impl App {
         self.switch(Mode::Run(Box::new(RunState::new())));
     }
 
+    /// Como [`App::begin_run`], pero para una ejecución en segundo plano a la que uno se conectó:
+    /// `q` solo desconecta y la ejecución sigue.
+    pub fn begin_attached_run(&mut self) {
+        self.switch(Mode::Run(Box::new(RunState {
+            detached: true,
+            ..RunState::new()
+        })));
+    }
+
     pub fn on_event(&mut self, event: RunEvent) {
         if let Mode::Run(run) = &mut self.mode {
             run.apply(event);

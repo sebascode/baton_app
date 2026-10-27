@@ -27,11 +27,13 @@ pub struct RunFlags {
     pub backup: Option<bool>,
     /// Ambiente del que se resuelven las credenciales; sin valor, la carpeta plana de siempre.
     pub ambiente: Option<String>,
+    /// `--detach`: corre en segundo plano y vuelve (`baton attach` la retoma).
+    pub detach: bool,
 }
 
 /// Carga y valida la configuración y el plan. Imprime los diagnósticos y devuelve el código de
 /// salida si no se puede continuar.
-fn load(project: &Project, plan_name: &str) -> Result<(Config, Plan), ExitCode> {
+pub(crate) fn load(project: &Project, plan_name: &str) -> Result<(Config, Plan), ExitCode> {
     let config = check_config(project);
     for d in &config.diagnostics {
         eprintln!("{d}");
@@ -86,7 +88,7 @@ fn warn_if_other_ambiente(
     ));
 }
 
-fn exit_for(outcome: RunOutcome) -> ExitCode {
+pub(crate) fn exit_for(outcome: RunOutcome) -> ExitCode {
     match outcome {
         RunOutcome::Completed | RunOutcome::CompletedWithWarnings => ExitCode::SUCCESS,
         RunOutcome::Failed | RunOutcome::Aborted => ExitCode::from(EXIT_RUN_FAILED),
@@ -116,6 +118,10 @@ pub fn run(project: &Project, plan_name: &str, mut flags: RunFlags) -> ExitCode 
         warn_if_other_ambiente(project, plan_name, flags.ambiente.as_deref(), || {
             tr!("este --resume")
         });
+    }
+
+    if flags.detach {
+        return crate::detach_cmd::launch(project, config, plan, &flags);
     }
 
     if wants_tui(&flags) {
@@ -479,7 +485,7 @@ fn start_text(input: RunInput) -> ExitCode {
 
 /// Pasos con gate manual cuya variable `BATON_GATE_<ID>` dice que sí. Un valor que no se entiende
 /// avisa y no aprueba nada: ante la duda el gate sigue cerrado.
-fn approved_gates(plan: &Plan) -> Vec<String> {
+pub(crate) fn approved_gates(plan: &Plan) -> Vec<String> {
     let mut approved = Vec::new();
     for step in &plan.steps {
         let manual = step
