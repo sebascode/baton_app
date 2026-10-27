@@ -60,6 +60,8 @@
 "Lista los plugins instalados y si se pueden cargar" = "Lists the installed plugins and whether they can be loaded"
 "Mantención: logs, reinicios, imágenes de los servicios y tareas sueltas del plan" = "Maintenance: logs, restarts, service images and loose tasks of the plan"
 "Muestra cada clave con su valor y de dónde sale (es lo que hace sin subcomando)" = "Shows each key with its value and where it comes from (what it does without a subcommand)"
+"Imprime el completado con tab de comandos y opciones para bash, zsh o fish" = "Prints tab completion of commands and options for bash, zsh or fish"
+"No agrega el completado con tab de comandos y opciones" = "Does not add tab completion of commands and options"
 "Muestra el proyecto en el prompt de la terminal, como (venv): imprime el código del shell" = "Shows the project in the terminal prompt, like (venv): prints the shell code"
 "Muestra la configuración del proyecto (destinos, logs, credenciales y planes)" = "Shows the project configuration (targets, logs, credentials and plans)"
 "Muestra la versión instalada (también: `baton -V` / `baton --version`)" = "Shows the installed version (also: `baton -V` / `baton --version`)"

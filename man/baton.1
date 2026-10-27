@@ -102,7 +102,7 @@ No ejecuta nada: muestra qué comandos correría. No deja rastro (no crea \fI.ba
 Salta los pasos que terminaron bien en la última ejecución (los muestra como omitidos).
 .TP
 .B \-\-assume\-yes
-Responde que sí a los gates manuales cuando no hay terminal. Sin esta opción, un plan con un gate manual falla antes de ejecutar si no hay terminal.
+Responde que sí a los gates manuales cuando no hay terminal. Sin esta opción, un plan con un gate manual falla antes de ejecutar si no hay terminal. Para aprobar solo el gate de un paso, define \fBBATON_GATE_<ID>=yes\fR (el id del paso en mayúsculas, con \fB_\fR en lugar de lo que no sea letra o número: \fBdeploy\-web\fR es \fBBATON_GATE_DEPLOY_WEB\fR); un valor que no es sí o no avisa y deja el gate cerrado.
 .TP
 .BR \-\-backup ", " \-\-no\-backup
 Fuerzan hacer (o no hacer) backup, por encima de lo que diga el plan.
@@ -121,7 +121,7 @@ Elimina el archivo de un plan y su estado en \fI.baton/state.json\fR; los logs y
 .B \-\-assume\-yes
 No pregunta.
 .PP
-Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
+Los nombres nuevos de \fBcopy\fR y \fBrename\fR se normalizan como en \fBcreate\fR, y no pueden ser un comando de baton (\fBrun\fR, \fBconfig\fR, \fBstart\fR, \fBcreate\fR, \fBcopy\fR, \fBrename\fR, \fBdelete\fR, \fBedit\fR, \fBrollback\fR, \fBinit\fR, \fBimport\fR, \fBversion\fR, \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR, \fBinput\fR, \fBprompt\fR, \fBshell\-init\fR, \fBcompletions\fR, \fBhelp\fR, \fBdemo\fR): ganarían sobre el atajo \fBbaton <plan>\fR.
 .SS baton init [plan]
 Prepara el proyecto y abre su primer plan: es \fBstart\fR más lo que el proyecto necesite. Busca \fIdocker\-compose.yml\fR, \fIcompose.yml\fR, \fIDockerfile\fR y archivos \fI*.sql\fR bajo la carpeta (sin entrar a \fI.git\fR, \fI.baton\fR, \fIbaton\fR, \fInode_modules\fR, \fItarget\fR, \fIvendor\fR ni carpetas ocultas) y arma los pasos: \fIbuild\fR (los Dockerfile) y \fIservicios\fR (los compose). Los \fI.sql\fR \fBno\fR se convierten en pasos (suelen ser el \fIinit.sql\fR que el contenedor de la base ya carga al arrancar): \fBinit\fR dice cuántos encontró, y para ejecutarlos se crea a mano un paso \fBsql\fR. Los scripts \fI*.sh\fR \fBno\fR se convierten en pasos: son de mantención (muchos son de recuperación o de datos) y quedan disponibles en \fBbaton ops\fR y en la tecla \fBm\fR de la vista del plan, organizados por carpeta; para que un script sea parte del plan se crea a mano un paso \fBscript\fR o \fBcomando\fR. Un script dentro de una carpeta con Dockerfile se ignora (es de la imagen). Siempre agrega \fI.baton/\fR al \fI.gitignore\fR. Con terminal, si la carpeta no está en un repositorio git ofrece iniciar uno, y si está dentro de uno cuya raíz es otra carpeta (y todavía no hay proyecto) ofrece crear el proyecto en esa raíz; sin terminal no pregunta nada. El nombre del plan por defecto es el de la carpeta. Con terminal abre el plan directo en el editor y, al salir, dice qué sigue. No pisa un plan que ya exista.
 .TP
@@ -139,7 +139,7 @@ Crea el proyecto en esta carpeta aunque una carpeta superior ya tenga uno. Sin e
 .SS baton import archivo
 Convierte un pipeline de otra plataforma en un plan. Es de mejor esfuerzo y con pérdida: nada se descarta en silencio. Lo que no tiene equivalente queda como un paso \fBdesactivado\fR (con el original como comentario) o como una nota del informe.
 .PP
-Se aceptan GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) y Azure Pipelines (\fIazure\-pipelines.yml\fR). Todo paso con una condición (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) se importa desactivado. Un \fBenvironment\fR o \fBwhen: manual\fR genera un gate manual antes del job (activo si el ambiente parece producción). Un \fBdocker compose up\fR suelto se convierte en un paso \fBcompose\fR, y un script suelto (\fB./scripts/x.sh\fR, sin argumentos) en un paso \fBscript\fR. Las acciones que solo preparan el agente (checkout, cache, artifacts, setup) se omiten.
+Se aceptan GitHub Actions (\fI.github/workflows/*.yml\fR), GitLab CI (\fI.gitlab\-ci.yml\fR) y Azure Pipelines (\fIazure\-pipelines.yml\fR). Todo paso con una condición (\fBif\fR, \fBrules\fR, \fBcondition\fR, \fBmatrix\fR...) se importa desactivado. Un \fBenvironment\fR o \fBwhen: manual\fR genera un gate manual antes del job (activo si el ambiente parece producción). Un \fBdocker compose up\fR suelto se convierte en un paso \fBcompose\fR, y un script suelto (\fB./scripts/x.sh\fR, sin argumentos) en un paso \fBscript\fR. Un \fBpsql \-f archivo.sql\fR suelto (sin datos de conexión) puede ser un paso \fBsql\fR: en una terminal baton pregunta con qué credencial \fBdb\fR se conecta (una que ya declare otro plan, o una referencia nueva que se escribe en el plan como \fB[[credentials]]\fR; baton no guarda contraseñas en el plan, solo la referencia); sin terminal, o si eliges dejarlo, queda como \fBcomando\fR. Las acciones que solo preparan el agente (checkout, cache, artifacts, setup) se omiten.
 .PP
 El informe lista lo desactivado, lo omitido y las variables que los comandos esperan en el entorno, y sugiere los bloques \fB[[credentials]]\fR cuando el nombre lo permite (por ejemplo \fBGHCR_TOKEN\fR). Esos bloques no se escriben en el plan: se pegan \fBal final\fR del archivo.
 .TP
@@ -294,6 +294,11 @@ Solo define la función \fB__baton_ps1\fR y no toca el prompt (para quien arma s
 .TP
 .B \-\-color
 La etiqueta en cian.
+.TP
+.B \-\-no\-completions
+No agrega el completado con tab (por defecto, \fBshell\-init\fR también lo incluye).
+.SS baton completions [bash|zsh|fish]
+Imprime solo el completado con tab de comandos y opciones de \fBbaton\fR, con las descripciones en el idioma elegido. Sin argumento usa el shell de \fB$SHELL\fR. Para activarlo sin el prompt: \fBeval "$(baton completions bash)"\fR en \fI~/.bashrc\fR (en fish, \fBbaton completions fish | source\fR). Completa subcomandos, opciones y los nombres de los planes del proyecto (donde un plan es el argumento: \fBbaton <tab>\fR, \fBbaton run <tab>\fR...); los consulta solo al pulsar tab. No necesita proyecto.
 .SS baton prompt
 Imprime la etiqueta del proyecto que contiene la carpeta actual, por ejemplo \fB(baton:app1)\fR. Fuera de un proyecto no imprime nada y sale con 1, de modo que sirve como condición en herramientas de prompt (por ejemplo starship).
 .TP
@@ -712,7 +717,7 @@ Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer
 .SH ENTORNO
 .TP
 .B BATON_ENGINE
-Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: usa docker salvo que el motor se haya fijado a mano, y un docker context siempre es docker.
+Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: en \fBauto\fR cada comando elige en el propio destino (docker si existe y, si no, podman) y, si el motor se fijó a mano, se usa ese; un docker context siempre es docker. Las acciones de \fBbaton ops\fR que dependen del motor usan docker en un destino ssh salvo que se haya fijado.
 .TP
 .B BATON_LANG
 Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
@@ -740,6 +745,9 @@ Si está definida, \fBrun\fR usa texto plano y los helpers no preguntan.
 .TP
 .B BATON_NONINTERACTIVE
 Los helpers nunca preguntan.
+.TP
+.B BATON_GATE_<ID>
+Con \fByes\fR, aprueba el gate manual del paso con ese id cuando no hay terminal (sin necesidad de \fB\-\-assume\-yes\fR, que aprueba todos). No aprueba confirmaciones de sentencias destructivas.
 .TP
 .B BATON_<NOMBRE>
 La respuesta a una pregunta de \fBselect\fR, \fBmultiselect\fR, \fBconfirm\fR o \fBinput\fR.

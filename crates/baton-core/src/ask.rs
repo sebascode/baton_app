@@ -51,6 +51,22 @@ pub fn parse_yes_no(text: &str) -> Option<bool> {
     }
 }
 
+/// Variable que aprueba el gate manual de un paso sin terminal: `BATON_GATE_<ID>` (el id en
+/// mayúsculas, lo que no es letra ni número pasa a `_`).
+pub fn gate_env_name(step_id: &str) -> String {
+    let id: String = step_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("BATON_GATE_{id}")
+}
+
 /// Las opciones deben ser al menos una y no repetirse.
 pub fn check_options(options: &[String]) -> Result<(), String> {
     if options.is_empty() {
@@ -69,6 +85,12 @@ pub fn check_options(options: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gate_variable_names() {
+        assert_eq!(super::gate_env_name("deploy-web"), "BATON_GATE_DEPLOY_WEB");
+        assert_eq!(super::gate_env_name("a.b2"), "BATON_GATE_A_B2");
+    }
+
     use super::*;
 
     fn opts(v: &[&str]) -> Vec<String> {

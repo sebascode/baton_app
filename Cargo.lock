@@ -114,13 +114,14 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "baton"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "baton-core",
  "baton-exec",
  "baton-store",
  "baton-tui",
  "clap",
+ "clap_complete",
  "inquire",
  "rustyline",
  "serde_json",
@@ -131,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "baton-core"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "glob",
  "humantime",
@@ -146,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "baton-exec"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "baton-core",
  "baton-store",
@@ -160,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "baton-store"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "baton-core",
  "chrono",
@@ -175,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "baton-tui"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "baton-core",
  "indexmap",
@@ -316,6 +317,15 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+]
+
+[[package]]
+name = "clap_complete"
+version = "4.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "037e2a1a92236d0aff7e845093f64661d6df4c02c9fcc61a60e9e1d736fa392f"
+dependencies = [
+ "clap",
 ]
 
 [[package]]
@@ -1552,12 +1562,11 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustyline"
-version = "18.0.1"
+version = "19.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53f6a737db68eb1a8ccff86b584b2fc13eca6a7bb6f78ebc7c529547e3ab9684"
+checksum = "56e1d6bd81c2d5feafd2419138df9183c45a10a492c4e873b8b0acb8eb2b549e"
 dependencies = [
  "bitflags 2.13.2",
- "cfg-if",
  "clipboard-win",
  "libc",
  "log",
@@ -1972,9 +1981,9 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",

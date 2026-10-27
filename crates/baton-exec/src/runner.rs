@@ -1476,10 +1476,24 @@ async fn run_step(ctx: &Ctx, cmds: &mut Rx<RunCommand>, i: usize, skip_action: b
         match gate.mode {
             GateMode::Manual => {
                 let message = gate.message.clone().unwrap_or_else(|| tr!("¿Continuar?"));
-                match ask_gate(ctx, cmds, i, &message).await {
-                    Answer::Yes => {}
-                    Answer::No => return StepEnd::Declined,
-                    Answer::Interrupted(int) => return StepEnd::Interrupted(int),
+                if !ctx.opts.interactive
+                    && !ctx.opts.dry_run
+                    && ctx.opts.approved_gates.contains(&ps.step.id)
+                {
+                    ctx.log(
+                        i,
+                        LogKind::Success,
+                        tr!(
+                            "gate manual confirmado con {var}",
+                            var = baton_core::ask::gate_env_name(&ps.step.id)
+                        ),
+                    );
+                } else {
+                    match ask_gate(ctx, cmds, i, &message).await {
+                        Answer::Yes => {}
+                        Answer::No => return StepEnd::Declined,
+                        Answer::Interrupted(int) => return StepEnd::Interrupted(int),
+                    }
                 }
             }
             GateMode::Auto => match run_auto_gate(ctx, cmds, i).await {
