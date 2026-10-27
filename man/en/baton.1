@@ -717,7 +717,7 @@ On a failure you can retry, update the credential and retry, roll back, \fBsee t
 .SH ENVIRONMENT
 .TP
 .B BATON_ENGINE
-Container engine: \fBdocker\fR, \fBpodman\fR or \fBauto\fR (it takes precedence over \fBengine\fR in \fB[defaults]\fR). In \fBauto\fR docker is used if installed and, if not, podman. With podman, every \fBdocker\fR of a command (those of the plan too) runs as \fBpodman\fR and \fBcompose\fR goes through \fBpodman compose\fR. An ssh target cannot be inspected from here: it uses docker unless the engine was set by hand, and a docker context is always docker.
+Container engine: \fBdocker\fR, \fBpodman\fR or \fBauto\fR (it takes precedence over \fBengine\fR in \fB[defaults]\fR). In \fBauto\fR docker is used if installed and, if not, podman. With podman, every \fBdocker\fR of a command (those of the plan too) runs as \fBpodman\fR and \fBcompose\fR goes through \fBpodman compose\fR. An ssh target cannot be inspected from here: in \fBauto\fR each command chooses on the target itself (docker if it exists and, if not, podman) and, if the engine was set by hand, that one is used; a docker context is always docker. The \fBbaton ops\fR actions that depend on the engine use docker on an ssh target unless it was set.
 .TP
 .B BATON_LANG
 Language of baton: \fBes\fR, \fBen\fR or \fBauto\fR (the system's). It takes precedence over \fBui.language\fR. See \fBLANGUAGE\fR.

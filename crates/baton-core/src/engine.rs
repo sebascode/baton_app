@@ -26,6 +26,11 @@ impl Engine {
         }
     }
 
+    /// Para un destino ssh sin motor fijado: la elección de `auto` hecha en el propio destino
+    /// (docker si existe y, si no, podman), porque desde aquí no se puede mirar su `PATH`.
+    pub const AUTO_PRELUDE: &'static str = "if ! command -v docker >/dev/null 2>&1 \
+        && command -v podman >/dev/null 2>&1; then docker() { podman \"$@\"; }; fi; ";
+
     /// Cambia el programa `docker` de un comando armado por baton por el del motor.
     pub fn map_program(self, program: &str) -> String {
         if program == "docker" {
@@ -100,6 +105,7 @@ mod tests {
     fn podman_prelude_and_program() {
         assert_eq!(Engine::Docker.prelude(), "");
         assert!(Engine::Podman.prelude().contains("podman"));
+        assert!(Engine::AUTO_PRELUDE.contains("command -v docker"));
         assert_eq!(Engine::Podman.map_program("docker"), "podman");
         assert_eq!(Engine::Podman.map_program("psql"), "psql");
     }

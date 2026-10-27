@@ -717,7 +717,7 @@ Ante un fallo se ofrece reintentar, actualizar la credencial y reintentar, hacer
 .SH ENTORNO
 .TP
 .B BATON_ENGINE
-Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: usa docker salvo que el motor se haya fijado a mano, y un docker context siempre es docker.
+Motor de contenedores: \fBdocker\fR, \fBpodman\fR o \fBauto\fR (manda sobre \fBengine\fR de \fB[defaults]\fR). En \fBauto\fR se usa docker si está instalado y, si no, podman. Con podman, cada \fBdocker\fR de un comando (los del plan también) se ejecuta como \fBpodman\fR y \fBcompose\fR pasa por \fBpodman compose\fR. Un destino ssh no se puede mirar desde aquí: en \fBauto\fR cada comando elige en el propio destino (docker si existe y, si no, podman) y, si el motor se fijó a mano, se usa ese; un docker context siempre es docker. Las acciones de \fBbaton ops\fR que dependen del motor usan docker en un destino ssh salvo que se haya fijado.
 .TP
 .B BATON_LANG
 Idioma de baton: \fBes\fR, \fBen\fR o \fBauto\fR (el del sistema). Manda sobre \fBui.language\fR. Ver \fBIDIOMA\fR.
